@@ -205,16 +205,23 @@ class ChatSession:
             return f"no session matching {arg!r} — try /sessions"
         if os.path.samefile(target, self.path):
             return "already attached to that session"
-        # re-pin: fresh state + fresh conversation context for the new session
-        self.path = target
+        self.switch_path(target)
+        return (f"switched → {os.path.basename(target)[:-6][:8]} "
+                f"(chat context cleared)\n{self.banner()}")
+
+    def switch_path(self, path):
+        """Re-pin to another session: fresh state + fresh conversation context."""
+        self.path = path
         self.st = self.prev = None
         self.last_size = -1
         self.history = []
         self._alert_state = None
         self._alert_size = -1
         self.refresh()
-        return (f"switched → {os.path.basename(target)[:-6][:8]} "
-                f"(chat context cleared)\n{self.banner()}")
+
+    def siblings(self):
+        """Public list of sibling session paths (newest first), own-filtered."""
+        return self._siblings()
 
     # ---- background alerts (read-only, advisory) -------------------------
     def _start_alerts(self):

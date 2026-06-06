@@ -1,16 +1,14 @@
 """The full-screen "cockpit" TUI (optional `cc-copilot[tui]` extra).
 
-Mirrors Codex's single async event-loop and Claude Code's pinned-input / pinned-
-status model, in Python via Textual. It reuses the deterministic core and the
-``ChatSession`` controller verbatim — only the I/O surface changes:
+A Textual app that ports OpenCode-style polish onto cc-copilot's read-only
+observer: a branded theme, a split **agent-timeline / chat** layout, per-role
+left-gutter message blocks, a status bar with a colored **verdict pill** + a
+`Footer`, a multiline composer, `/`-commands in the command palette, watcher
+**toasts**, collapsible long output, modal session/model pickers, and Markdown
+answers — with `[L<n>]` citation fidelity preserved throughout.
 
-- a **reactive header** (status glyph · safety verdict · backend:model · idle),
-- a **scrolling log** that interleaves the live agent timeline and your chat,
-- a **background watcher worker** that re-parses window-1's growing JSONL and
-  pushes ``state.diff`` alerts (the old ``chat._alert_loop``, now off-UI-thread),
-- a **backend worker** that runs the (default: codex) turn without freezing the UI.
-
-Textual is imported lazily so the core/CLI stay zero-dependency.
+It reuses the deterministic core + the `ChatSession` controller verbatim; only
+the I/O surface changes. Textual is imported lazily so the core stays zero-dep.
 """
 
 from __future__ import annotations
@@ -19,10 +17,16 @@ import os
 import threading
 
 try:
-    from textual.app import App, ComposeResult
-    from textual.widgets import RichLog, Input, Static
-    from textual.reactive import reactive
-    from textual import work, on
+    from textual import events, on, work
+    from textual.app import App, ComposeResult, SystemCommand
+    from textual.binding import Binding
+    from textual.containers import Vertical, VerticalScroll
+    from textual.message import Message
+    from textual.screen import ModalScreen
+    from textual.theme import Theme
+    from textual.widgets import (Collapsible, Footer, Input, Markdown, OptionList,
+                                 Static, TextArea)
+    from textual.widgets.option_list import Option
     from rich.text import Text
 except ImportError:
     raise SystemExit(
@@ -30,35 +34,139 @@ except ImportError:
         "(or: pip install 'cc-copilot[tui]')")
 
 from . import transcript as T, state as S, assess as A, narrate as N, backends as BK
-from .chat import _fmt_alert, _GLYPH, _dur, _HELP as _REPL_HELP
+from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
-_VERDICT_STYLE = {
-    "intervene": "bold white on red", "review": "black on yellow",
-    "clear": "black on green", "idle": "dim", "awaiting": "black on yellow",
-    "empty": "dim",
-}
 
-_HELP = (
-    "commands (all but questions are LLM-free):\n"
-    "  /brief /check /diff        recap · safety · changes\n"
-    "  /sessions   /use <n|id>    list · switch session\n"
-    "  /model <name>              switch backend (codex/claude/deepseek/ollama/…)\n"
-    "  /refresh   /quit\n"
-    "keys: Enter send · Ctrl+R refresh · Ctrl+L clear · Ctrl+C quit"
+# ── theme (single branded palette; everything references semantic tokens) ──
+COCKPIT_THEME = Theme(
+    name="cockpit",
+    primary="#fab283", secondary="#5c9cf5", accent="#9d7cd8",
+    foreground="#c0caf5", background="#1a1b26", surface="#1f2335", panel="#24283b",
+    success="#9ece6a", warning="#e0af68", error="#f7768e", dark=True,
+    variables={
+        "verdict-intervene": "#f7768e", "verdict-review": "#e0af68",
+        "verdict-clear": "#9ece6a", "verdict-idle": "#565f89",
+        "verdict-awaiting": "#7aa2f7", "verdict-empty": "#565f89",
+    },
 )
+_STATUS_GLYPH = {"running": "●", "stalled": "■", "awaiting-agent": "◆",
+                 "idle": "○", "empty": "·"}
+# concrete hex (Rich Text styles can't resolve Textual $variables) — mirrors the theme
+_PAL = {"primary": "#fab283", "secondary": "#5c9cf5", "accent": "#9d7cd8",
+        "muted": "#565f89", "error": "#f7768e", "warning": "#e0af68",
+        "success": "#9ece6a", "text": "#c0caf5", "bg": "#1a1b26"}
+_VERDICT_HEX = {"intervene": "#f7768e", "review": "#e0af68", "clear": "#9ece6a",
+                "idle": "#565f89", "awaiting": "#7aa2f7", "empty": "#565f89"}
+
+_HELP_TEXT = (
+    "ask a question (multiline: Shift+Enter / Ctrl+J · send: Enter)\n"
+    "commands (also in the command palette, Ctrl+P):\n"
+    "  /brief /check /diff     recap · safety · changes (LLM-free)\n"
+    "  /sessions               switch which session you observe   (Ctrl+S)\n"
+    "  /model [name]           switch backend                     (Ctrl+T)\n"
+    "  /use <n|id>  /refresh   /quit\n"
+    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+C quit")
 
 
+# ── multiline composer ─────────────────────────────────────────────────────
+class Composer(TextArea):
+    class Submitted(Message):
+        def __init__(self, text: str):
+            self.text = text
+            super().__init__()
+
+    def __init__(self, **kw):
+        super().__init__(soft_wrap=True, show_line_numbers=False,
+                         tab_behavior="focus", **kw)
+
+    async def _on_key(self, event: events.Key) -> None:
+        # Enter submits; everything else (incl. Shift+Enter / Ctrl+J for a
+        # newline, and all typing) falls through to TextArea's own handler.
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            self.text = ""
+            if text:
+                self.post_message(self.Submitted(text))
+            return
+        await super()._on_key(event)
+
+
+# ── reusable fuzzy-filter picker modal ─────────────────────────────────────
+class Picker(ModalScreen):
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, title: str, options: list):
+        super().__init__()
+        self._title = title
+        self._options = options            # [(label, value), …]
+        self._by_id = {str(i): v for i, (l, v) in enumerate(options)}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker"):
+            yield Static(self._title, id="picker-title")
+            yield Input(placeholder="filter…", id="picker-filter")
+            yield OptionList(
+                *[Option(l, id=str(i)) for i, (l, v) in enumerate(self._options)],
+                id="picker-list")
+
+    def on_mount(self):
+        self.query_one("#picker-filter", Input).focus()
+
+    @on(Input.Changed, "#picker-filter")
+    def _filter(self, event: Input.Changed):
+        q = event.value.lower()
+        ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
+        for i, (label, _) in enumerate(self._options):
+            if q in label.lower():
+                ol.add_option(Option(label, id=str(i)))
+
+    @on(OptionList.OptionSelected)
+    def _choose(self, event: OptionList.OptionSelected):
+        self.dismiss(self._by_id.get(event.option.id))
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+# ── the cockpit ────────────────────────────────────────────────────────────
 class Cockpit(App):
     CSS = """
     Screen { layout: vertical; }
-    #status { dock: top; height: 1; background: $panel; color: $text; padding: 0 1; }
-    #log { height: 1fr; padding: 0 1; background: $surface; }
-    #composer { dock: bottom; border: round $accent; }
+
+    #timeline {
+        dock: top; height: 9;
+        border-bottom: solid $accent;
+        background: $panel; padding: 0 1;
+    }
+    #timeline-title { color: $accent; text-style: bold; }
+    #chat { height: 1fr; background: $surface; padding: 0 1; }
+
+    #status { dock: bottom; height: 1; background: $panel; color: $text; padding: 0 1; }
+    #composer { dock: bottom; height: auto; max-height: 8; border: round $accent; padding: 0 1; }
+    #composer:focus-within { border: round $primary; }
+
+    .role-user      { border-left: thick $secondary; padding-left: 1; }
+    .role-assistant { border-left: thick $primary;   padding-left: 1; }
+    .role-event     { border-left: tall  $accent;    padding-left: 1; }
+    .role-alert     { border-left: thick $warning;   padding-left: 1; }
+    Collapsible { border-left: thick $accent; }
+
+    Picker { align: center middle; }
+    #picker { width: 80; max-width: 90%; height: auto; max-height: 80%;
+              background: $surface; border: round $accent; padding: 1; }
+    #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
+    #picker-list { height: auto; max-height: 20; }
     """
+
     BINDINGS = [
-        ("ctrl+c", "quit", "quit"),
-        ("ctrl+l", "clear_log", "clear"),
-        ("ctrl+r", "refresh_now", "refresh"),
+        Binding("ctrl+c", "quit", "quit"),
+        Binding("ctrl+r", "refresh_now", "refresh"),
+        Binding("ctrl+l", "clear_chat", "clear"),
+        Binding("ctrl+s", "sessions", "sessions"),
+        Binding("ctrl+t", "model", "model"),
     ]
 
     def __init__(self, session, poll=5, alerts=True):
@@ -71,98 +179,114 @@ class Cockpit(App):
         self._busy = False
         self._watch_stop = threading.Event()
 
-    # ---- layout ----------------------------------------------------------
+    # ---- layout ----
     def compose(self) -> ComposeResult:
+        with VerticalScroll(id="timeline"):
+            yield Static("agent timeline — window-1", id="timeline-title")
+        yield VerticalScroll(id="chat")
         yield Static("", id="status")
-        yield RichLog(id="log", markup=False, wrap=True, auto_scroll=True, highlight=False)
-        yield Input(placeholder="ask the copilot…   (/help · Ctrl+C quit)", id="composer")
+        yield Composer(id="composer")
+        yield Footer()
 
     def on_mount(self):
+        self.register_theme(COCKPIT_THEME)
+        self.theme = "cockpit"
         self.session.refresh()
         self.title = "cc-copilot cockpit"
-        self._post(Text(f"🛰  cc-copilot cockpit — attached to "
-                        f"{os.path.basename(self.session.path)}", style="bold"))
-        self._post(Text(f"backend: {N.backend_name(self.backend)}", style="dim"))
+        self.sub_title = os.path.basename(self.session.path)[:8]
+        self._chat(self._role(Text(f"attached to {os.path.basename(self.session.path)} · "
+                                   f"backend {N.backend_name(self.backend).split(' (')[0]}",
+                                   "dim"), "role-event"))
         if not N.available(self.backend):
-            self._post(Text("backend unavailable — /model <name> to switch; "
-                            "/brief /check /diff still work.", style="yellow"))
-        self._post(Text("type a question, or /help.", style="dim"))
+            self.notify("backend unavailable — /model to switch", severity="warning")
         self._update_status()
-        self.query_one("#composer", Input).focus()
+        self.query_one("#composer", Composer).focus()
         if self.alerts:
             self.watch_agent()
 
     def on_unmount(self):
         self._watch_stop.set()
 
-    # ---- render helpers --------------------------------------------------
-    def _post(self, renderable):
-        self.query_one("#log", RichLog).write(renderable)
+    # ---- command palette ----
+    def get_system_commands(self, screen):
+        yield from super().get_system_commands(screen)
+        yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
+        yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
+        yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
+        yield SystemCommand("Sessions", "Pick a session to observe", self.action_sessions)
+        yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
+        yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
 
-    def _line(self, glyph, gstyle, body, bstyle=""):
-        t = Text()
-        t.append(glyph + " ", style=gstyle)
-        t.append(body, style=bstyle)
-        return t
+    # ---- render helpers ----
+    def _role(self, renderable, cls):
+        w = Static(renderable, classes=cls)
+        return w
+
+    def _chat(self, widget):
+        chat = self.query_one("#chat", VerticalScroll)
+        chat.mount(widget)
+        chat.scroll_end(animate=False)
+
+    def _timeline(self, renderable, cls="role-event"):
+        tl = self.query_one("#timeline", VerticalScroll)
+        tl.mount(Static(renderable, classes=cls))
+        tl.scroll_end(animate=False)
 
     def _update_status(self):
         st = self.session.st
         a = A.assess(st)
         t = Text()
-        t.append(_GLYPH.get(st.status, "?") + " ", style="bold")
-        t.append(st.status, style="bold")
+        t.append(f" {_STATUS_GLYPH.get(st.status, '·')} {st.status} ", style="bold")
         t.append("  ")
-        t.append(f" {a.verdict.upper()} ", style=_VERDICT_STYLE.get(a.verdict, "dim"))
+        t.append(f" {a.verdict.upper()} ",
+                 style=f"bold {_PAL['bg']} on {_VERDICT_HEX.get(a.verdict, _PAL['muted'])}")
         t.append("  ")
-        t.append(N.backend_name(self.backend).split(" (")[0], style="cyan")
-        if self.model:
-            t.append(":" + self.model, style="cyan")
-        t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev", style="dim")
+        be = N.backend_name(self.backend).split(" (")[0]
+        t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
+        t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
+                 style=_PAL["muted"])
         if self._busy:
-            t.append("   ⠹ working", style="yellow")
+            t.append("   ⠿ working", style=_PAL["accent"])
         self.query_one("#status", Static).update(t)
 
-    # ---- input -----------------------------------------------------------
-    @on(Input.Submitted, "#composer")
-    def _on_submit(self, event: Input.Submitted):
-        text = event.value.strip()
-        self.query_one("#composer", Input).value = ""
-        if not text:
-            return
+    # ---- input ----
+    @on(Composer.Submitted)
+    def _on_submit(self, event: Composer.Submitted):
+        text = event.text
         if text.startswith("/"):
             self._meta(text)
             return
-        self._post(self._line("›", "bold", text))
+        self._chat(self._role(Text("› " + text, style="bold"), "role-user"))
         if self._busy:
-            self._post(Text("…still answering the previous question", style="yellow"))
+            self.notify("still answering the previous question", severity="warning")
             return
         if not N.available(self.backend):
-            self._post(Text("# no backend available — /model <name>", style="red"))
+            self.notify("no backend — /model to switch", severity="error")
             return
         self.session.refresh()
         self._busy = True
         self._update_status()
-        self._post(Text("⠹ …", style="dim"))
         self._answer(text, self.session.st, list(self.session.history))
 
     @work(thread=True)
     def _answer(self, text, st, history):
         try:
-            ans = N.chat(st, history, text, model=self.model, backend=self.backend)
-            style = "white"
+            ans, ok = N.chat(st, history, text, model=self.model, backend=self.backend), True
         except Exception as e:
-            ans, style = f"# error: {e}", "red"
-        self.call_from_thread(self._answer_done, text, ans, style)
+            ans, ok = f"# error: {e}", False
+        self.call_from_thread(self._answer_done, text, ans, ok)
 
-    def _answer_done(self, text, ans, style):
+    def _answer_done(self, text, ans, ok):
         self._busy = False
-        if style != "red":
+        if ok:
             self.session.history.append(("user", text))
             self.session.history.append(("assistant", ans))
-        self._post(self._line("▌", "bold " + style, ans, style if style == "red" else ""))
+            self._chat(Markdown(ans, classes="role-assistant"))
+        else:
+            self._chat(self._role(Text(ans, style=_PAL["error"]), "role-alert"))
         self._update_status()
 
-    # ---- background watcher (window-1's live timeline) -------------------
+    # ---- background watcher ----
     @work(thread=True, exclusive=True, group="watch")
     def watch_agent(self):
         last_size = self.session.last_size
@@ -186,52 +310,114 @@ class Cockpit(App):
     def _on_watch(self, st, d):
         self.session.st = st
         self._update_status()
+        for fc in d.new_changed[:4]:
+            self._timeline(Text(f"✎ {os.path.basename(fc.path)}  ({fc.total} edit/write)  [L{fc.last_line}]"))
+        for f in d.new_failures[:4]:
+            self._timeline(Text(f"✗ {f.tool} failed  [L{f.line}]", style=_PAL["error"]), "role-alert")
         msg = _fmt_alert(d)
         if msg:
-            self._post(self._line("ⓘ", "yellow", msg, "yellow"))
+            sev = "error" if "INTERVENE" in msg or "STALLED" in msg else "warning"
+            self.notify(msg, severity=sev, title="window-1")
 
-    # ---- meta commands ---------------------------------------------------
+    # ---- meta commands (typed `/…` still works) ----
     def _meta(self, cmd):
         low = cmd.strip().lower()
         if low in ("/quit", "/exit", "/q"):
-            self.exit()
-            return
-        if low == "/help":
-            self._post(Text(_HELP, style="dim"))
-            return
+            self.exit(); return
+        if low in ("/help", "/?"):
+            self._collapsible("/help", _HELP_TEXT); return
+        if low == "/brief":
+            self.action_brief(); return
+        if low == "/check":
+            self.action_check(); return
+        if low == "/diff":
+            self.action_diff(); return
+        if low in ("/sessions", "/session"):
+            self.action_sessions(); return
         if low == "/model" or low.startswith("/model "):
-            self._set_model(cmd.strip()[6:].strip())
+            arg = cmd.strip()[6:].strip()
+            if arg:
+                self._set_backend(arg)
+            else:
+                self.action_model()
             return
-        out = self.session.meta(cmd)        # /brief /check /diff /sessions /use /refresh …
-        if out is False:
-            self.exit()
-            return
-        self._post(Text(str(out), style="dim"))
+        if low == "/refresh":
+            self.action_refresh_now(); return
+        if low.startswith("/use"):
+            out = self.session.meta(cmd)
+            self.notify(str(out).splitlines()[0]); self._update_status(); return
+        self.notify(f"unknown command {cmd!r}", severity="warning")
+
+    def _collapsible(self, title, body_text):
+        self._chat(Collapsible(Static(Text(body_text)), title=title, collapsed=False))
+
+    def action_brief(self):
+        self.session.refresh()
+        self._collapsible("/brief — recap", B_render(self.session.st))
         self._update_status()
 
-    def _set_model(self, arg):
-        if not arg:
-            self._post(Text(f"backend: {N.backend_name(self.backend)}", style="dim"))
-            return
+    def action_check(self):
+        self.session.refresh()
+        self._collapsible("/check — safety", _check_text(self.session.st))
+        self._update_status()
+
+    def action_diff(self):
+        self.session.refresh()
+        self._collapsible("/diff — changes since last turn",
+                          _fmt_diff(S.diff(self.session.prev, self.session.st)))
+
+    @work
+    async def action_sessions(self):
+        opts = []
+        for p in self.session.siblings():
+            try:
+                kb = os.path.getsize(p) // 1024
+            except OSError:
+                kb = 0
+            cur = " (current)" if os.path.abspath(p) == os.path.abspath(self.session.path) else ""
+            opts.append((f"{os.path.basename(p)[:-6][:8]}  {kb} KB{cur}", p))
+        chosen = await self.push_screen_wait(Picker("switch session", opts))
+        if chosen:
+            self.session.switch_path(chosen)
+            self.query_one("#chat", VerticalScroll).remove_children()
+            self._update_status()
+            self.notify(f"→ {os.path.basename(chosen)[:8]}")
+
+    @work
+    async def action_model(self):
+        opts = [(f"{name}{'  ✓' if be.available() else '  · ' + be.reason()}", name)
+                for name, be in sorted(BK.registry().items())]
+        chosen = await self.push_screen_wait(Picker("switch backend", opts))
+        if chosen:
+            self._set_backend(chosen)
+
+    def _set_backend(self, name):
         try:
-            be = BK.resolve(arg)
+            be = BK.resolve(name)
         except BK.BackendError as e:
-            self._post(Text(str(e), style="red"))
-            return
-        self.backend = self.session.backend = arg
-        self._post(Text(f"backend → {be.describe()}"
-                        + ("" if be.available() else "  (unavailable: " + be.reason() + ")"),
-                        style="cyan"))
+            self.notify(str(e), severity="error"); return
+        self.backend = self.session.backend = name
+        self.notify(f"backend → {name}", severity="information")
         self._update_status()
-
-    # ---- key bindings ----------------------------------------------------
-    def action_clear_log(self):
-        self.query_one("#log", RichLog).clear()
 
     def action_refresh_now(self):
         self.session.refresh()
         self._update_status()
-        self._post(Text("(refreshed) " + self.session.banner(), style="dim"))
+        self.notify("refreshed")
+
+    def action_clear_chat(self):
+        self.query_one("#chat", VerticalScroll).remove_children()
+
+
+# small adapters so the cockpit doesn't reach into private chat internals
+def B_render(st):
+    from .brief import render
+    return render(st)
+
+
+def _check_text(st):
+    from .brief import render_check
+    return render_check(st)
 
 
 def run(session, poll=5, alerts=True):

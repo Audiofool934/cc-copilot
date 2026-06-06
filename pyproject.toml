@@ -11,7 +11,7 @@ requires-python = ">=3.8"
 dependencies = []                      # the core + CLI are zero-dependency, on purpose
 
 [project.optional-dependencies]
-tui = ["textual>=0.80"]                # the full-screen cockpit only
+tui = ["textual>=2.0"]                 # the full-screen cockpit only (themes, palette, anchor)
 
 [project.scripts]
 cc-copilot = "cccopilot.cli:main"
