@@ -5,27 +5,17 @@ the LLM here never sees the raw transcript — it sees the **deterministic,
 evidence-cited brief** produced by legs ①/② and is told to answer only from it,
 keeping the ``[L…]`` citations. It narrates grounded facts; it doesn't invent.
 
-Backend is the local ``claude`` CLI in print mode (no API key, uses your
-existing auth). Override with ``CC_COPILOT_LLM_CMD`` (e.g. ``"llm -m gpt-4o"`` or
-``"codex exec"``) — the prompt is appended as the final argument. If no backend
-is available, callers fall back to the deterministic brief.
+The backend is pluggable (see :mod:`cccopilot.backends`): a local agent CLI
+(`claude`, `codex`, `gemini`, `llm`) or any OpenAI-compatible HTTP API
+(`deepseek`, `openai`, `openrouter`, `ollama`, …). Default is `claude`. Pick one
+with ``backend=...`` / ``--backend`` / ``CC_COPILOT_BACKEND``. If none is
+available, callers fall back to the deterministic brief.
 """
 
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
-
 from .brief import render
-
-def _default_claude() -> str:
-    """Prefer the canonical Claude Code CLI over any earlier-on-PATH wrapper
-    (e.g. an app-bundled `claude`), so `-p` print mode behaves as expected."""
-    cand = os.path.expanduser("~/.local/bin/claude")
-    if os.path.isfile(cand) and os.access(cand, os.X_OK):
-        return cand
-    return shutil.which("claude") or "claude"
+from .backends import resolve, Backend, BackendError
 
 _PREAMBLE = """You are cc-copilot's narration layer. Below is a DETERMINISTIC, \
 evidence-cited brief of a long-running coding agent's session — a read-only \
@@ -48,18 +38,22 @@ _NARRATE_TASK = (
 )
 
 
-def _cmd() -> list:
-    env = os.environ.get("CC_COPILOT_LLM_CMD", "").strip()
-    return env.split() if env else [_default_claude(), "-p"]
+def _be(backend) -> Backend:
+    return backend if isinstance(backend, Backend) else resolve(backend)
 
 
-def available() -> bool:
-    c = _cmd()[0]
-    return os.path.isfile(c) or shutil.which(c) is not None
+def available(backend=None) -> bool:
+    try:
+        return _be(backend).available()
+    except BackendError:
+        return False
 
 
-def backend_name() -> str:
-    return " ".join(_cmd())
+def backend_name(backend=None) -> str:
+    try:
+        return _be(backend).describe()
+    except BackendError as e:
+        return str(e)
 
 
 def _prompt(brief_text: str, task: str) -> str:
@@ -69,39 +63,26 @@ def _prompt(brief_text: str, task: str) -> str:
             + "\n=== END BRIEF ===\n\n" + task)
 
 
-def run(state, task: str, model: str = None, timeout: int = 180) -> str:
-    if not available():
-        raise RuntimeError(
-            f"no LLM backend on PATH (looked for `{_cmd()[0]}`). "
-            f"Install the `claude` CLI or set CC_COPILOT_LLM_CMD.")
-    cmd = _cmd()
-    if model:
-        cmd = cmd + ["--model", model]
-    cmd = cmd + [_prompt(render(state), task)]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"LLM backend timed out after {timeout}s")
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or f"LLM backend exited {proc.returncode}")
-    out = proc.stdout.strip()
-    if not out:
-        raise RuntimeError("LLM backend returned no output")
-    return out
+def run(state, task: str, model: str = None, backend=None, timeout: int = 180) -> str:
+    be = _be(backend)
+    if not be.available():
+        raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
+                           f"Try `cc-copilot backends` to see your options.")
+    return be.complete(_prompt(render(state), task), model=model, timeout=timeout)
 
 
-def narrate(state, model: str = None) -> str:
-    return run(state, _NARRATE_TASK, model=model)
+def narrate(state, model: str = None, backend=None) -> str:
+    return run(state, _NARRATE_TASK, model=model, backend=backend)
 
 
-def ask(state, question: str, model: str = None) -> str:
+def ask(state, question: str, model: str = None, backend=None) -> str:
     task = ('The returning human asks: "' + question.strip() + '"\n'
             "Answer grounded in the brief, with [L<n>] citations. "
             "If the brief lacks the information, say so rather than guessing.")
-    return run(state, task, model=model)
+    return run(state, task, model=model, backend=backend)
 
 
-def chat(state, history, question: str, model: str = None) -> str:
+def chat(state, history, question: str, model: str = None, backend=None) -> str:
     """Multi-turn sibling of :func:`ask` for the live chat sidecar.
 
     The CURRENT brief (re-read this turn, prepended by :func:`run`) is the only
@@ -121,4 +102,4 @@ def chat(state, history, question: str, model: str = None) -> str:
             + question.strip() + '"\n'
             "Answer ONLY from the current brief above, keeping [L<n>] citations. "
             "If it lacks the info, say so plainly.")
-    return run(state, task, model=model)
+    return run(state, task, model=model, backend=backend)

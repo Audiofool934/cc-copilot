@@ -2,6 +2,8 @@
 
     cc-copilot sessions               list this project's sessions (newest first)
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
+    cc-copilot chat [...]             live read-only chat pinned to a session
+    cc-copilot backends               list LLM backends (claude/codex/deepseek/…)
     cc-copilot watch [...]            re-print the brief when the transcript grows
     cc-copilot state [...] --json     dump the raw state model as JSON
 
@@ -59,13 +61,14 @@ def cmd_brief(args) -> int:
     print(B.render(st))
     if getattr(args, "narrate", False):
         from . import narrate as N
-        if not N.available():
-            sys.stderr.write("# --narrate: no LLM backend (install `claude` CLI "
-                             "or set CC_COPILOT_LLM_CMD); showing brief only\n")
+        be = getattr(args, "backend", None)
+        if not N.available(be):
+            sys.stderr.write(f"# --narrate: backend unavailable ({N.backend_name(be)}); "
+                             f"showing brief only — see `cc-copilot backends`\n")
         else:
-            sys.stderr.write(f"# narrating via {N.backend_name()} …\n")
+            sys.stderr.write(f"# narrating via {N.backend_name(be)} …\n")
             try:
-                txt = N.narrate(st, model=getattr(args, "model", None))
+                txt = N.narrate(st, model=getattr(args, "model", None), backend=be)
                 print("\n## 🗣 Narration  _(LLM, grounded in the cited facts above)_\n")
                 print(txt)
             except Exception as e:
@@ -76,16 +79,33 @@ def cmd_brief(args) -> int:
 def cmd_ask(args) -> int:
     _, tr, st = _load(args)
     from . import narrate as N
-    if not N.available():
-        sys.stderr.write("cc-copilot: `ask` needs an LLM backend (install the "
-                         "`claude` CLI or set CC_COPILOT_LLM_CMD)\n")
+    be = getattr(args, "backend", None)
+    if not N.available(be):
+        sys.stderr.write(f"cc-copilot: backend unavailable ({N.backend_name(be)}). "
+                         f"Run `cc-copilot backends` to see options.\n")
         return 2
-    sys.stderr.write(f"# {N.backend_name()} (grounded in the session state) …\n")
+    sys.stderr.write(f"# {N.backend_name(be)} (grounded in the session state) …\n")
     try:
-        print(N.ask(st, args.question, model=getattr(args, "model", None)))
+        print(N.ask(st, args.question, model=getattr(args, "model", None), backend=be))
     except Exception as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 1
+    return 0
+
+
+def cmd_backends(args) -> int:
+    from . import backends as BK
+    from . import narrate as N
+    active = BK.resolve(getattr(args, "backend", None)).name
+    print("LLM backends (default selection marked ▶; the deterministic core needs none):")
+    for name, be in sorted(BK.registry().items()):
+        ok = be.available()
+        mark = "▶" if name == active else " "
+        status = "ready" if ok else f"needs: {be.reason()}"
+        print(f"  {mark} {name:<11} {'✓' if ok else '·'} {status}")
+    print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
+    print("pick with --backend <name>, env CC_COPILOT_BACKEND, or a custom "
+          "CC_COPILOT_LLM_CMD / CC_COPILOT_API_BASE.")
     return 0
 
 
@@ -107,6 +127,7 @@ def cmd_chat(args) -> int:
     session = C.ChatSession(
         path,
         model=getattr(args, "model", None),
+        backend=getattr(args, "backend", None),
         alerts=not getattr(args, "no_alerts", False),
         poll=getattr(args, "poll", 5),
     )
@@ -204,7 +225,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--narrate", action="store_true",
                     help="append an LLM narration grounded in the cited facts")
     sp.add_argument("--model", help="model for --narrate (passed to the backend)")
+    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
     sp.set_defaults(func=cmd_brief)
+
+    sp = sub.add_parser("backends", help="list LLM backends and their availability")
+    sp.add_argument("--backend", help="show this backend as the active selection")
+    sp.set_defaults(func=cmd_backends)
 
     sp = sub.add_parser("check", help="is it safe to continue? (off-track/friction signals)")
     session_args(sp)
@@ -215,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("question", help='e.g. "did it drift?" or "draft the next instruction"')
     sp.add_argument("--session", help="session id, prefix, or path (default: most recent)")
     sp.add_argument("--model", help="model passed to the LLM backend")
+    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
     sp.set_defaults(func=cmd_ask, path=False)
 
     sp = sub.add_parser("chat", aliases=["attach"],
@@ -223,6 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("session", nargs="?",
                     help="session id, prefix, or path (default: most recent OTHER session)")
     sp.add_argument("--model", help="model passed to the LLM backend")
+    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
     sp.add_argument("--no-alerts", action="store_true",
                     help="disable the background stall/off-track alert thread")
     sp.add_argument("--poll", type=int, default=5,

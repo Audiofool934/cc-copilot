@@ -80,9 +80,10 @@ def _fmt_alert(d) -> str:
 
 
 class ChatSession:
-    def __init__(self, path, model=None, alerts=True, poll=5):
+    def __init__(self, path, model=None, backend=None, alerts=True, poll=5):
         self.path = path
         self.model = model
+        self.backend = backend
         self.poll = max(2, poll)
         self.history = []          # [(role, text)]
         self.st = None
@@ -117,7 +118,7 @@ class ChatSession:
 
     def answer(self, q: str) -> str:
         self.refresh()
-        txt = N.chat(self.st, self.history, q, model=self.model)
+        txt = N.chat(self.st, self.history, q, model=self.model, backend=self.backend)
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
         return txt
@@ -185,10 +186,11 @@ class ChatSession:
         self.refresh()
         print(f"🛰  cc-copilot chat — attached to {os.path.basename(self.path)}")
         print(self.banner())
-        have_llm = N.available()
+        have_llm = N.available(self.backend)
+        print(f"backend: {N.backend_name(self.backend)}")
         if not have_llm:
-            sys.stderr.write(f"# no LLM backend ({N.backend_name()}); questions "
-                             f"need one. /brief /check /diff still work.\n")
+            sys.stderr.write("# backend unavailable; questions need one "
+                             "(`cc-copilot backends`). /brief /check /diff still work.\n")
         print("ask a question, or /help.  Ctrl-D to exit.\n")
         self._start_alerts()
         try:

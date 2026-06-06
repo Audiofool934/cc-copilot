@@ -204,9 +204,40 @@ to guess** — e.g. it won't suggest "commit" when the brief shows no git state.
 The narration is the one non-deterministic layer and is labelled as such; legs
 ①/② remain the deterministic ground truth beneath it.
 
-Backend is the local `claude` CLI in print mode (no API key — uses your existing
-auth). Override with `CC_COPILOT_LLM_CMD`, e.g. `export CC_COPILOT_LLM_CMD="llm -m gpt-4o"`.
-If no backend is present, `--narrate` degrades to the plain brief.
+The model is pluggable — see **Models / backends** below.
+
+## Models / backends
+
+The deterministic core (`brief`, `check`, the chat's live refresh + alerts) uses
+**no model at all**. Only the language features (`ask`, `chat`, `--narrate`)
+call an LLM, and the backend is your choice:
+
+```bash
+cc-copilot backends                       # list backends + availability
+cc-copilot chat --backend codex           # or deepseek / ollama / openai / …
+cc-copilot ask "…" --backend deepseek --model deepseek-reasoner
+export CC_COPILOT_BACKEND=codex           # set a default
+```
+
+| backend | how it authenticates | notes |
+|---|---|---|
+| `claude` *(default)* | your Claude Code login | `claude -p`; no API key |
+| `codex` | your `codex login` (ChatGPT **OAuth**) | `codex exec`; agentic CLI |
+| `gemini` / `llm` | the CLI's own config | if installed on PATH |
+| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible HTTP |
+| `openai` | `OPENAI_API_KEY` | |
+| `openrouter` | `OPENROUTER_API_KEY` | any model on OpenRouter |
+| `ollama` | none (local) | `http://localhost:11434`; set `--model` |
+
+Two escape hatches for anything else (both zero-dep):
+- **Any OpenAI-compatible API** — `CC_COPILOT_API_BASE` (+ `CC_COPILOT_API_KEY`,
+  `CC_COPILOT_MODEL`). Points at vLLM, LM Studio, Together, Groq, a proxy, etc.
+- **Any CLI** — `CC_COPILOT_LLM_CMD` (e.g. `"llm -m gpt-4o"`); the prompt is
+  appended as the final argument.
+
+Grounding is identical across all of them: every backend receives only the cited
+brief with the no-invention preamble. If the selected backend is unavailable,
+`--narrate` degrades to the plain (LLM-free) brief and `ask`/`chat` say so.
 
 ## How it works
 
