@@ -6,5 +6,13 @@
 # PYTHONSAFEPATH=1 (py3.11+) stops Python from prepending the cwd to sys.path —
 # otherwise a stray file in your project dir (e.g. inspect.py, types.py) would
 # shadow a stdlib module and crash us. The package is still found via PYTHONPATH.
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks so `ln -s …/cc-copilot ~/.local/bin/cc-copilot` works:
+# find the real script dir (which holds the cccopilot/ package), not the symlink.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [ "${src#/}" = "$src" ] && src="$dir/$src"
+done
+here="$(cd -P "$(dirname "$src")" && pwd)"
 exec env PYTHONSAFEPATH=1 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" python3 -m cccopilot "$@"
