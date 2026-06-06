@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Thin launcher so you can run cc-copilot from anywhere without installing.
+# It keeps your current working directory (so session resolution targets the
+# project you're actually in) and puts the package on PYTHONPATH.
+#
+# PYTHONSAFEPATH=1 (py3.11+) stops Python from prepending the cwd to sys.path —
+# otherwise a stray file in your project dir (e.g. inspect.py, types.py) would
+# shadow a stdlib module and crash us. The package is still found via PYTHONPATH.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec env PYTHONSAFEPATH=1 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" python3 -m cccopilot "$@"
