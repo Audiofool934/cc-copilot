@@ -348,8 +348,27 @@ class Cockpit(App):
             self.notify(str(out).splitlines()[0]); self._update_status(); return
         self.notify(f"unknown command {cmd!r}", severity="warning")
 
-    def _collapsible(self, title, body_text):
-        self._chat(Collapsible(Static(Text(body_text)), title=title, collapsed=False))
+    def _collapsible(self, title, body):
+        renderable = body if isinstance(body, Text) else Text(str(body))
+        self._chat(Collapsible(Static(renderable), title=title, collapsed=False))
+
+    def _diff_renderable(self, d):
+        if (d.new_events == 0 and not d.new_changed and not d.new_failures
+                and d.status_from == d.status_to):
+            return Text("(no change since last turn)", style=_PAL["muted"])
+        t = Text()
+        t.append(f"+{d.new_events} events", style=_PAL["muted"])
+        if d.status_from != d.status_to:
+            t.append(f"\nstatus  {d.status_from or '∅'} → {d.status_to}", style=_PAL["secondary"])
+        if d.verdict_from != d.verdict_to:
+            t.append(f"\nsafety  {d.verdict_from or '∅'} → {d.verdict_to}",
+                     style=_VERDICT_HEX.get(d.verdict_to, _PAL["muted"]))
+        for fc in d.new_changed[:8]:
+            t.append(f"\n  ~ {fc.path} ({fc.total} edit/write) [L{fc.last_line}]",
+                     style=_PAL["success"])
+        for f in d.new_failures[:6]:
+            t.append(f"\n  ✗ {f.tool} [L{f.line}]: {f.summary[:70]}", style=_PAL["error"])
+        return t
 
     def action_brief(self):
         self.session.refresh()
@@ -364,7 +383,7 @@ class Cockpit(App):
     def action_diff(self):
         self.session.refresh()
         self._collapsible("/diff — changes since last turn",
-                          _fmt_diff(S.diff(self.session.prev, self.session.st)))
+                          self._diff_renderable(S.diff(self.session.prev, self.session.st)))
 
     @work
     async def action_sessions(self):
