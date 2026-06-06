@@ -26,9 +26,8 @@ try:
     from rich.text import Text
 except ImportError:
     raise SystemExit(
-        "the cockpit TUI needs Textual — install the extra:\n"
-        "  pip install 'cc-copilot[tui]'\n"
-        "or in this repo:  python3 -m venv .venv && .venv/bin/pip install textual")
+        "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
+        "(or: pip install 'cc-copilot[tui]')")
 
 from . import transcript as T, state as S, assess as A, narrate as N, backends as BK
 from .chat import _fmt_alert, _GLYPH, _dur, _HELP as _REPL_HELP

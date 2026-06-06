@@ -23,6 +23,59 @@ from dataclasses import asdict
 from . import __version__, locate, transcript as T, state as S, brief as B
 
 
+def _repo_root() -> str:
+    """The dir holding the cccopilot package (where .venv should live)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _tui_importable() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("textual") is not None
+
+
+def _ensure_tui_runtime(quiet: bool = False) -> str:
+    """Return a python that has Textual — the project .venv, creating it and
+    installing the [tui] extra on first use. Returns None on failure."""
+    import subprocess
+    import venv
+    vdir = os.path.join(_repo_root(), ".venv")
+    vpy = os.path.join(vdir, "bin", "python")
+
+    def has_textual(py):
+        return subprocess.run([py, "-c", "import textual"],
+                              capture_output=True).returncode == 0
+
+    if os.path.isfile(vpy) and has_textual(vpy):
+        return vpy
+    if not os.path.isfile(vpy):
+        if not quiet:
+            sys.stderr.write(f"# cc-copilot: creating venv at {vdir} (one-time) …\n")
+        try:
+            venv.create(vdir, with_pip=True)
+        except Exception as e:
+            sys.stderr.write(f"# venv creation failed: {e}\n")
+            return None
+    if not quiet:
+        sys.stderr.write("# cc-copilot: installing the cockpit (textual), one-time …\n")
+    r = subprocess.run([vpy, "-m", "pip", "install", "-q", "--upgrade", "textual"])
+    if r.returncode != 0 or not has_textual(vpy):
+        return None
+    return vpy
+
+
+def cmd_setup(args) -> int:
+    import subprocess
+    vpy = _ensure_tui_runtime()
+    if not vpy:
+        sys.stderr.write("cc-copilot setup: could not install textual.\n"
+                         "Try manually:  python3 -m venv .venv && .venv/bin/pip install textual\n")
+        return 1
+    subprocess.run([vpy, "-c",
+                    "import textual; print('cockpit ready · textual', textual.__version__)"])
+    print("run:  cc-copilot cockpit")
+    return 0
+
+
 def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
     path = locate.resolve(cwd, getattr(args, "session", None))
@@ -180,6 +233,18 @@ def cmd_check(args) -> int:
 
 def cmd_chat(args) -> int:
     from . import chat as C
+    # Cockpit requested but Textual isn't in THIS interpreter → bootstrap the
+    # .venv once and re-exec under it, so `cc-copilot cockpit` just works.
+    if getattr(args, "tui", False) and not _tui_importable():
+        vpy = _ensure_tui_runtime()
+        if not vpy:
+            sys.stderr.write("could not set up the cockpit. Try: cc-copilot setup\n")
+            return 3
+        if os.path.abspath(vpy) != os.path.abspath(sys.executable):
+            os.execve(vpy, [vpy, "-m", "cccopilot", *sys.argv[1:]],
+                      {**os.environ, "PYTHONPATH": _repo_root(), "PYTHONSAFEPATH": "1"})
+            # execve replaces this process; nothing below runs
+
     path = _resolve_or_die(args)
     session = C.ChatSession(
         path,
@@ -189,11 +254,7 @@ def cmd_chat(args) -> int:
         poll=getattr(args, "poll", 5),
     )
     if getattr(args, "tui", False):
-        try:
-            from . import tui
-        except SystemExit as e:          # Textual not installed
-            sys.stderr.write(str(e) + "\n")
-            return 3
+        from . import tui
         tui.run(session, poll=getattr(args, "poll", 5),
                 alerts=not getattr(args, "no_alerts", False))
         return 0
@@ -312,6 +373,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--init", action="store_true",
                     help="write a starter config file if none exists")
     sp.set_defaults(func=cmd_config)
+
+    sp = sub.add_parser("setup",
+                        help="install the cockpit TUI extra (creates .venv + textual)")
+    sp.set_defaults(func=cmd_setup)
 
     sp = sub.add_parser("check", help="is it safe to continue? (off-track/friction signals)")
     session_args(sp)

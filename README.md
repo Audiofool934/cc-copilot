@@ -187,10 +187,10 @@ works, and **off-thread backend turns** so it never freezes. Default backend is
 **codex** (ChatGPT OAuth); `/model <name>` swaps it live.
 
 ```bash
-# one-time: install the optional extra (kept out of the zero-dep core)
-python3 -m venv .venv && .venv/bin/pip install textual    # or: pip install 'cc-copilot[tui]'
-
-cc-copilot cockpit            # full-screen; or:  cc-copilot chat --tui
+cc-copilot cockpit            # just run it — first launch auto-installs the TUI
+                              #   extra into a local .venv, then opens the cockpit
+# (explicit / CI:  cc-copilot setup   ·   or   pip install 'cc-copilot[tui]')
+# (= cc-copilot chat --tui)
 ```
 
 In-cockpit: `Enter` send · `/help` · `/brief` `/check` `/diff` (LLM-free) ·
