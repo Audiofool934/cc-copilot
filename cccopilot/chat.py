@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 
-from . import transcript as T, state as S, brief as B, assess as A, narrate as N
+from . import transcript as T, state as S, brief as B, assess as A, narrate as N, locate as LOC
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -161,6 +161,10 @@ class ChatSession:
         for n in os.listdir(d):
             if n.endswith(".jsonl"):
                 p = os.path.join(d, n)
+                # hide cc-copilot's own narration sessions, but never hide the
+                # one we're currently attached to.
+                if p != self.path and LOC.is_own_session(p):
+                    continue
                 try:
                     refs.append((os.path.getmtime(p), p))
                 except OSError:

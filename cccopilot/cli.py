@@ -37,14 +37,17 @@ def _resolve_or_die(args) -> str:
 
 def cmd_sessions(args) -> int:
     cwd = args.cwd or os.getcwd()
-    refs = locate.list_sessions(cwd)
+    all_refs = locate.list_sessions(cwd, include_own=True)
+    refs = [r for r in all_refs if r.own] if getattr(args, "helpers", False) \
+        else [r for r in all_refs if not r.own]
+    hidden = len([r for r in all_refs if r.own]) if not getattr(args, "helpers", False) else 0
+    hnote = f"  [{hidden} cc-copilot helper session(s) hidden; --helpers to show]" if hidden else ""
     if not refs:
-        print(f"(no sessions for {cwd})  dir: {locate.project_dir_for(cwd)}")
+        print(f"(no work sessions for {cwd}){hnote}\n  dir: {locate.project_dir_for(cwd)}")
         return 1
-    print(f"sessions for {cwd}  ({len(refs)}):")
+    print(f"sessions for {cwd}  ({len(refs)}){hnote}:")
     for r in refs:
-        kb = r.size / 1024
-        print(f"  {r.session_id}  {r.hhmm}  {kb:7.0f} KB")
+        print(f"  {r.session_id}  {r.hhmm}  {r.size / 1024:7.0f} KB")
     return 0
 
 
@@ -129,9 +132,12 @@ def cmd_status(args) -> int:
     from .assess import assess
     from .chat import _GLYPH, _dur
     cwd = args.cwd or os.getcwd()
-    refs = locate.list_sessions(cwd)
+    all_refs = locate.list_sessions(cwd, include_own=True)
+    refs = [r for r in all_refs if not r.own]
+    hidden = len(all_refs) - len(refs)
     if not refs:
-        print(f"(no sessions for {cwd})  dir: {locate.project_dir_for(cwd)}")
+        note = f"  ({hidden} cc-copilot helper session(s) hidden)" if hidden else ""
+        print(f"(no work sessions for {cwd}){note}\n  dir: {locate.project_dir_for(cwd)}")
         return 1
     chosen = refs if getattr(args, "all", False) else refs[:args.limit]
     rows = []
@@ -149,7 +155,8 @@ def cmd_status(args) -> int:
         rows.append((r, st, a, head))
     rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
-    print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions)")
+    hnote = f", {hidden} helper hidden" if hidden else ""
+    print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions{hnote})")
     for r, st, a, head in rows:
         g = _GLYPH.get(st.status, "?")
         idle = _dur(st.idle_seconds)
@@ -258,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("sessions", help="list sessions for this project")
     common(sp)
+    sp.add_argument("--helpers", action="store_true",
+                    help="show cc-copilot's own narration sessions instead of hiding them")
     sp.set_defaults(func=cmd_sessions)
 
     sp = sub.add_parser("status", aliases=["fleet"],

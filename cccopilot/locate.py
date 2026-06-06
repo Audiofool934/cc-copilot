@@ -36,6 +36,7 @@ class SessionRef:
     session_id: str
     mtime: float
     size: int
+    own: bool = False        # a cc-copilot narration call, not a real work session
 
     @property
     def hhmm(self) -> str:
@@ -43,8 +44,26 @@ class SessionRef:
         return datetime.fromtimestamp(self.mtime).strftime("%Y-%m-%d %H:%M")
 
 
-def list_sessions(cwd: str) -> list:
-    """Return session transcripts for ``cwd``'s project, newest first."""
+# Unique signature of cc-copilot's own narration prompt (see narrate._PREAMBLE).
+# Using `claude -p`/`codex exec` as a backend logs a session transcript per call;
+# we recognize and hide our own so they never masquerade as the user's sessions.
+_OWN_SIG = b"cc-copilot's narration layer"
+
+
+def is_own_session(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16384)   # the prompt is the first user message, near the top
+    except OSError:
+        return False
+    return _OWN_SIG in head
+
+
+def list_sessions(cwd: str, include_own: bool = False) -> list:
+    """Return session transcripts for ``cwd``'s project, newest first.
+
+    cc-copilot's own narration sessions are hidden by default (``include_own``).
+    """
     d = project_dir_for(cwd)
     if d is None:
         return []
@@ -59,9 +78,10 @@ def list_sessions(cwd: str) -> list:
             continue
         refs.append(SessionRef(
             path=p, session_id=name[:-6], mtime=stt.st_mtime, size=stt.st_size,
+            own=is_own_session(p),
         ))
     refs.sort(key=lambda r: r.mtime, reverse=True)
-    return refs
+    return refs if include_own else [r for r in refs if not r.own]
 
 
 def resolve(cwd: str, session: Optional[str] = None) -> Optional[str]:
