@@ -4,6 +4,7 @@
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
     cc-copilot chat [...]             live read-only chat pinned to a session
     cc-copilot backends               list LLM backends (claude/codex/deepseek/…)
+    cc-copilot config [--init]        default backend/model/keys (~/.cc-copilot.toml)
     cc-copilot watch [...]            re-print the brief when the transcript grows
     cc-copilot state [...] --json     dump the raw state model as JSON
 
@@ -232,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--backend", help="show this backend as the active selection")
     sp.set_defaults(func=cmd_backends)
 
+    sp = sub.add_parser("config",
+                        help="show or scaffold ~/.cc-copilot.toml (default backend/model/keys)")
+    sp.add_argument("--init", action="store_true",
+                    help="write a starter config file if none exists")
+    sp.set_defaults(func=cmd_config)
+
     sp = sub.add_parser("check", help="is it safe to continue? (off-track/friction signals)")
     session_args(sp)
     sp.set_defaults(func=cmd_check)
@@ -270,8 +277,23 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def cmd_config(args) -> int:
+    from . import config as CFG, narrate as N
+    if getattr(args, "init", False):
+        print(CFG.init_file())
+        return 0
+    p = CFG.path()
+    exists = os.path.isfile(p)
+    print(f"config: {p}")
+    print(f"  status: {'loaded' if exists else 'not present — run `cc-copilot config --init`'}")
+    print(f"  effective backend: {N.backend_name()}")
+    return 0
+
+
 def main(argv=None) -> int:
+    from . import config as CFG
     args = build_parser().parse_args(argv)
     if getattr(args, "latest", False):
         args.session = None
+    CFG.apply_defaults(args)   # config file fills gaps the flags/env left
     return args.func(args)

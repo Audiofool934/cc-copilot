@@ -239,6 +239,27 @@ Grounding is identical across all of them: every backend receives only the cited
 brief with the no-invention preamble. If the selected backend is unavailable,
 `--narrate` degrades to the plain (LLM-free) brief and `ask`/`chat` say so.
 
+### Set defaults once — `~/.cc-copilot.toml`
+
+```bash
+cc-copilot config --init     # write a starter file (chmod 600)
+cc-copilot config            # show the path + effective backend
+```
+
+```toml
+# ~/.cc-copilot.toml
+backend = "codex"               # default backend
+model   = "deepseek-reasoner"   # default model (optional)
+
+[env]                           # exported as env vars (real env still wins)
+DEEPSEEK_API_KEY = "sk-…"
+CC_COPILOT_API_BASE = "http://localhost:11434"
+```
+
+Precedence everywhere: **explicit `--backend`/`--model` flag > real env var >
+this file > built-in default.** Keys live in the `[env]` table (kept `chmod 600`);
+point `$CC_COPILOT_CONFIG` elsewhere to relocate it.
+
 ## How it works
 
 ```

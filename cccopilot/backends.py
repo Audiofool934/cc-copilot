@@ -193,11 +193,14 @@ def resolve(name: str = None) -> Backend:
         if name in reg:
             return reg[name]
         raise BackendError(f"unknown backend {name!r}; known: {', '.join(sorted(reg))}")
+    # A named default (flag-less) wins over the mere presence of a custom
+    # endpoint — so CC_COPILOT_API_BASE can be configured without hijacking
+    # whatever backend you actually picked as default.
+    env = os.environ.get("CC_COPILOT_BACKEND", "").strip()
+    if env:
+        return resolve(env)
     if os.environ.get("CC_COPILOT_LLM_CMD", "").strip():
         return CliBackend("custom-cli", os.environ["CC_COPILOT_LLM_CMD"].split())
     if "custom" in reg:
         return reg["custom"]
-    env = os.environ.get("CC_COPILOT_BACKEND", "").strip()
-    if env:
-        return resolve(env)
     return reg["claude"]
