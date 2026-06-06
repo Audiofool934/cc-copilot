@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -50,11 +51,15 @@ class Backend:
 # ── CLI backends ─────────────────────────────────────────────────────────
 
 class CliBackend(Backend):
-    def __init__(self, name, argv, model_args=None):
+    def __init__(self, name, argv, model_args=None, cwd=None):
         self.name = name
         self.argv = [a for a in argv if a]
         # model_args: callable(model)->list[str], inserted before the prompt
         self.model_args = model_args
+        # cwd: run the CLI here. For agent CLIs (claude/codex) that log a
+        # session transcript per call, a neutral dir keeps those out of the
+        # user's project session list — and narration wants no repo context.
+        self.cwd = cwd
 
     def _bin(self):
         return self.argv[0] if self.argv else ""
@@ -72,7 +77,8 @@ class CliBackend(Backend):
             argv += list(self.model_args(model))
         argv += [prompt]
         try:
-            p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+            p = subprocess.run(argv, capture_output=True, text=True,
+                               timeout=timeout, cwd=self.cwd)
         except FileNotFoundError:
             raise BackendError(self.reason())
         except subprocess.TimeoutExpired:
@@ -156,11 +162,14 @@ def _claude_bin() -> str:
 def registry() -> dict:
     """Built fresh each call so env / PATH changes are picked up."""
     reg = {
-        # agent CLIs — auth is the CLI's own (claude subscription, codex OAuth …)
+        # agent CLIs — auth is the CLI's own (claude subscription, codex OAuth …).
+        # cwd=tmp so their per-call session logs don't pollute your project list.
         "claude": CliBackend("claude", [_claude_bin(), "-p"],
-                             model_args=lambda m: ["--model", m]),
+                             model_args=lambda m: ["--model", m],
+                             cwd=tempfile.gettempdir()),
         "codex":  CliBackend("codex", [shutil.which("codex") or "codex", "exec"],
-                             model_args=lambda m: ["-c", f"model={m}"]),
+                             model_args=lambda m: ["-c", f"model={m}"],
+                             cwd=tempfile.gettempdir()),
         "gemini": CliBackend("gemini", [shutil.which("gemini") or "gemini", "-p"],
                              model_args=lambda m: ["-m", m]),
         "llm":    CliBackend("llm", [shutil.which("llm") or "llm"],

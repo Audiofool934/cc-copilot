@@ -28,6 +28,8 @@ _HELP = """commands (all but questions are LLM-free):
   /diff             what changed since your last turn
   /refresh          re-read the session now
   /session          which session is attached
+  /sessions         list other sessions in this project
+  /use <n|id>       switch to another session (clears chat context)
   /history          this chat's turns
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
@@ -139,6 +141,10 @@ class ChatSession:
             return self.banner() + "  (refreshed)"
         if c == "/session":
             return f"attached: {self.path}\n{self.banner()}"
+        if c == "/sessions":
+            return self._list_sessions()
+        if c.startswith("/use"):
+            return self._switch(cmd.strip()[4:].strip())
         if c == "/history":
             if not self.history:
                 return "(no turns yet)"
@@ -147,6 +153,64 @@ class ChatSession:
         if c == "/diff":
             return _fmt_diff(S.diff(self.prev, self.st))
         return f"unknown command {cmd!r} — try /help"
+
+    # ---- session switching (select among multiple sessions) --------------
+    def _siblings(self):
+        d = os.path.dirname(self.path)
+        refs = []
+        for n in os.listdir(d):
+            if n.endswith(".jsonl"):
+                p = os.path.join(d, n)
+                try:
+                    refs.append((os.path.getmtime(p), p))
+                except OSError:
+                    pass
+        refs.sort(reverse=True)
+        self._listing = [p for _, p in refs]
+        return self._listing
+
+    def _list_sessions(self):
+        paths = self._siblings()
+        out = ["sessions in this project (newest first — `/use <n|id>`):"]
+        for i, p in enumerate(paths, 1):
+            cur = "*" if os.path.samefile(p, self.path) else " "
+            sid = os.path.basename(p)[:-6]
+            try:
+                kb = os.path.getsize(p) // 1024
+            except OSError:
+                kb = 0
+            out.append(f" {cur}{i:>2}. {sid[:8]}  {kb:>6} KB")
+        return "\n".join(out)
+
+    def _switch(self, arg):
+        if not arg:
+            return "usage: /use <number|session-id|prefix>  (see /sessions)"
+        paths = getattr(self, "_listing", None) or self._siblings()
+        target = None
+        if arg.isdigit():
+            i = int(arg) - 1
+            if 0 <= i < len(paths):
+                target = paths[i]
+        if target is None:
+            for p in paths:
+                sid = os.path.basename(p)[:-6]
+                if sid == arg or sid.startswith(arg):
+                    target = p
+                    break
+        if target is None:
+            return f"no session matching {arg!r} — try /sessions"
+        if os.path.samefile(target, self.path):
+            return "already attached to that session"
+        # re-pin: fresh state + fresh conversation context for the new session
+        self.path = target
+        self.st = self.prev = None
+        self.last_size = -1
+        self.history = []
+        self._alert_state = None
+        self._alert_size = -1
+        self.refresh()
+        return (f"switched → {os.path.basename(target)[:-6][:8]} "
+                f"(chat context cleared)\n{self.banner()}")
 
     # ---- background alerts (read-only, advisory) -------------------------
     def _start_alerts(self):

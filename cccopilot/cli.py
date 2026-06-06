@@ -110,6 +110,55 @@ def cmd_backends(args) -> int:
     return 0
 
 
+def _fleet_rank(status, verdict):
+    """Sort key so the sessions that need you float to the top."""
+    if status == "stalled" or verdict == "intervene":
+        return 0
+    if status == "awaiting-agent":
+        return 1
+    if status == "running":
+        return 2 if verdict == "review" else 3
+    if verdict == "review":
+        return 4            # idle, but had unresolved friction
+    if status == "idle":
+        return 5
+    return 6                # empty
+
+
+def cmd_status(args) -> int:
+    from .assess import assess
+    from .chat import _GLYPH, _dur
+    cwd = args.cwd or os.getcwd()
+    refs = locate.list_sessions(cwd)
+    if not refs:
+        print(f"(no sessions for {cwd})  dir: {locate.project_dir_for(cwd)}")
+        return 1
+    chosen = refs if getattr(args, "all", False) else refs[:args.limit]
+    rows = []
+    for r in chosen:
+        tr = T.parse(r.path)
+        st = S.build(tr)
+        a = assess(st)
+        sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
+        if sigs:
+            head = sigs[0].message + (f" [L{sigs[0].evidence[0]}]" if sigs[0].evidence else "")
+        elif st.intents:
+            head = st.intents[-1].text
+        else:
+            head = tr.title or ""
+        rows.append((r, st, a, head))
+    rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
+                             x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
+    print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions)")
+    for r, st, a, head in rows:
+        g = _GLYPH.get(st.status, "?")
+        idle = _dur(st.idle_seconds)
+        clip = " ".join((head or "").split())[:56]
+        print(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev  "
+              f"{r.session_id[:8]}  {clip}")
+    return 0
+
+
 def cmd_check(args) -> int:
     path, tr, st = _load(args)
     if args.path:
@@ -210,6 +259,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("sessions", help="list sessions for this project")
     common(sp)
     sp.set_defaults(func=cmd_sessions)
+
+    sp = sub.add_parser("status", aliases=["fleet"],
+                        help="overview of ALL sessions in a project (status + safety), neediest first")
+    common(sp)
+    sp.add_argument("--limit", type=int, default=10, help="how many recent sessions (default 10)")
+    sp.add_argument("--all", action="store_true", help="every session, not just the recent --limit")
+    sp.set_defaults(func=cmd_status)
 
     def session_args(sp):
         common(sp)

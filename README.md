@@ -87,6 +87,7 @@ Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
 
 ```bash
 cc-copilot chat                     # ⭐ live read-only chat pinned to the agent's session
+cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
 cc-copilot check                    # just the "is it safe to continue?" verdict
@@ -144,6 +145,36 @@ session; a finished session with past friction is **REVIEW**, never intervene.
 The exit code makes it scriptable — wire `cc-copilot check` into a `Stop` hook to
 get pinged only when an agent actually needs you. It's heuristic by design:
 cc-copilot flags friction; you make the call.
+
+## Multiple sessions
+
+Running several agents at once (e.g. parallel CMUX workspaces)? Two ways to work
+across them:
+
+```bash
+cc-copilot status                 # one screen: every session's status + safety,
+cc-copilot status --cwd ~/cmux    #   sorted so whatever needs you is on top
+cc-copilot fleet --all            #   (alias; --all = every session, not just recent 10)
+```
+```
+cc-copilot status — /Users/you/cmux  (10 of 14 sessions)
+ 🔴 stalled    intervene   8m ago   612ev  a1b2c3d4  stopped mid-action [L611]
+ 🟡 awaiting-agent review  2m ago  1840ev  b5c53c29  3 commands failed in a row [L244]
+ 🟢 running    clear      12s ago   930ev  9f0e1d2c  add the rollback step
+ ⚪ idle       idle        1h ago   240ev  77aa88bb  refactor done
+```
+
+And inside a chat you can hop between them live:
+
+```
+you> /sessions           # list the project's sessions, numbered
+you> /use 2              # switch to #2 (clears chat context for the new session)
+you> /use b5c53c29       # …or by id / prefix
+```
+
+Pick a session for any one-shot command with a positional id/prefix/path
+(`cc-copilot brief <id>`), or `--session`. The deterministic core means `status`
+needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 
 ## Chat sidecar — `cc-copilot chat` (the parallel cockpit)
 
