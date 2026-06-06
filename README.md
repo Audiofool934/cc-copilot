@@ -86,7 +86,8 @@ Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
 ## Usage
 
 ```bash
-cc-copilot chat                     # ⭐ live read-only chat pinned to the agent's session
+cc-copilot cockpit                  # ⭐ full-screen TUI cockpit (needs cc-copilot[tui])
+cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
@@ -176,7 +177,32 @@ Pick a session for any one-shot command with a positional id/prefix/path
 (`cc-copilot brief <id>`), or `--session`. The deterministic core means `status`
 needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 
-## Chat sidecar — `cc-copilot chat` (the parallel cockpit)
+## Cockpit TUI — `cc-copilot cockpit`
+
+A full-screen cockpit (Textual) — the Python analog of Codex's `ratatui` loop and
+Claude Code's Ink UI: a **reactive header** (status · safety verdict · backend:model
+· idle), a **scrolling log** that interleaves window-1's live timeline with your
+chat, a **background watcher** that pushes stall/off-track alerts as the agent
+works, and **off-thread backend turns** so it never freezes. Default backend is
+**codex** (ChatGPT OAuth); `/model <name>` swaps it live.
+
+```bash
+# one-time: install the optional extra (kept out of the zero-dep core)
+python3 -m venv .venv && .venv/bin/pip install textual    # or: pip install 'cc-copilot[tui]'
+
+cc-copilot cockpit            # full-screen; or:  cc-copilot chat --tui
+```
+
+In-cockpit: `Enter` send · `/help` · `/brief` `/check` `/diff` (LLM-free) ·
+`/sessions` `/use <n|id>` · `/model <name>` · `Ctrl+R` refresh · `Ctrl+L` clear ·
+`Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log — the
+faithfulness guarantee holds in the TUI exactly as in the CLI.
+
+The core and the plain `cc-copilot chat` REPL stay **zero-dependency**; Textual is
+lazy-imported only by the cockpit, and `python -c "import cccopilot.cli"` works on
+a stdlib-only interpreter.
+
+## Chat sidecar — `cc-copilot chat` (the plain REPL)
 
 The main way to use it. In a second terminal, pin to the agent's session and
 hold an ongoing read-only conversation while it works:

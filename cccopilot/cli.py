@@ -188,6 +188,15 @@ def cmd_chat(args) -> int:
         alerts=not getattr(args, "no_alerts", False),
         poll=getattr(args, "poll", 5),
     )
+    if getattr(args, "tui", False):
+        try:
+            from . import tui
+        except SystemExit as e:          # Textual not installed
+            sys.stderr.write(str(e) + "\n")
+            return 3
+        tui.run(session, poll=getattr(args, "poll", 5),
+                alerts=not getattr(args, "no_alerts", False))
+        return 0
     session.loop()
     return 0
 
@@ -316,18 +325,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
     sp.set_defaults(func=cmd_ask, path=False)
 
+    def add_chat_args(sp):
+        common(sp)
+        sp.add_argument("session", nargs="?",
+                        help="session id, prefix, or path (default: most recent OTHER session)")
+        sp.add_argument("--model", help="model passed to the LLM backend")
+        sp.add_argument("--backend", help="LLM backend (codex/claude/deepseek/ollama/…)")
+        sp.add_argument("--no-alerts", action="store_true",
+                        help="disable the background stall/off-track alert thread")
+        sp.add_argument("--poll", type=int, default=5,
+                        help="alert poll interval in seconds (default 5)")
+
     sp = sub.add_parser("chat", aliases=["attach"],
                         help="interactive read-only chat pinned to a session's live timeline")
-    common(sp)
-    sp.add_argument("session", nargs="?",
-                    help="session id, prefix, or path (default: most recent OTHER session)")
-    sp.add_argument("--model", help="model passed to the LLM backend")
-    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
-    sp.add_argument("--no-alerts", action="store_true",
-                    help="disable the background stall/off-track alert thread")
-    sp.add_argument("--poll", type=int, default=5,
-                    help="alert poll interval in seconds (default 5)")
+    add_chat_args(sp)
+    sp.add_argument("--tui", action="store_true",
+                    help="full-screen cockpit TUI (needs the cc-copilot[tui] extra)")
     sp.set_defaults(func=cmd_chat, path=False)
+
+    sp = sub.add_parser("cockpit",
+                        help="full-screen TUI cockpit (= chat --tui; needs cc-copilot[tui])")
+    add_chat_args(sp)
+    sp.set_defaults(func=cmd_chat, path=False, tui=True)
 
     sp = sub.add_parser("state", help="dump the raw state model as JSON")
     session_args(sp)

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-copilot"
+version = "0.1.0"
+description = "Read-only shadow-memory sidecar for coding agents: faithful, evidence-cited recap + safety judgment + grounded chat."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []                      # the core + CLI are zero-dependency, on purpose
+
+[project.optional-dependencies]
+tui = ["textual>=0.80"]                # the full-screen cockpit only
+
+[project.scripts]
+cc-copilot = "cccopilot.cli:main"
+
+[tool.setuptools]
+packages = ["cccopilot"]

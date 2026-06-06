@@ -15,4 +15,8 @@ while [ -h "$src" ]; do
   [ "${src#/}" = "$src" ] && src="$dir/$src"
 done
 here="$(cd -P "$(dirname "$src")" && pwd)"
-exec env PYTHONSAFEPATH=1 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" python3 -m cccopilot "$@"
+# Prefer the project venv (which has the optional TUI deps) if it exists, so the
+# cockpit works; otherwise any python3 runs the zero-dep core/CLI fine.
+py="$here/.venv/bin/python"
+[ -x "$py" ] || py="python3"
+exec env PYTHONSAFEPATH=1 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" "$py" -m cccopilot "$@"

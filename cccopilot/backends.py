@@ -212,4 +212,4 @@ def resolve(name: str = None) -> Backend:
         return CliBackend("custom-cli", os.environ["CC_COPILOT_LLM_CMD"].split())
     if "custom" in reg:
         return reg["custom"]
-    return reg["claude"]
+    return reg["codex"]   # default backend: codex via ChatGPT OAuth
