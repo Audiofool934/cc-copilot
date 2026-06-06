@@ -381,6 +381,22 @@ already supports this), a live `watch` + narrate loop, and other agents (Codex,
 Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
 Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 
+## Development
+
+```bash
+git clone <repo> && cd cc-copilot
+./cc-copilot brief --cwd ~/some-project      # runs on stdlib alone
+
+python3 -m unittest discover -s tests        # 43 tests, no deps
+cc-copilot setup                             # adds the optional TUI (.venv + textual)
+```
+
+Layout: the core (`transcript` → `state` → `assess` → `brief`) is pure,
+deterministic, and dependency-free; `narrate`/`backends` add the optional LLM
+layer; `chat`/`tui` are the interactive surfaces; `cli` ties it together. Only
+`transcript.py` is Claude-Code-specific — everything downstream is agent-agnostic.
+Tests stay stdlib-only; Textual is an optional extra, lazy-imported by the cockpit.
+
 ## <a name="landscape"></a>Landscape (mid-2026)
 
 Closest contenders and why they don't close the gap: **Devin** Session Insights

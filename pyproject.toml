@@ -7,7 +7,18 @@ name = "cc-copilot"
 version = "0.1.0"
 description = "Read-only shadow-memory sidecar for coding agents: faithful, evidence-cited recap + safety judgment + grounded chat."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "audiofool" }]
+keywords = ["claude-code", "codex", "tui", "observability", "agent", "cli", "sidecar"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
 dependencies = []                      # the core + CLI are zero-dependency, on purpose
 
 [project.optional-dependencies]
