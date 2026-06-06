@@ -91,7 +91,9 @@ class CliBackend(Backend):
         return out
 
     def describe(self) -> str:
-        return f"{self.name} (cli: {' '.join(self.argv)})"
+        # show the command, not the full resolved path (fnm/venv paths are noisy)
+        shown = " ".join([os.path.basename(self.argv[0])] + self.argv[1:]) if self.argv else self.name
+        return f"{self.name} (cli: {shown})"
 
 
 # ── OpenAI-compatible HTTP backend ───────────────────────────────────────
@@ -167,7 +169,10 @@ def registry() -> dict:
         "claude": CliBackend("claude", [_claude_bin(), "-p"],
                              model_args=lambda m: ["--model", m],
                              cwd=tempfile.gettempdir()),
-        "codex":  CliBackend("codex", [shutil.which("codex") or "codex", "exec"],
+        # --skip-git-repo-check: we run codex in a neutral temp dir (not the
+        # watched repo), so it must not insist on being inside a git project.
+        "codex":  CliBackend("codex", [shutil.which("codex") or "codex", "exec",
+                                       "--skip-git-repo-check"],
                              model_args=lambda m: ["-c", f"model={m}"],
                              cwd=tempfile.gettempdir()),
         "gemini": CliBackend("gemini", [shutil.which("gemini") or "gemini", "-p"],
