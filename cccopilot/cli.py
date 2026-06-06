@@ -101,6 +101,19 @@ def cmd_check(args) -> int:
     return {"intervene": 2, "review": 1}.get(v, 0)
 
 
+def cmd_chat(args) -> int:
+    from . import chat as C
+    path = _resolve_or_die(args)
+    session = C.ChatSession(
+        path,
+        model=getattr(args, "model", None),
+        alerts=not getattr(args, "no_alerts", False),
+        poll=getattr(args, "poll", 5),
+    )
+    session.loop()
+    return 0
+
+
 def cmd_state(args) -> int:
     from .assess import assess
     _, tr, st = _load(args)
@@ -203,6 +216,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--session", help="session id, prefix, or path (default: most recent)")
     sp.add_argument("--model", help="model passed to the LLM backend")
     sp.set_defaults(func=cmd_ask, path=False)
+
+    sp = sub.add_parser("chat", aliases=["attach"],
+                        help="interactive read-only chat pinned to a session's live timeline")
+    common(sp)
+    sp.add_argument("session", nargs="?",
+                    help="session id, prefix, or path (default: most recent OTHER session)")
+    sp.add_argument("--model", help="model passed to the LLM backend")
+    sp.add_argument("--no-alerts", action="store_true",
+                    help="disable the background stall/off-track alert thread")
+    sp.add_argument("--poll", type=int, default=5,
+                    help="alert poll interval in seconds (default 5)")
+    sp.set_defaults(func=cmd_chat, path=False)
 
     sp = sub.add_parser("state", help="dump the raw state model as JSON")
     session_args(sp)

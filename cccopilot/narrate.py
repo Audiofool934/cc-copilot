@@ -99,3 +99,26 @@ def ask(state, question: str, model: str = None) -> str:
             "Answer grounded in the brief, with [L<n>] citations. "
             "If the brief lacks the information, say so rather than guessing.")
     return run(state, task, model=model)
+
+
+def chat(state, history, question: str, model: str = None) -> str:
+    """Multi-turn sibling of :func:`ask` for the live chat sidecar.
+
+    The CURRENT brief (re-read this turn, prepended by :func:`run`) is the only
+    source of new facts. Prior turns are replayed as *already-grounded* answers
+    — referenced for continuity, never treated as fresh evidence — so a later
+    answer cannot launder an un-cited claim from an earlier one.
+    """
+    convo = ""
+    if history:
+        parts = []
+        for role, text in history[-8:]:
+            parts.append(("User: " if role == "user" else "You: ") + text)
+        convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
+                 "continuity, but the CURRENT brief above is the only source of "
+                 "new facts):\n" + "\n".join(parts) + "\n\n")
+    task = (convo + 'Current question from the returning human: "'
+            + question.strip() + '"\n'
+            "Answer ONLY from the current brief above, keeping [L<n>] citations. "
+            "If it lacks the info, say so plainly.")
+    return run(state, task, model=model)

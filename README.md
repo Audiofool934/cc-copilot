@@ -86,10 +86,11 @@ Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
 ## Usage
 
 ```bash
+cc-copilot chat                     # ⭐ live read-only chat pinned to the agent's session
 cc-copilot sessions                 # list this project's sessions, newest first
-cc-copilot brief                    # recap (defaults to most recent session)
+cc-copilot brief                    # one-shot recap (defaults to most recent session)
 cc-copilot check                    # just the "is it safe to continue?" verdict
-cc-copilot ask "did it drift?"      # grounded Q&A over the session state (leg ③)
+cc-copilot ask "did it drift?"      # one-shot grounded Q&A over the session state
 cc-copilot brief --narrate          # recap + an LLM narration of the cited facts
 cc-copilot brief --latest           # …explicitly the newest
 cc-copilot brief <session-id|path>  # a specific session
@@ -143,6 +144,47 @@ session; a finished session with past friction is **REVIEW**, never intervene.
 The exit code makes it scriptable — wire `cc-copilot check` into a `Stop` hook to
 get pinged only when an agent actually needs you. It's heuristic by design:
 cc-copilot flags friction; you make the call.
+
+## Chat sidecar — `cc-copilot chat` (the parallel cockpit)
+
+The main way to use it. In a second terminal, pin to the agent's session and
+hold an ongoing read-only conversation while it works:
+
+```bash
+cd ~/the-project          # same dir the agent is working in
+cc-copilot chat           # pins to that project's most-recent OTHER session
+```
+
+```
+🛰  cc-copilot chat — attached to b5c53c29….jsonl
+[🟢 running · idle 12s · 1840 ev · safety: review]
+ask a question, or /help.  Ctrl-D to exit.
+
+you> what was it doing, and did it hit trouble?
+[🟢 running · idle 3s · 1843 ev · safety: review]
+cc > It's wiring the SSH-reconnect backoff. Hit a 3-command fail-streak
+     on the migration [L244 L248 L250] but recovered; tests green [L312].
+
+🔔 window-1 → STALLED · 1 new error(s), e.g. Bash [L1871]
+you> is it safe to let it keep going?
+…
+```
+
+- **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
+  lag window-1; a status banner shows it moving.
+- **Multi-turn** — it remembers the conversation; follow-ups resolve against both
+  the prior answers and the just-refreshed state.
+- **Push alerts** — a background thread pings you inline when the agent stalls /
+  goes off-track / errors (`--no-alerts` to silence; `--poll N` to tune).
+- **Read-only by construction** — the only file op is `open(path,'r')`; verified
+  byte-identical before/after. It cannot touch the agent it watches.
+- **LLM-free escape hatches** — `/brief`, `/check`, `/diff`, `/refresh`,
+  `/session`, `/history` work without a backend, and let you verify any prose
+  answer against cited evidence in the same window.
+
+Grounding is identical to `ask`: the chat LLM sees only the cited brief, and
+prior turns are replayed as *already-grounded* answers — never as new facts — so
+a long conversation can't launder an un-cited claim into a later reply.
 
 ## Observer chat — leg ③ (`cc-copilot ask`, `brief --narrate`)
 

@@ -260,3 +260,35 @@ def _input_path(inp: dict) -> str:
     if not isinstance(inp, dict):
         return ""
     return inp.get("file_path") or inp.get("notebook_path") or ""
+
+
+@dataclass
+class Diff:
+    """What changed between two snapshots of a session — for `/diff` and the
+    live chat's stall/off-track alerts. Pure data, computed from two States."""
+    new_events: int
+    status_from: str
+    status_to: str
+    verdict_from: str
+    verdict_to: str
+    new_failures: list   # Failure objects present in `new` but not `old`
+    new_changed: list    # FileChange objects newly changed (or with more edits)
+
+
+def diff(old: "State", new: "State") -> Diff:
+    from .assess import assess  # local import: assess imports state (avoid cycle)
+    v_new = assess(new).verdict
+    if old is None:
+        return Diff(new.tr.raw_lines, "", new.status, "", v_new,
+                    list(new.failures), list(new.changed_files))
+    old_fail_lines = {f.line for f in old.failures}
+    new_fail = [f for f in new.failures if f.line not in old_fail_lines]
+    old_tot = {p: fc.total for p, fc in old.files.items()}
+    new_chg = [fc for p, fc in new.files.items() if old_tot.get(p, 0) != fc.total]
+    new_chg.sort(key=lambda c: -c.last_line)
+    return Diff(
+        new_events=max(0, new.tr.raw_lines - old.tr.raw_lines),
+        status_from=old.status, status_to=new.status,
+        verdict_from=assess(old).verdict, verdict_to=v_new,
+        new_failures=new_fail, new_changed=new_chg,
+    )
