@@ -137,15 +137,21 @@ class Cockpit(App):
     Screen { layout: vertical; }
 
     #timeline {
-        dock: top; height: 9;
+        dock: top; height: 8;
         border-bottom: solid $accent;
         background: $panel; padding: 0 1;
     }
     #timeline-title { color: $accent; text-style: bold; }
     #chat { height: 1fr; background: $surface; padding: 0 1; }
 
-    #status { dock: bottom; height: 1; background: $panel; color: $text; padding: 0 1; }
-    #composer { dock: bottom; height: auto; max-height: 8; border: round $accent; padding: 0 1; }
+    /* status + composer flow at the bottom (above the docked Footer); no
+       competing dock:bottom so the composer box is always visible. */
+    #status { height: 1; background: $boost; color: $text; padding: 0 1; }
+    #composer {
+        height: auto; min-height: 3; max-height: 8;
+        border: round $accent; padding: 0 1; margin: 0 1;
+        background: $surface;
+    }
     #composer:focus-within { border: round $primary; }
 
     .role-user      { border-left: thick $secondary; padding-left: 1; }
@@ -200,7 +206,10 @@ class Cockpit(App):
         if not N.available(self.backend):
             self.notify("backend unavailable — /model to switch", severity="warning")
         self._update_status()
-        self.query_one("#composer", Composer).focus()
+        composer = self.query_one("#composer", Composer)
+        composer.border_title = "› ask the copilot"
+        composer.border_subtitle = "Enter send · ⇧+Enter newline · Ctrl+P palette"
+        composer.focus()
         if self.alerts:
             self.watch_agent()
 

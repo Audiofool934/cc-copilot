@@ -5,6 +5,12 @@ away or switch projects; the agent keeps working. When you come back,
 `cc-copilot` tells you — **faithfully** — what it did, whether it's stuck, and
 what to look at, without scrolling the transcript.
 
+![cc-copilot cockpit](docs/cockpit.png)
+
+*The cockpit (`cc-copilot cockpit`): a live agent-timeline above your chat, a
+safety verdict pill, and answers grounded in evidence — every `[L…]` is a real
+transcript line.*
+
 ```
 $ cc-copilot brief
 # 🛰  cc-copilot brief — wire up the SSH reconnect path
