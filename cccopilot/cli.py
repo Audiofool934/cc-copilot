@@ -80,10 +80,19 @@ def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
     path = locate.resolve(cwd, getattr(args, "session", None))
     if not path:
-        sys.stderr.write(
-            f"cc-copilot: no Claude Code session found for {cwd!r}\n"
-            f"  looked in: {locate.project_dir_for(cwd) or locate.projects_root()}\n"
-            f"  try: cc-copilot sessions --cwd <project-dir>\n")
+        cmd = getattr(args, "cmd", None) or "cockpit"
+        sys.stderr.write(f"cc-copilot: no agent session in {cwd!r} "
+                         f"(it watches another project's agent, not this dir).\n")
+        projs = locate.projects_with_sessions()
+        if projs:
+            sys.stderr.write("  recent sessions are in:\n")
+            for p, n, mt in projs[:6]:
+                sys.stderr.write(f"    {(p or '(unknown)'):<42} {n} session"
+                                 f"{'s' if n != 1 else ''} · {locate.ago(mt)} ago\n")
+            sys.stderr.write(f"  → cc-copilot {cmd} --cwd {projs[0][0] or '<project-dir>'}\n")
+        else:
+            sys.stderr.write(f"  looked in: {locate.project_dir_for(cwd) or locate.projects_root()}\n"
+                             f"  try: cc-copilot sessions --cwd <project-dir>\n")
         sys.exit(2)
     return path
 

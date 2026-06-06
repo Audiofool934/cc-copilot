@@ -11,8 +11,10 @@ authoritative cwd is recorded *inside* each transcript.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -59,14 +61,7 @@ def is_own_session(path: str) -> bool:
     return _OWN_SIG in head
 
 
-def list_sessions(cwd: str, include_own: bool = False) -> list:
-    """Return session transcripts for ``cwd``'s project, newest first.
-
-    cc-copilot's own narration sessions are hidden by default (``include_own``).
-    """
-    d = project_dir_for(cwd)
-    if d is None:
-        return []
+def _refs_in(d: str, include_own: bool = False) -> list:
     refs = []
     for name in os.listdir(d):
         if not name.endswith(".jsonl"):
@@ -82,6 +77,69 @@ def list_sessions(cwd: str, include_own: bool = False) -> list:
         ))
     refs.sort(key=lambda r: r.mtime, reverse=True)
     return refs if include_own else [r for r in refs if not r.own]
+
+
+def list_sessions(cwd: str, include_own: bool = False) -> list:
+    """Return session transcripts for ``cwd``'s project, newest first.
+
+    cc-copilot's own narration sessions are hidden by default (``include_own``).
+    """
+    d = project_dir_for(cwd)
+    return _refs_in(d, include_own) if d else []
+
+
+def read_cwd(path: str) -> Optional[str]:
+    """The authoritative project cwd recorded inside a transcript."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for _ in range(40):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(o, dict) and o.get("cwd"):
+                    return o["cwd"]
+    except OSError:
+        pass
+    return None
+
+
+def projects_with_sessions(limit: int = 8) -> list:
+    """Across all projects, the ones with real (non-own) sessions, newest first.
+    Returns [(cwd, count, mtime), …] — used to turn a 'no session here' error
+    into a launchpad."""
+    root = projects_root()
+    try:
+        buckets = os.listdir(root)
+    except OSError:
+        return []
+    out = []
+    for b in buckets:
+        d = os.path.join(root, b)
+        if not os.path.isdir(d):
+            continue
+        try:
+            refs = _refs_in(d)
+        except OSError:
+            continue
+        if not refs:
+            continue
+        cwd = read_cwd(refs[0].path) or ""
+        out.append((cwd, len(refs), refs[0].mtime))
+    out.sort(key=lambda x: -x[2])
+    return out[:limit]
+
+
+def ago(mtime: float) -> str:
+    s = max(0, time.time() - mtime)
+    if s < 3600:
+        return f"{int(s // 60)}m"
+    if s < 86400:
+        return f"{int(s // 3600)}h"
+    return f"{int(s // 86400)}d"
 
 
 def resolve(cwd: str, session: Optional[str] = None) -> Optional[str]:
