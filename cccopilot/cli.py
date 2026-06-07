@@ -20,7 +20,8 @@ import sys
 import time
 from dataclasses import asdict
 
-from . import __version__, locate, transcript as T, state as S, brief as B, scope as SC
+from . import (__version__, locate, transcript as T, state as S, brief as B,
+               scope as SC, observe as O)
 
 
 def _repo_root() -> str:
@@ -283,6 +284,19 @@ def cmd_check(args) -> int:
     return rc
 
 
+def cmd_observe(args) -> int:
+    path, tr, st = _load(args)
+    if args.path:
+        sys.stderr.write(f"# transcript: {path}\n")
+    try:
+        print(O.render(path, st, getattr(args, "scope", SC.SESSION),
+                       sessions=getattr(args, "scope_sessions", "")))
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    return 0
+
+
 def cmd_chat(args) -> int:
     from . import chat as C
     # Cockpit requested but Textual isn't in THIS interpreter → bootstrap the
@@ -456,6 +470,12 @@ def build_parser() -> argparse.ArgumentParser:
     session_args(sp)
     scope_arg(sp)
     sp.set_defaults(func=cmd_check)
+
+    sp = sub.add_parser("observe",
+                        help="attention queue + next human decision for the selected scope")
+    session_args(sp)
+    scope_arg(sp)
+    sp.set_defaults(func=cmd_observe)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
     common(sp)

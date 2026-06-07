@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 — 2026-06-07
+
+**Agent observability core**
+- Added `cc-copilot observe`, a deterministic, evidence-cited operator report
+  for the selected read scope.
+- The observer report renders a ranked **Now** board, **Attention Queue**,
+  **Next Human Decision**, and **Recent Evidence** without calling an LLM.
+- `observe` supports `session`, `multi-session`, and `project` scopes, including
+  `--scope-sessions` subsets and session-qualified citations like
+  `[b5c53c29:L244]`.
+- Project-scope observation includes a compact git glance with `[git:*]`
+  citations while preserving the read-only contract.
+
+**Cockpit attention surface**
+- Added `/observe` to the REPL and cockpit as an LLM-free command.
+- Added `/observe` to cockpit slash autocomplete and the command palette.
+- The cockpit activity strip now shows a live attention line derived from the
+  observer core, so the UI names the smallest next human decision instead of
+  only listing recent transcript activity.
+
 ## 0.4.0 — 2026-06-07
 
 **Grounding scopes**

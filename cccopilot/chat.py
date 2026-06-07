@@ -18,13 +18,15 @@ import sys
 import threading
 
 from . import (transcript as T, state as S, brief as B, assess as A,
-               narrate as N, locate as LOC, store as ST, scope as SC)
+               narrate as N, locate as LOC, store as ST, scope as SC,
+               observe as O)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
 
 _HELP = """commands (all but questions are LLM-free):
   /brief            full evidence-cited recap
+  /observe          attention queue + next human decision
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
   /refresh          re-read the session now
@@ -187,6 +189,8 @@ class ChatSession:
             return _HELP
         if c == "/brief":
             return self.evidence().text
+        if c == "/observe":
+            return O.render(self.path, self.st, self.scope, sessions=self.scope_sessions)
         if c == "/check":
             return B.render_check(self.st) if self.scope == SC.SESSION else self.evidence().text
         if c == "/refresh":

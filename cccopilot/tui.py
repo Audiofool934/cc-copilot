@@ -45,7 +45,8 @@ except ImportError:
         "(or: pip install 'cc-copilot[tui]')")
 
 from . import (transcript as T, state as S, assess as A, narrate as N,
-               backends as BK, store as ST, scope as SC, locate as LOC)
+               backends as BK, store as ST, scope as SC, locate as LOC,
+               observe as O)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -75,7 +76,8 @@ _TIMELINE_TITLE = "session activity"
 _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
     "type `/` for command suggestions (Tab completes; also the palette, Ctrl+P):\n"
-    "  /brief /check /diff     recap · safety · changes (LLM-free)\n"
+    "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
+    "  /diff                   changes since last turn\n"
     "  /sessions               switch which session you observe   (Ctrl+S)\n"
     "  /history                browse & restore past conversations (Ctrl+H)\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
@@ -85,6 +87,7 @@ _HELP_TEXT = (
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
+    ("/observe", "attention queue + next human decision", False),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
@@ -353,6 +356,14 @@ def _timeline_delta_line(st, d):
     if d.verdict_from != d.verdict_to:
         t.append(f" · safety {d.verdict_from or 'empty'} → {d.verdict_to}",
                  style=_VERDICT_HEX.get(d.verdict_to, _PAL["muted"]))
+    return t
+
+
+def _observer_timeline_line(level: str, text: str) -> Text:
+    style = {"alarm": _PAL["error"], "warn": _PAL["warning"],
+             "info": _PAL["secondary"], "clear": _PAL["success"]}.get(level, _PAL["text"])
+    t = Text("attention · ", style=_PAL["muted"])
+    t.append(text, style=style)
     return t
 
 
@@ -785,6 +796,8 @@ class Cockpit(App):
     # ---- command palette ----
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
+        yield SystemCommand("Observe", "Attention queue + next human decision",
+                            self.action_observe)
         yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
         yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
@@ -820,6 +833,11 @@ class Cockpit(App):
             tl.mount(Static(title, id="timeline-title"))
         for child in list(tl.query(".timeline-row")):
             child.remove()
+        for level, line in O.timeline_lines(
+                self.session.path, self.session.st, self.session.scope,
+                sessions=self.session.scope_sessions, limit=2):
+            self._timeline(_observer_timeline_line(level, line),
+                           "role-alert" if level in ("alarm", "warn") else "role-event")
         if self.session.scope == SC.SESSION:
             self._timeline(_timeline_status_line(self.session.st))
             for line in _recent_activity_lines(self.session.st):
@@ -1087,6 +1105,8 @@ class Cockpit(App):
             self.exit(); return
         if low in ("/help", "/?"):
             self._collapsible("/help", _HELP_TEXT); return
+        if low == "/observe":
+            self.action_observe(); return
         if low == "/brief":
             self.action_brief(); return
         if low == "/check":
@@ -1165,6 +1185,19 @@ class Cockpit(App):
         self._collapsible(f"/brief — {self.session.scope_label()}",
                           self.session.evidence().text)
         self._update_status()
+
+    def action_observe(self):
+        self.session.refresh()
+        if self._no_live():
+            return
+        try:
+            body = O.render(self.session.path, self.session.st, self.session.scope,
+                            sessions=self.session.scope_sessions)
+        except ValueError as e:
+            self.notify(str(e), severity="warning")
+            return
+        self._collapsible(f"/observe — {self.session.scope_label()}", body)
+        self._refresh_scope_view()
 
     def action_check(self):
         self.session.refresh()

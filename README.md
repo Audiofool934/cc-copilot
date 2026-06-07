@@ -8,8 +8,8 @@ what to look at, without scrolling the transcript.
 ![cc-copilot cockpit](docs/cockpit.png)
 
 *The cockpit (`cc-copilot cockpit`): a scope-aware status header, scoped activity
-above your chat, a safety verdict pill, and answers grounded in evidence — every
-`[L…]` is a real transcript line.*
+above your chat, an attention line with the next human decision, a safety verdict
+pill, and answers grounded in evidence — every `[L…]` is a real transcript line.*
 
 ```
 $ cc-copilot brief
@@ -64,9 +64,8 @@ actually want when you walk back to a running agent:
 
 The open gap — and what cc-copilot aims at — is the **interpretation layer** on
 top of the (now-commoditized) transcript data: a recap + a *"is it safe to
-continue / did it go off track"* judgment + an observer you can interrogate,
-delivered **read-only** and **agent-agnostic**. This MVP is the first leg:
-a deterministic, evidence-cited recap.
+continue / did it go off track"* judgment + an attention queue + an observer you
+can interrogate, delivered **read-only** and **agent-agnostic**.
 
 ## The one rule: faithfulness
 
@@ -98,6 +97,8 @@ cc-copilot chat                     # the same, as a plain zero-dep REPL (chat -
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
 cc-copilot history                  # saved copilot conversations (--all = every project)
+cc-copilot observe                  # attention queue + next human decision
+cc-copilot observe --scope project  # same observer surface across wider scopes
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
 cc-copilot brief --scope multi      # aggregate every work session in this project
 cc-copilot brief --scope multi --scope-sessions a1b2c3d4,b5c53c29
@@ -157,6 +158,29 @@ session; a finished session with past friction is **REVIEW**, never intervene.
 The exit code makes it scriptable — wire `cc-copilot check` into a `Stop` hook to
 get pinged only when an agent actually needs you. It's heuristic by design:
 cc-copilot flags friction; you make the call.
+
+## Agent observation — leg ③ (`cc-copilot observe`)
+
+`observe` is the v0.5 cockpit brain: a deterministic, evidence-cited answer to
+"where should my attention go right now?"
+
+```bash
+cc-copilot observe
+cc-copilot observe --scope multi
+cc-copilot observe --scope project --scope-sessions a1b2c3d4,b5c53c29
+```
+
+It renders four operator surfaces without calling an LLM:
+
+- **Now** — a ranked session board for the selected scope.
+- **Attention Queue** — sessions needing intervention, review, or patience.
+- **Next Human Decision** — the smallest action the human should take next.
+- **Recent Evidence** — the failures, changed files, and transcript tail that
+  justify the recommendation.
+
+Single-session citations stay `[L123]`; multi-session and project scopes use
+`[session:L123]`. Project scope also includes a small git glance with `[git:*]`
+citations. The cockpit activity strip shows the same observer line live.
 
 ## Multiple sessions
 
@@ -232,7 +256,7 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 # (= cc-copilot chat --tui)
 ```
 
-In-cockpit: `Enter` send · `/help` · `/scope` (Ctrl+O) · `/brief` `/check` `/diff` (LLM-free) ·
+In-cockpit: `Enter` send · `/help` · `/scope` (Ctrl+O) · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
 `/sessions` `/use <n|id>` · `/history` (Ctrl+H) · `/model <name>` · `Ctrl+R` refresh ·
 `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
 — the faithfulness guarantee holds in the TUI exactly as in the CLI.
@@ -288,7 +312,7 @@ you> is it safe to let it keep going?
 - **Read-only observer of the agent** — it opens the observed transcript for
   reading only; your separate copilot Q&A is persisted under cc-copilot's state
   dir unless disabled. It cannot touch the agent it watches.
-- **LLM-free escape hatches** — `/brief`, `/check`, `/diff`, `/refresh`,
+- **LLM-free escape hatches** — `/observe`, `/brief`, `/check`, `/diff`, `/refresh`,
   `/session`, `/history` work without a backend, and let you verify any prose
   answer against cited evidence in the same window.
 
@@ -296,7 +320,7 @@ Grounding is identical to `ask`: the chat LLM sees only the cited brief, and
 prior turns are replayed as *already-grounded* answers — never as new facts — so
 a long conversation can't launder an un-cited claim into a later reply.
 
-## Observer chat — leg ③ (`cc-copilot ask`, `brief --narrate`)
+## Observer chat — leg ④ (`cc-copilot ask`, `brief --narrate`)
 
 The conversational layer — *grounded* so it can't become a second hallucinating
 agent. The LLM never sees the raw transcript; it sees the **deterministic,
@@ -318,9 +342,9 @@ The model is pluggable — see **Models / backends** below.
 
 ## Models / backends
 
-The deterministic core (`brief`, `check`, the chat's live refresh + alerts) uses
-**no model at all**. Only the language features (`ask`, `chat`, `--narrate`)
-call an LLM, and the backend is your choice:
+The deterministic core (`brief`, `check`, `observe`, the chat's live refresh +
+alerts) uses **no model at all**. Only the language features (`ask`, `chat`,
+`--narrate`) call an LLM, and the backend is your choice:
 
 ```bash
 cc-copilot backends                       # list backends + availability
@@ -380,9 +404,10 @@ state.py        fold records into a deterministic working-state model — plan,
                 changed files (failed edits excluded), commands, errors, status —
                 each fact carrying its evidence line(s)
 brief.py        render the evidence-cited recap
+observe.py      rank attention and render the next-human-decision report
 scope.py        render session / multi-session / project evidence scopes
 locate.py       map cwd ⇄ ~/.claude/projects session files
-cli.py          sessions / brief / state / watch
+cli.py          sessions / observe / brief / state / watch
 ```
 
 The data plane (parse JSONL + hooks) is deliberately thin and replaceable —
@@ -421,15 +446,17 @@ Bugs found and fixed:
 
 ## Roadmap
 
-The differentiated product is the full trio:
+The differentiated product is the full stack:
 
 - **① recap** — ✅ evidence-cited "what it did while you were away" (`brief`)
 - **② judgment** — ✅ "is it safe to continue / did it go off track" (`check`:
   fail-streaks, edit-thrash, retry-loops, stalls, failing tests — recency-weighted)
-- **③ observer chat** — ✅ ask it "did it drift?", "draft the next instruction"
+- **③ attention cockpit** — ✅ "where should I look, and what is the smallest
+  next human decision?" (`observe`, plus the cockpit attention line)
+- **④ observer chat** — ✅ ask it "did it drift?", "draft the next instruction"
   (`ask` / `--narrate`) — an LLM layer *grounded in the cited state*
 
-The trio the [landscape](#landscape) said was the open gap is now built end to
+The stack the [landscape](#landscape) said was the open gap is now built end to
 end. Next: hook-driven push ("it stalled 10 min ago" — `check`'s exit code
 already supports this), a live `watch` + narrate loop, and other agents (Codex,
 Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
@@ -445,11 +472,12 @@ python3 -m unittest discover -s tests        # stdlib-only core tests
 cc-copilot setup                             # adds the optional TUI (.venv + textual)
 ```
 
-Layout: the core (`transcript` → `state` → `assess` → `brief`) is pure,
-deterministic, and dependency-free; `narrate`/`backends` add the optional LLM
-layer; `chat`/`tui` are the interactive surfaces; `cli` ties it together. Only
-`transcript.py` is Claude-Code-specific — everything downstream is agent-agnostic.
-Tests stay stdlib-only; Textual is an optional extra, lazy-imported by the cockpit.
+Layout: the core (`transcript` → `state` → `assess` → `brief`/`observe`) is
+pure, deterministic, and dependency-free; `narrate`/`backends` add the optional
+LLM layer; `chat`/`tui` are the interactive surfaces; `cli` ties it together.
+Only `transcript.py` is Claude-Code-specific — everything downstream is
+agent-agnostic. Tests stay stdlib-only; Textual is an optional extra,
+lazy-imported by the cockpit.
 
 ## <a name="landscape"></a>Landscape (mid-2026)
 
