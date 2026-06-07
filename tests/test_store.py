@@ -181,6 +181,13 @@ class TestPermsAndOptOut(_Base):
         self.assertFalse(os.path.exists(s.turns_path))
         self.assertEqual(s.load_history(), [])
 
+    def test_disabled_store_does_not_read_existing(self):
+        # opt-out must NOT replay prior saved plaintext (privacy guarantee)
+        ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr()).record_turn(
+            "secret q", "secret a", st=_St(_Tr()))
+        self.assertEqual(
+            ST.Store.open_for("/x/sess-uuid.jsonl", enabled=False).load_history(), [])
+
     def test_keying_precedence(self):
         self.assertEqual(ST.conv_id_for("/x/the-uuid.jsonl"), "the-uuid")
         self.assertEqual(ST.conv_id_for("/x/the-uuid.jsonl", _Tr(sid="real-sid")), "real-sid")

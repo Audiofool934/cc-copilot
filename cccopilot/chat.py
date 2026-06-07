@@ -181,9 +181,11 @@ class ChatSession:
             return self._switch(cmd.strip()[4:].strip())
         if c == "/history" or c.startswith("/history "):
             arg = c[8:].strip()
-            if arg in ("all", "*"):
-                return _fmt_conv_list(ST.list_conversations(None), "all projects")
-            if arg in ("this", "project"):
+            if arg in ("all", "*", "this", "project"):
+                if not self.store.enabled:
+                    return "(history is off — --no-persist or [history] enabled=false)"
+                if arg in ("all", "*"):
+                    return _fmt_conv_list(ST.list_conversations(None), "all projects")
                 cwd = self.cwd or os.getcwd()
                 return _fmt_conv_list(ST.list_conversations(cwd), cwd)
             if not self.history:

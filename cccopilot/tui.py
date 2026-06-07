@@ -345,27 +345,35 @@ class Cockpit(App):
         self.session.refresh()
         self._busy = True
         self._update_status()
-        self._answer(text, self.session.st, list(self.session.history))
+        # Capture the originating conversation (store + state). If the user
+        # switches sessions before the backend returns, the answer is recorded
+        # against the session it was ASKED in — not whatever is current now.
+        self._answer(text, self.session.st, list(self.session.history),
+                     self.session.store)
 
     @work(thread=True)
-    def _answer(self, text, st, history):
+    def _answer(self, text, st, history, store):
         try:
             ans, ok = N.chat(st, history, text, model=self.model, backend=self.backend), True
         except Exception as e:
             ans, ok = f"# error: {e}", False
-        self.call_from_thread(self._answer_done, text, ans, ok)
+        self.call_from_thread(self._answer_done, text, ans, ok, st, store)
 
-    def _answer_done(self, text, ans, ok):
+    def _answer_done(self, text, ans, ok, st, store):
         self._busy = False
+        same = store is self.session.store     # still on the originating conversation?
         if ok:
-            self.session.history.append(("user", text))
-            self.session.history.append(("assistant", ans))
-            self._chat(Markdown(ans, classes="role-assistant"))
             # the cockpit's single durable write-site (the REPL has its own in
             # ChatSession.answer); _answer runs on a worker thread, hence here.
-            self.session.store.record_turn(text, ans, st=self.session.st,
-                                            backend=self.backend, model=self.model)
-        else:
+            # Persist to the originating store, even if the user has switched away.
+            store.record_turn(text, ans, st=st, backend=self.backend, model=self.model)
+            if same:
+                self.session.history.append(("user", text))
+                self.session.history.append(("assistant", ans))
+                self._chat(Markdown(ans, classes="role-assistant"))
+            # if switched away: the turn is safe on disk and reappears on return,
+            # so we don't render it into the now-current (different) conversation.
+        elif same:
             self._chat(self._role(Text(ans, style=_PAL["error"]), "role-alert"))
         self._update_status()
 
@@ -505,6 +513,10 @@ class Cockpit(App):
 
     @work
     async def action_history(self):
+        if not self.session.store.enabled:
+            self.notify("history is off (--no-persist or [history] enabled=false)",
+                        severity="warning")
+            return
         headers = ST.list_conversations(getattr(self.session, "cwd", None) or None)
         if not headers:
             self.notify("no saved copilot conversations yet"); return

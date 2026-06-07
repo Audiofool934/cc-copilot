@@ -160,12 +160,32 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             md = chat.query(Markdown)
             self.assertEqual(len(md), 1)
 
+    async def test_in_flight_answer_records_to_origin_after_switch(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin_store = app.session.store          # A's store, captured at "submit"
+            origin_st = app.session.st
+            b = write([user("task", 100, sessionId="sess-B"), asst("ok", 5)])
+            app.session.switch_path(b)                # user switches mid-flight
+            app._rebuild_chat()
+            await pilot.pause()
+            # the answer for A returns AFTER the switch
+            app._answer_done("q-for-A", "answer-A [L1]", True, origin_st, origin_store)
+            await pilot.pause()
+        self.assertEqual(origin_store.load_history(),
+                         [("user", "q-for-A"), ("assistant", "answer-A [L1]")])
+        self.assertEqual(app.session.store.load_history(), [])   # B uncontaminated
+        self.assertEqual(app.session.history, [])                # B in-memory clean
+
     async def test_answer_done_records_once(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app._answer_done("q-one", "the answer [L2]", True)
+            app._answer_done("q-one", "the answer [L2]", True,
+                             app.session.st, app.session.store)
             await pilot.pause()
         import json
         with open(sess.store.turns_path, encoding="utf-8") as fh:

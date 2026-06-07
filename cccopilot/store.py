@@ -280,7 +280,11 @@ class Store:
 
     # ---- read (no lock; tolerant) ----
     def load_history(self) -> list:
-        """Return [(role, text), …] — two entries per stored turn."""
+        """Return [(role, text), …] — two entries per stored turn. Honors the
+        opt-out: a disabled store reads nothing back (in-memory only, no replay
+        of prior plaintext into prompts)."""
+        if not self.enabled:
+            return []
         out = []
         try:
             with open(self.turns_path, "r", encoding="utf-8", errors="replace") as fh:

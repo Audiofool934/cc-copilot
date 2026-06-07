@@ -116,6 +116,15 @@ class TestRestore(_StateHome):
         self.assertFalse(os.path.exists(s.store.turns_path))
         self.assertEqual(C.ChatSession(a, alerts=False, persist=False).history, [])
 
+    def test_opt_out_does_not_restore_prior_history(self):
+        # prior session saved history; a later --no-persist session must NOT
+        # read it back (Codex P1: privacy/in-memory-only must be honored)
+        a = _tx("sess-A")
+        C.ChatSession(a, alerts=False).answer("prior secret")   # persisted
+        s = C.ChatSession(a, alerts=False, persist=False)
+        self.assertEqual(s.history, [])
+        self.assertIn("history is off", s.meta("/history all"))
+
 
 class TestConfigToggle(unittest.TestCase):
     def setUp(self):
