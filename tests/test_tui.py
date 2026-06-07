@@ -191,6 +191,7 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             ol = picker.query_one("#picker-list", OptionList)
             self.assertEqual(ol.highlighted, 0)
+            self.assertIn("[ ] Alpha", str(ol.get_option_at_index(0).prompt))
 
             await pilot.press("down", "space", "enter")
             await pilot.pause()
@@ -227,13 +228,20 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         for label in ("Ctrl+S", "Ctrl+O", "Ctrl+H"):
             self.assertNotIn(label, tui._HELP_TEXT)
         self.assertNotIn("/history", [name for name, *_ in tui._SLASH_CMDS])
+        self.assertNotIn("/scope", [name for name, *_ in tui._SLASH_CMDS])
 
-    async def test_evidence_range_picker_does_not_offer_project_mode(self):
-        sess = types.SimpleNamespace(scope=tui.SC.SESSION, scope_sessions=[])
-        labels = [label for label, _ in tui._evidence_range_options(sess)]
-        self.assertEqual(labels, ["one session  ✓", "multi-session · all",
-                                  "multi-session · select sessions"])
-        self.assertFalse(any("project" in label for label in labels))
+    async def test_session_selection_initializes_from_current_evidence(self):
+        refs = [
+            types.SimpleNamespace(session_id="a", path="/tmp/a.jsonl"),
+            types.SimpleNamespace(session_id="b", path="/tmp/b.jsonl"),
+        ]
+        sess = types.SimpleNamespace(scope=tui.SC.SESSION, scope_sessions=[],
+                                     path="/tmp/b.jsonl")
+        self.assertEqual(tui._session_selection_ids(sess, refs), ["b"])
+        sess.scope = tui.SC.MULTI
+        self.assertEqual(tui._session_selection_ids(sess, refs), ["a", "b"])
+        sess.scope_sessions = ["a"]
+        self.assertEqual(tui._session_selection_ids(sess, refs), ["a"])
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
@@ -356,8 +364,19 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._slash_complete()                       # Tab completes
             self.assertEqual(comp.text, "/brief")
             self.assertFalse(app._slash_open)
+            comp.text = "/br"; app._slash_update()
+            await pilot.press("enter")                  # Enter accepts + runs
+            await pilot.pause()
+            self.assertEqual(comp.text, "")
+            self.assertFalse(app._slash_open)
             comp.text = "/mod"; app._slash_update(); app._slash_complete()
             self.assertEqual(comp.text, "/model ")      # arg command keeps a space
+            comp.text = "/mod"; app._slash_update()
+            await pilot.press("enter")                  # arg command inserts
+            await pilot.pause()
+            self.assertEqual(comp.text, "/model ")
+            comp.text = "/sc"; app._slash_update()
+            self.assertFalse(app._slash_open)           # /scope is hidden in TUI
             comp.text = "hello"; app._slash_update()
             self.assertFalse(app._slash_open)           # non-slash text hides it
 
@@ -392,6 +411,26 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                           str(app.query_one("#status-header", Static).content))
             rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
             self.assertIn("multi-session activity", "\n".join(rows))
+
+    async def test_sessions_selection_sets_single_or_multi_evidence(self):
+        sess = self._session("sess-A")
+        write([user("task b", 100, sessionId="sess-B"), asst("ok", 5)], dir=self.home)
+        write([user("task c", 100, sessionId="sess-C"), asst("ok", 5)], dir=self.home)
+        refs = sess.sibling_refs()
+        ids = [r.session_id for r in refs]
+        current = os.path.basename(sess.path)[:-6]
+        other = next(sid for sid in ids if sid != current)
+
+        msg = tui._apply_session_selection(sess, refs, [current, other])
+        self.assertEqual(sess.scope, tui.SC.MULTI)
+        self.assertEqual(sess.scope_sessions, [current, other])
+        self.assertIn("2 selected", msg)
+
+        msg = tui._apply_session_selection(sess, refs, [other])
+        self.assertEqual(sess.scope, tui.SC.SESSION)
+        self.assertEqual(sess.scope_sessions, [])
+        self.assertEqual(os.path.basename(sess.path)[:-6], other)
+        self.assertIn(other[:8], msg)
 
     async def test_forget_deletes_saved_history(self):
         sess = self._session("sess-A")

@@ -250,10 +250,9 @@ cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
 cc-copilot cockpit --scope project --scope-sessions 1,3
 ```
 
-In the REPL/TUI, `/scope multi a1b2c3d4 b5c53c29` selects a subset, `/scope all`
-clears it back to every work session. In the TUI, `/scope` opens the
-evidence-range picker; the visible picker offers one-session or multi-session
-evidence because project context is always on.
+In the REPL, `/scope multi a1b2c3d4 b5c53c29` selects a subset and `/scope all`
+clears it back to every work session. In the TUI, use `/sessions`: the checkbox
+picker can select one or many evidence sessions, while project context stays on.
 
 ## Cockpit TUI — `cc-copilot cockpit`
 
@@ -273,7 +272,7 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 # (= cc-copilot chat --tui)
 ```
 
-In-cockpit: `Enter` send · `/help` · `/scope` · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
+In-cockpit: `Enter` send · `/help` · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
 `/sessions` `/use <n|id>` · `/resume` · `/new` · `/model <name>` · `Ctrl+R` refresh ·
 `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
 — the faithfulness guarantee holds in the TUI exactly as in the CLI.
@@ -318,10 +317,11 @@ you> is it safe to let it keep going?
 - **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
   lag the observed session; cockpit header/activity surfaces also refresh on the
   poll interval.
-- **Explicit evidence range** — `/scope session|multi` changes which agent
-  sessions questions are grounded in while project context stays on and the
-  backend remains read-only. `project` remains a compatibility scope alias for
-  CLI/scripted use.
+- **Explicit evidence sessions** — `/sessions` opens a checkbox picker. One
+  checked session grounds questions in that session; multiple checked sessions
+  ground questions in selected multi-session evidence. Project context stays on
+  and the backend remains read-only. `/scope` remains available for CLI/scripted
+  compatibility.
 - **Multi-turn** — it remembers the conversation; follow-ups resolve against both
   the prior answers and the just-refreshed state.
 - **Push alerts** — a background thread pings you inline when the agent stalls /

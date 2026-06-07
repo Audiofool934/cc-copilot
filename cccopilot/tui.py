@@ -75,10 +75,10 @@ _TIMELINE_TITLE = "session activity"
 
 _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
-    "type `/` for command suggestions (Tab completes; also the palette, Ctrl+P):\n"
+    "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /diff                   changes since last turn\n"
-    "  /sessions               choose agent evidence\n"
+    "  /sessions               choose evidence sessions\n"
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
@@ -92,10 +92,9 @@ _SLASH_CMDS = [
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
-    ("/sessions", "choose agent sessions used as evidence", False),
+    ("/sessions", "choose one or more evidence sessions", False),
     ("/resume", "browse & resume cockpit sessions", False),
     ("/new", "start a new independent cockpit session", False),
-    ("/scope", "switch evidence range", True),
     ("/model", "switch the LLM backend", True),
     ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
@@ -112,6 +111,43 @@ def _session_picker_label(ref, current_path: str = "") -> str:
     title = ref.title or "(untitled)"
     cur = " (current)" if current_path and os.path.abspath(ref.path) == os.path.abspath(current_path) else ""
     return f"{title[:44]:<44} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}"
+
+
+def _session_selection_ids(session, refs: list) -> list:
+    ids = {r.session_id for r in refs}
+    if getattr(session, "scope", SC.SESSION) in (SC.MULTI, SC.PROJECT):
+        selected = [sid for sid in getattr(session, "scope_sessions", []) if sid in ids]
+        return selected or [r.session_id for r in refs]
+    current = os.path.basename(getattr(session, "path", "") or "")[:-6]
+    return [current] if current in ids else []
+
+
+def _apply_session_selection(session, refs: list, selected_ids: list) -> str:
+    refs_by_id = {r.session_id: r for r in refs}
+    chosen = [sid for sid in selected_ids if sid in refs_by_id]
+    if not chosen:
+        raise ValueError("select at least one evidence session")
+
+    anchor_id = os.path.basename(getattr(session, "path", "") or "")[:-6]
+    if anchor_id not in chosen:
+        session.switch_path(refs_by_id[chosen[0]].path)
+        anchor_id = chosen[0]
+
+    if len(chosen) == 1:
+        sid = chosen[0]
+        if sid != anchor_id:
+            session.switch_path(refs_by_id[sid].path)
+        session.scope = SC.SESSION
+        session.scope_sessions = []
+        msg = f"evidence → {sid[:8]}"
+    else:
+        session.scope = SC.MULTI
+        session.scope_sessions = [] if len(chosen) == len(refs) else chosen
+        msg = (f"evidence → all {len(refs)} sessions"
+               if not session.scope_sessions
+               else f"evidence → {len(chosen)} selected sessions")
+    session._persist_state()
+    return msg
 
 
 def _busy_indicator(frame: int) -> str:
@@ -299,19 +335,6 @@ def _selection_label(session, snap: dict) -> str:
     return f"all {total}"
 
 
-def _evidence_range_options(session) -> list:
-    session_mark = "  ✓" if getattr(session, "scope", SC.SESSION) == SC.SESSION else ""
-    multi_all_mark = ("  ✓" if getattr(session, "scope", SC.SESSION) == SC.MULTI
-                      and not getattr(session, "scope_sessions", None) else "")
-    multi_subset_mark = ("  ✓" if getattr(session, "scope", SC.SESSION) == SC.MULTI
-                         and getattr(session, "scope_sessions", None) else "")
-    return [
-        (f"one session{session_mark}", ("scope", SC.SESSION, [])),
-        (f"multi-session · all{multi_all_mark}", ("scope", SC.MULTI, [])),
-        (f"multi-session · select sessions{multi_subset_mark}", ("pick", SC.MULTI, None)),
-    ]
-
-
 def _scope_activity_title(session, snap=None) -> str:
     snap = snap or _scope_snapshot(session)
     if getattr(session, "scope", SC.SESSION) == SC.SESSION:
@@ -404,6 +427,8 @@ class Composer(TextArea):
                 event.prevent_default(); event.stop(); app._slash_move(-1); return
             if event.key == "tab":
                 event.prevent_default(); event.stop(); app._slash_complete(); return
+            if event.key == "enter":
+                event.prevent_default(); event.stop(); app._slash_accept(); return
             if event.key == "escape":
                 event.prevent_default(); event.stop(); app._slash_hide(); return
         # Esc on an empty composer rewinds the conversation (Codex-style): fork
@@ -608,6 +633,9 @@ class MultiPicker(ModalScreen):
         self._render_options()
         self._highlight(keep)
 
+    def _selected_values(self) -> list:
+        return [value for _label, value in self._options if value in self._selected]
+
     async def _on_key(self, event: events.Key) -> None:
         if event.key in ("down", "ctrl+n"):
             event.prevent_default(); event.stop(); self._move(1); return
@@ -617,7 +645,7 @@ class MultiPicker(ModalScreen):
             event.prevent_default(); event.stop(); self._toggle(); return
         if event.key == "enter":
             event.prevent_default(); event.stop()
-            self.dismiss(list(self._selected))
+            self.dismiss(self._selected_values())
             return
 
     @on(Input.Changed, "#picker-filter")
@@ -822,6 +850,20 @@ class Cockpit(App):
         if ol.option_count:
             self._slash_apply(ol.get_option_at_index(ol.highlighted or 0).id)
 
+    def _slash_accept(self) -> None:
+        ol = self.query_one("#slash", OptionList)
+        if not ol.option_count:
+            return
+        cmd = ol.get_option_at_index(ol.highlighted or 0).id
+        if cmd in _ARG_CMDS:
+            self._slash_apply(cmd)
+            return
+        comp = self.query_one("#composer", Composer)
+        comp.text = ""
+        self._slash_hide()
+        comp.focus()
+        self._meta(cmd)
+
     @on(OptionList.OptionSelected, "#slash")
     def _slash_pick(self, event) -> None:
         self._slash_apply(event.option.id)
@@ -834,11 +876,9 @@ class Cockpit(App):
         yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
         yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
-        yield SystemCommand("Evidence", "Choose agent sessions used as evidence",
+        yield SystemCommand("Evidence", "Choose one or more agent sessions",
                             self.action_sessions)
         yield SystemCommand("Resume", "Browse resumable cockpit sessions", self.action_history)
-        yield SystemCommand("Evidence Range", "Choose one or multi-session evidence",
-                            self.action_scope)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
@@ -1163,7 +1203,7 @@ class Cockpit(App):
                 self.notify(str(out).splitlines()[0])
                 self._refresh_scope_view()
             else:
-                self.action_scope()
+                self.action_sessions()
             return
         if low == "/model" or low.startswith("/model "):
             arg = cmd.strip()[6:].strip()
@@ -1254,44 +1294,23 @@ class Cockpit(App):
                           self._diff_renderable(S.diff(self.session.prev, self.session.st)))
 
     @work
-    async def action_scope(self):
-        chosen = await self.push_screen_wait(
-            Picker("choose agent evidence range", _evidence_range_options(self.session)))
-        if chosen:
-            mode, name, selectors = chosen
-            if mode == "pick":
-                selectors = await self._pick_scope_sessions(name)
-                if selectors is None:
-                    return
-            self.session.scope = SC.normalize(name)
-            self.session.scope_sessions = selectors or []
-            self._refresh_scope_view()
-            self.notify(f"evidence → {self.session.scope_label()}", severity="information")
-
-    async def _pick_scope_sessions(self, scope_name: str):
+    async def action_sessions(self):
         refs = self.session.sibling_refs()
         opts = [(_session_picker_label(r, self.session.path), r.session_id) for r in refs]
-        selected = await self.push_screen_wait(
-            MultiPicker("select evidence sessions", opts,
-                        selected=self.session.scope_sessions))
-        return selected
-
-    @work
-    async def action_sessions(self):
-        opts = []
-        for r in self.session.sibling_refs():
-            opts.append((_session_picker_label(r, self.session.path), r.path))
+        selected = _session_selection_ids(self.session, refs)
         chosen = await self.push_screen_wait(
-            Picker("choose one agent session as evidence", opts))
-        if chosen:
-            self.session.switch_path(chosen)
-            self.session.scope = SC.SESSION
-            self.session.scope_sessions = []
-            self.session._persist_state()
-            self._reset_watch_baseline()
-            self.sub_title = os.path.basename(chosen)[:-6][:8]
-            self._refresh_scope_view()
-            self.notify(f"evidence → {os.path.basename(chosen)[:8]}")
+            MultiPicker("choose evidence sessions", opts, selected=selected))
+        if chosen is None:
+            return
+        try:
+            msg = _apply_session_selection(self.session, refs, chosen)
+        except ValueError as e:
+            self.notify(str(e), severity="warning")
+            return
+        self._reset_watch_baseline()
+        self.sub_title = (os.path.basename(self.session.path or "")[:-6] or "cockpit")[:8]
+        self._refresh_scope_view()
+        self.notify(msg, severity="information")
 
     @work
     async def action_history(self):
