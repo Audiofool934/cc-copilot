@@ -3,8 +3,11 @@
 ## Unreleased
 
 **Cockpit keyboard cleanup**
-- Deprecated `Ctrl+S` for evidence-session selection. Use `/sessions` or the
-  command palette instead.
+- Deprecated `Ctrl+S`, `Ctrl+O`, and `Ctrl+H` cockpit shortcuts. Use slash
+  commands or the command palette instead.
+- The TUI evidence-range picker now offers one-session or multi-session
+  evidence only; project context is always on rather than a separate picker
+  mode.
 
 ## 0.6.0 — 2026-06-07
 

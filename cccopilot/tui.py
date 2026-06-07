@@ -79,7 +79,7 @@ _HELP_TEXT = (
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /diff                   changes since last turn\n"
     "  /sessions               choose agent evidence\n"
-    "  /resume                 resume a cockpit session           (Ctrl+H)\n"
+    "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
@@ -94,7 +94,6 @@ _SLASH_CMDS = [
     ("/diff", "what changed since your last turn", False),
     ("/sessions", "choose agent sessions used as evidence", False),
     ("/resume", "browse & resume cockpit sessions", False),
-    ("/history", "alias for /resume", False),
     ("/new", "start a new independent cockpit session", False),
     ("/scope", "switch evidence range", True),
     ("/model", "switch the LLM backend", True),
@@ -298,6 +297,19 @@ def _selection_label(session, snap: dict) -> str:
     if getattr(session, "scope_sessions", None):
         return f"{selected} selected of {total}"
     return f"all {total}"
+
+
+def _evidence_range_options(session) -> list:
+    session_mark = "  ✓" if getattr(session, "scope", SC.SESSION) == SC.SESSION else ""
+    multi_all_mark = ("  ✓" if getattr(session, "scope", SC.SESSION) == SC.MULTI
+                      and not getattr(session, "scope_sessions", None) else "")
+    multi_subset_mark = ("  ✓" if getattr(session, "scope", SC.SESSION) == SC.MULTI
+                         and getattr(session, "scope_sessions", None) else "")
+    return [
+        (f"one session{session_mark}", ("scope", SC.SESSION, [])),
+        (f"multi-session · all{multi_all_mark}", ("scope", SC.MULTI, [])),
+        (f"multi-session · select sessions{multi_subset_mark}", ("pick", SC.MULTI, None)),
+    ]
 
 
 def _scope_activity_title(session, snap=None) -> str:
@@ -674,9 +686,7 @@ class Cockpit(App):
         Binding("ctrl+c", "quit", "quit"),
         Binding("ctrl+r", "refresh_now", "refresh"),
         Binding("ctrl+l", "clear_chat", "clear view"),
-        Binding("ctrl+o", "scope", "scope"),
         Binding("ctrl+t", "model", "model"),
-        Binding("ctrl+h", "history", "history"),
     ]
 
     def __init__(self, session, poll=2, alerts=True):
@@ -827,7 +837,8 @@ class Cockpit(App):
         yield SystemCommand("Evidence", "Choose agent sessions used as evidence",
                             self.action_sessions)
         yield SystemCommand("Resume", "Browse resumable cockpit sessions", self.action_history)
-        yield SystemCommand("Target", "Switch evidence range", self.action_scope)
+        yield SystemCommand("Evidence Range", "Choose one or multi-session evidence",
+                            self.action_scope)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
@@ -1244,14 +1255,8 @@ class Cockpit(App):
 
     @work
     async def action_scope(self):
-        opts = [("session", ("scope", SC.SESSION, []))]
-        for name in (SC.MULTI, SC.PROJECT):
-            mark = "  ✓" if name == self.session.scope and not self.session.scope_sessions else ""
-            subset_mark = ("  ✓" if name == self.session.scope and self.session.scope_sessions
-                           else "")
-            opts.append((f"{name} · all{mark}", ("scope", name, [])))
-            opts.append((f"{name} · select sessions{subset_mark}", ("pick", name, None)))
-        chosen = await self.push_screen_wait(Picker("set grounding scope", opts))
+        chosen = await self.push_screen_wait(
+            Picker("choose agent evidence range", _evidence_range_options(self.session)))
         if chosen:
             mode, name, selectors = chosen
             if mode == "pick":
@@ -1261,14 +1266,14 @@ class Cockpit(App):
             self.session.scope = SC.normalize(name)
             self.session.scope_sessions = selectors or []
             self._refresh_scope_view()
-            self.notify(f"scope → {self.session.scope_label()}", severity="information")
+            self.notify(f"evidence → {self.session.scope_label()}", severity="information")
 
     async def _pick_scope_sessions(self, scope_name: str):
         refs = self.session.sibling_refs()
         opts = [(_session_picker_label(r, self.session.path), r.session_id) for r in refs]
         selected = await self.push_screen_wait(
-            MultiPicker(f"select sessions for {scope_name} scope",
-                        opts, selected=self.session.scope_sessions))
+            MultiPicker("select evidence sessions", opts,
+                        selected=self.session.scope_sessions))
         return selected
 
     @work

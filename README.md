@@ -218,8 +218,8 @@ needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 The cockpit's resumable unit is a **Cockpit Session**, not an agent transcript.
 It stores your Q&A, backend/model, current evidence range, selected evidence
 sessions, and project cwd. Changing evidence sessions no longer swaps to another
-chat history; it changes what this cockpit reads. `Ctrl+H` / `/resume` resumes
-an entire Cockpit Session. `/history` remains a backward-compatible alias.
+chat history; it changes what this cockpit reads. `/resume` resumes an entire
+Cockpit Session. `/history` remains a backward-compatible alias.
 
 ```bash
 cc-copilot resume          # list this project's cockpit sessions
@@ -251,8 +251,9 @@ cc-copilot cockpit --scope project --scope-sessions 1,3
 ```
 
 In the REPL/TUI, `/scope multi a1b2c3d4 b5c53c29` selects a subset, `/scope all`
-clears it back to every work session, and `Ctrl+O` opens the evidence-range
-picker.
+clears it back to every work session. In the TUI, `/scope` opens the
+evidence-range picker; the visible picker offers one-session or multi-session
+evidence because project context is always on.
 
 ## Cockpit TUI — `cc-copilot cockpit`
 
@@ -272,15 +273,15 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 # (= cc-copilot chat --tui)
 ```
 
-In-cockpit: `Enter` send · `/help` · `/scope` (Ctrl+O) · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
-`/sessions` `/use <n|id>` · `/resume` (Ctrl+H) · `/new` · `/model <name>` · `Ctrl+R` refresh ·
+In-cockpit: `Enter` send · `/help` · `/scope` · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
+`/sessions` `/use <n|id>` · `/resume` · `/new` · `/model <name>` · `Ctrl+R` refresh ·
 `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
 — the faithfulness guarantee holds in the TUI exactly as in the CLI.
 
 **Your Cockpit Sessions persist.** Each cockpit is saved locally with its Q&A and
 evidence selection, so changing evidence sessions does not wipe or swap the chat.
-`Ctrl+H` / `/resume` browses and re-opens whole Cockpit Sessions — even if the
-underlying transcript is gone (read-only view). It's stored under
+`/resume` browses and re-opens whole Cockpit Sessions — even if the underlying
+transcript is gone (read-only view). It's stored under
 `$CC_COPILOT_STATE_DIR` (default `~/.local/state/cc-copilot`, never under `~/.claude`),
 dirs `0700` / files `0600`; opt out with `--no-persist`, `[history] enabled = false`,
 or `CC_COPILOT_HISTORY=0`.
@@ -317,9 +318,10 @@ you> is it safe to let it keep going?
 - **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
   lag the observed session; cockpit header/activity surfaces also refresh on the
   poll interval.
-- **Explicit evidence range** — `/scope session|multi|project` changes which
-  agent sessions questions are grounded in while project context stays on and
-  the backend remains read-only.
+- **Explicit evidence range** — `/scope session|multi` changes which agent
+  sessions questions are grounded in while project context stays on and the
+  backend remains read-only. `project` remains a compatibility scope alias for
+  CLI/scripted use.
 - **Multi-turn** — it remembers the conversation; follow-ups resolve against both
   the prior answers and the just-refreshed state.
 - **Push alerts** — a background thread pings you inline when the agent stalls /

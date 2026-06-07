@@ -220,10 +220,20 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("awaiting-agent", line)
         self.assertIn("idle", line)
 
-    async def test_ctrl_s_is_not_advertised_or_bound(self):
+    async def test_deprecated_control_shortcuts_are_not_advertised_or_bound(self):
         keys = {binding.key for binding in tui.Cockpit.BINDINGS}
-        self.assertNotIn("ctrl+s", keys)
-        self.assertNotIn("Ctrl+S", tui._HELP_TEXT)
+        for key in ("ctrl+s", "ctrl+o", "ctrl+h"):
+            self.assertNotIn(key, keys)
+        for label in ("Ctrl+S", "Ctrl+O", "Ctrl+H"):
+            self.assertNotIn(label, tui._HELP_TEXT)
+        self.assertNotIn("/history", [name for name, *_ in tui._SLASH_CMDS])
+
+    async def test_evidence_range_picker_does_not_offer_project_mode(self):
+        sess = types.SimpleNamespace(scope=tui.SC.SESSION, scope_sessions=[])
+        labels = [label for label, _ in tui._evidence_range_options(sess)]
+        self.assertEqual(labels, ["one session  ✓", "multi-session · all",
+                                  "multi-session · select sessions"])
+        self.assertFalse(any("project" in label for label in labels))
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
