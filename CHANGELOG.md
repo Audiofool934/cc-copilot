@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 — 2026-06-07
 
 **Persistent copilot history** — your Q&A with the copilot now survives.
 - Each conversation is keyed to the observed Claude Code session and stored locally
@@ -27,7 +27,7 @@
 host locale (a `C`/`POSIX` locale no longer mangles a Chinese/emoji answer); non-ASCII tool
 args render natively in briefs. Test suite passes under `LC_ALL=C`.
 
-## 0.1.0 (unreleased)
+## 0.1.0 — 2026-06-07
 
 First public cut. A read-only "shadow-memory" sidecar for long-running coding
 agents (Claude Code, Codex, …) — faithful, evidence-cited.
