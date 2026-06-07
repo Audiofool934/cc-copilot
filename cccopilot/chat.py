@@ -29,19 +29,19 @@ _HELP = """commands (all but questions are LLM-free):
   /observe          attention queue + next human decision
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
-  /refresh          re-read the session now
-  /scope [name]     show or set grounding scope: session, multi-session, project
-  /session          which session is attached
-  /sessions         list other sessions in this project
-  /use <n|id>       switch to another session (restores its prior chat)
-  /history          this chat's turns
-  /history this     past copilot conversations in this project
-  /history all      past copilot conversations across every project
-  /forget           delete THIS conversation's saved history
+  /refresh          re-read evidence now
+  /scope [name]     show or set evidence range: session, multi-session, project
+  /session          current cockpit target
+  /sessions         list agent sessions available as evidence
+  /use <n|id>       change the current evidence session (keeps this cockpit chat)
+  /resume           resume another cockpit session
+  /new              start a new independent cockpit session
+  /history          alias for /resume; with no args shows this cockpit's turns
+  /forget           delete THIS cockpit session's saved resume state
   /rewind [n]       fork from an earlier message (list, or re-ask #n)
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
-anything else → a question answered grounded in the selected read-only scope."""
+anything else → a question answered grounded in the selected read-only evidence + project context."""
 
 
 def _dur(sec):
@@ -90,12 +90,12 @@ def _fmt_alert(d) -> str:
 
 
 def _fmt_conv_list(headers, scope="") -> str:
-    """One row per saved copilot conversation (newest first)."""
+    """One row per resumable cockpit session (newest first)."""
     if not headers:
         where = f" for {scope}" if scope else ""
-        return (f"(no saved copilot conversations{where})\n"
-                f"  history dir: {ST.state_home()}")
-    out = ["saved copilot conversations" + (f" — {scope}" if scope else "")
+        return (f"(no resumable cockpit sessions{where})\n"
+                f"  state dir: {ST.state_home()}")
+    out = ["resumable cockpit sessions" + (f" — {scope}" if scope else "")
            + f"  ({len(headers)}):"]
     for h in headers:
         gone = "  (transcript gone)" if not h.transcript_present else ""
@@ -107,11 +107,12 @@ def _fmt_conv_list(headers, scope="") -> str:
 
 class ChatSession:
     def __init__(self, path, model=None, backend=None, alerts=True, poll=2,
-                 persist=True, scope=SC.SESSION, scope_sessions=None):
+                 persist=True, scope=None, scope_sessions=None):
         self.path = path
         self.model = model
         self.backend = backend
-        self.scope = SC.normalize(scope)
+        requested_scope = SC.normalize(scope) if scope else None
+        self.scope = requested_scope or SC.SESSION
         self.scope_sessions = []
         self.poll = max(1, poll)
         self.history = []          # [(role, text)] — restored from the store in _attach
@@ -127,9 +128,12 @@ class ChatSession:
         self._alert_size = -1
         self._alert_state = None
         self._thread = None
-        self._attach(path)         # load state + restore prior copilot dialogue
+        self._attach(path, apply_store_state=(requested_scope is None))
+        if requested_scope is not None:
+            self.scope = requested_scope
         if scope_sessions:
             self.set_scope_sessions(scope_sessions)
+        self._persist_state()
 
     # ---- live state ------------------------------------------------------
     def refresh(self) -> bool:
@@ -165,7 +169,8 @@ class ChatSession:
 
     def evidence(self, st=None):
         return SC.render_evidence(self.path, self.st if st is None else st,
-                                  self.scope, sessions=self.scope_sessions)
+                                  self.scope, sessions=self.scope_sessions,
+                                  project_context=True)
 
     def answer(self, q: str) -> str:
         self.refresh()
@@ -174,6 +179,8 @@ class ChatSession:
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
         # durable copilot history (best-effort; never breaks the answer)
+        self.store.scope = self.scope
+        self.store.scope_sessions = list(self.scope_sessions)
         self.store.record_turn(q, txt, st=self.st, backend=self.backend, model=self.model)
         return txt
 
@@ -198,13 +205,22 @@ class ChatSession:
         if c == "/scope" or c.startswith("/scope "):
             return self._scope(cmd.strip()[6:].strip())
         if c == "/session":
-            return f"attached: {self.path}\nscope: {self.scope_label()}\n{self.banner()}"
+            return f"cockpit: {self.store.conv_id}\ntarget: {self.path}\nevidence: {self.scope_label()}\n{self.banner()}"
         if c == "/sessions":
             return self._list_sessions()
         if c.startswith("/use"):
             return self._switch(cmd.strip()[4:].strip())
+        if c in ("/new", "/new-cockpit"):
+            return self.new_cockpit()
+        if c == "/resume" or c.startswith("/resume "):
+            return self._resume_list(cmd.strip()[7:].strip())
         if c == "/history" or c.startswith("/history "):
             arg = c[8:].strip()
+            if not arg:
+                if not self.history:
+                    return "(no turns yet — `/resume` lists resumable cockpit sessions)"
+                return "\n".join(("you> " if r == "user" else "cc > ") + t[:200]
+                                 for r, t in self.history)
             if arg in ("all", "*", "this", "project"):
                 if not self.store.enabled:
                     return "(history is off — --no-persist or [history] enabled=false)"
@@ -212,10 +228,7 @@ class ChatSession:
                     return _fmt_conv_list(ST.list_conversations(None), "all projects")
                 cwd = self.cwd or os.getcwd()
                 return _fmt_conv_list(ST.list_conversations(cwd), cwd)
-            if not self.history:
-                return "(no turns yet — try `/history this` for past conversations)"
-            return "\n".join(("you> " if r == "user" else "cc > ") + t[:200]
-                             for r, t in self.history)
+            return self._resume_list(arg)
         if c == "/diff":
             return _fmt_diff(S.diff(self.prev, self.st))
         if c == "/forget":
@@ -255,6 +268,7 @@ class ChatSession:
         toks = arg.split()
         if len(toks) == 1 and toks[0].lower() in ("all", "*", "clear", "reset"):
             self.scope_sessions = []
+            self._persist_state()
             return f"scope → {self.scope_label()}\n{self.banner()}"
         try:
             new_scope = SC.normalize(toks[0])
@@ -275,11 +289,13 @@ class ChatSession:
                 self.set_scope_sessions(selectors)
             except ValueError as e:
                 return str(e)
+        self._persist_state()
         return f"scope → {self.scope_label()}\n{self.banner()}"
 
     def set_scope_sessions(self, selectors) -> None:
         refs = SC.resolve_session_refs(self.path, SC.parse_selectors(selectors))
         self.scope_sessions = [r.session_id for r in refs]
+        self._persist_state()
 
     # ---- session switching (select among multiple sessions) --------------
     def _siblings(self):
@@ -299,7 +315,7 @@ class ChatSession:
 
     def _list_sessions(self):
         refs = self.sibling_refs()
-        out = ["sessions in this project (newest first — `/use <n|id>`):"]
+        out = ["agent sessions in this project (newest first — `/use <n|id>` changes evidence):"]
         for i, r in enumerate(refs, 1):
             p = r.path
             cur = "*" if os.path.samefile(p, self.path) else " "
@@ -327,18 +343,15 @@ class ChatSession:
         if os.path.samefile(target, self.path):
             return "already attached to that session"
         self.switch_path(target)
-        n = len(self.history) // 2
-        restored = f"restored {n} prior turn{'s' if n != 1 else ''}" if n else "no prior chat"
-        return (f"switched → {os.path.basename(target)[:-6][:8]} "
-                f"({restored})\n{self.banner()}")
+        return (f"evidence session → {os.path.basename(target)[:-6][:8]} "
+                f"(cockpit chat kept)\n{self.banner()}")
 
     def switch_path(self, path):
-        """Re-pin to another session: fresh state, and RESTORE that session's
-        prior copilot dialogue from disk (was previously wiped — the data loss
-        the user hit when switching)."""
-        self._attach(path)
+        """Change the evidence target while keeping this Cockpit session."""
+        self._attach(path, load_store=False)
+        self._persist_state()
 
-    def _attach(self, path):
+    def _attach(self, path, load_store=True, apply_store_state=True):
         """Point at ``path``: reset live state, re-open the store for it, and
         load any persisted copilot history. Survives a missing transcript."""
         self.path = path
@@ -348,24 +361,71 @@ class ChatSession:
         self._alert_size = -1
         self.refresh()                       # st may stay None if the file is gone
         tr = getattr(self.st, "tr", None)
-        self.store = ST.Store.open_for(path, enabled=self._persist, tr=tr)
-        self.history = self.store.load_history()
+        if load_store:
+            self.store = ST.Store.open_for(path, enabled=self._persist, tr=tr)
+            h = self.store.header()
+            if h is not None:
+                self.store.apply_header(h)
+                if apply_store_state:
+                    try:
+                        self.scope = SC.normalize(h.scope)
+                    except ValueError:
+                        self.scope = SC.SESSION
+                    self.scope_sessions = list(h.scope_sessions or [])
+            self.history = self.store.load_history()
+        else:
+            self.store.transcript = os.path.abspath(path) if path else ""
+            if tr is not None:
+                self.store.session_id = getattr(tr, "session_id", "") or self.store.session_id
+                self.store.cwd = getattr(tr, "cwd", "") or self.store.cwd
+                self.store.title = getattr(tr, "title", "") or self.store.title
         self.cwd = (getattr(tr, "cwd", "") or LOC.read_cwd(path) or "")
 
     def attach_conv(self, header) -> bool:
         """Attach by a stored conversation header (from /history). Returns True
         for a live re-attach, False when the transcript is gone (history-only)."""
+        self.store = ST.Store(header.conv_id, enabled=self._persist)
+        self.store.apply_header(header)
         if header.transcript and os.path.isfile(header.transcript):
-            self._attach(header.transcript)
+            self._attach(header.transcript, load_store=False)
+            self.history = self.store.load_history()
+            try:
+                self.scope = SC.normalize(header.scope)
+            except ValueError:
+                self.scope = SC.SESSION
+            self.scope_sessions = list(header.scope_sessions or [])
+            self.cwd = header.cwd or self.cwd
             return True
         self.path = header.transcript
         self.st = self.prev = None
         self.last_size = -1
-        self.store = ST.Store(header.conv_id, enabled=self._persist)
-        self.store.transcript = header.transcript
+        try:
+            self.scope = SC.normalize(header.scope)
+        except ValueError:
+            self.scope = SC.SESSION
+        self.scope_sessions = list(header.scope_sessions or [])
         self.history = self.store.load_history()
         self.cwd = header.cwd
         return False
+
+    def _persist_state(self) -> None:
+        self.store.scope = self.scope
+        self.store.scope_sessions = list(self.scope_sessions)
+        self.store.transcript = os.path.abspath(self.path) if self.path else self.store.transcript
+        self.store.record_state(self.st, scope=self.scope, scope_sessions=self.scope_sessions,
+                                backend=self.backend, model=self.model)
+
+    def new_cockpit(self) -> str:
+        self.store = ST.Store.new_for(self.path, enabled=self._persist, tr=getattr(self.st, "tr", None))
+        self.history = []
+        self._persist_state()
+        return f"new cockpit session → {self.store.conv_id}\n{self.banner()}"
+
+    def _resume_list(self, arg="") -> str:
+        if not self.store.enabled:
+            return "(resume is off — --no-persist or [history] enabled=false)"
+        headers = ST.list_conversations(None if arg in ("all", "*") else (self.cwd or os.getcwd()))
+        return _fmt_conv_list(headers, "resumable cockpit sessions")
 
     def siblings(self):
         """Public list of sibling session paths (newest first), own-filtered."""
@@ -407,7 +467,7 @@ class ChatSession:
         except Exception:
             pass
         self.refresh()
-        print(f"🛰  cc-copilot chat — attached to {os.path.basename(self.path)}")
+        print(f"🛰  cc-copilot chat — cockpit {self.store.conv_id[:12]}")
         print(self.banner())
         have_llm = N.available(self.backend)
         print(f"backend: {N.backend_name(self.backend)}")

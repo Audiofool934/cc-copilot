@@ -111,9 +111,8 @@ def render(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     L.append("## Recent Evidence")
     for line in _recent_evidence(report.items, qualified):
         L.append(f"- {line}")
-    if report.scope == SC.PROJECT:
-        L.append("")
-        L.extend(_project_glance(report.root))
+    L.append("")
+    L.extend(_project_glance(report.root))
 
     L.append("")
     L.append("_Observer reports are deterministic and read-only. Transcript citations "

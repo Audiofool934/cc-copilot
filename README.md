@@ -7,9 +7,10 @@ what to look at, without scrolling the transcript.
 
 ![cc-copilot cockpit](docs/cockpit.png)
 
-*The cockpit (`cc-copilot cockpit`): a scope-aware status header, scoped activity
-above your chat, an attention line with the next human decision, a safety verdict
-pill, and answers grounded in evidence — every `[L…]` is a real transcript line.*
+*The cockpit (`cc-copilot cockpit`): a resumable Cockpit Session with always-on
+read-only project context, agent-session evidence selection, an attention line
+with the next human decision, a safety verdict pill, and answers grounded in
+evidence — every `[L…]` is a real transcript line.*
 
 ```
 $ cc-copilot brief
@@ -92,11 +93,11 @@ Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
 
 ```bash
 cc-copilot cockpit                  # ⭐ full-screen TUI cockpit (needs cc-copilot[tui])
-cc-copilot cockpit --scope project  # scope: session | multi-session | project
+cc-copilot cockpit --scope multi    # evidence: one session | selected/all sessions
 cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
-cc-copilot history                  # saved copilot conversations (--all = every project)
+cc-copilot resume                   # resumable Cockpit Sessions (--all = every project)
 cc-copilot observe                  # attention queue + next human decision
 cc-copilot observe --scope project  # same observer surface across wider scopes
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
@@ -172,14 +173,14 @@ cc-copilot observe --scope project --scope-sessions a1b2c3d4,b5c53c29
 
 It renders four operator surfaces without calling an LLM:
 
-- **Now** — a ranked session board for the selected scope.
+- **Now** — a ranked session board for the selected evidence range.
 - **Attention Queue** — sessions needing intervention, review, or patience.
 - **Next Human Decision** — the smallest action the human should take next.
 - **Recent Evidence** — the failures, changed files, and transcript tail that
   justify the recommendation.
 
-Single-session citations stay `[L123]`; multi-session and project scopes use
-`[session:L123]`. Project scope also includes a small git glance with `[git:*]`
+Single-session citations stay `[L123]`; multi-session/project evidence uses
+`[session:L123]`. Project context also includes a small git glance with `[git:*]`
 citations. The cockpit activity strip shows the same observer line live.
 
 ## Multiple sessions
@@ -212,19 +213,33 @@ Pick a session for any one-shot command with a positional id/prefix/path
 (`cc-copilot brief <id>`), or `--session`. The deterministic core means `status`
 needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 
-## Grounding scopes
+## Cockpit Sessions
 
-Every conversational surface now has an explicit read range:
+The cockpit's resumable unit is a **Cockpit Session**, not an agent transcript.
+It stores your Q&A, backend/model, current evidence range, selected evidence
+sessions, and project cwd. Changing evidence sessions no longer swaps to another
+chat history; it changes what this cockpit reads. `Ctrl+H` / `/resume` resumes
+an entire Cockpit Session. `/history` remains a backward-compatible alias.
 
-| scope | source | citations |
+```bash
+cc-copilot resume          # list this project's cockpit sessions
+cc-copilot resume --all    # every project
+```
+
+## Evidence Range
+
+Every conversational surface has an explicit agent-evidence range, and Q&A
+surfaces always include bounded read-only project context:
+
+| range | agent evidence | citations |
 |---|---|---|
-| `session` | one observed transcript (default) | `[L123]` |
-| `multi-session` / `multi` | all work-session transcripts for the cwd | `[b5c53c29:L123]` |
-| `project` / `repo` | multi-session evidence + deterministic read-only workspace facts | `[b5c53c29:L123]`, `[path.py:L45]`, `[tree]`, `[git:status]` |
+| `session` | one observed transcript (default) | `[L123]` plus project facts |
+| `multi-session` / `multi` | all or selected work-session transcripts for the cwd | `[b5c53c29:L123]` plus project facts |
+| `project` / `repo` | compatibility alias for all/selected sessions plus project facts | `[b5c53c29:L123]`, `[path.py:L45]`, `[tree]`, `[git:status]` |
 
-Scope expands the **evidence model**, not backend permissions. Even in `project`
-scope the LLM receives only a rendered, cited brief; it does not get tools, repo
-handles, or ambient filesystem access. The project collector reads locally and
+Project context is the baseline for the Cockpit agent, not a separate mode. The
+LLM receives only rendered, cited evidence; it does not get tools, repo handles,
+or ambient filesystem access. The project collector reads locally and
 deterministically: git status, a bounded file index, and text excerpts with
 `path:line` citations, skipping common generated/secret paths.
 
@@ -236,13 +251,14 @@ cc-copilot cockpit --scope project --scope-sessions 1,3
 ```
 
 In the REPL/TUI, `/scope multi a1b2c3d4 b5c53c29` selects a subset, `/scope all`
-clears it back to every work session, and `Ctrl+O` opens a picker.
+clears it back to every work session, and `Ctrl+O` opens the evidence-range
+picker.
 
 ## Cockpit TUI — `cc-copilot cockpit`
 
 A full-screen cockpit (Textual) — the Python analog of Codex's `ratatui` loop and
-Claude Code's Ink UI: a **scope-aware status header** (project · scope · attached
-session), a **scoped activity strip** above your chat, a **background watcher**
+Claude Code's Ink UI: an **evidence-aware status header** (project · evidence
+range · Cockpit Session), an **activity strip** above your chat, a **background watcher**
 that pushes stall/off-track alerts as the agent works, and **off-thread backend
 turns** so it never freezes. Default backend is
 **codex** (ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus
@@ -257,14 +273,14 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 ```
 
 In-cockpit: `Enter` send · `/help` · `/scope` (Ctrl+O) · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
-`/sessions` `/use <n|id>` · `/history` (Ctrl+H) · `/model <name>` · `Ctrl+R` refresh ·
+`/sessions` `/use <n|id>` · `/resume` (Ctrl+H) · `/new` · `/model <name>` · `Ctrl+R` refresh ·
 `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
 — the faithfulness guarantee holds in the TUI exactly as in the CLI.
 
-**Your chat persists.** Each conversation is saved locally, keyed to the observed
-session, so switching sessions (or relaunching) restores its prior dialogue instead
-of losing it. `Ctrl+H` / `/history` browses and re-opens past conversations — even if
-the underlying transcript is gone (read-only view). It's stored under
+**Your Cockpit Sessions persist.** Each cockpit is saved locally with its Q&A and
+evidence selection, so changing evidence sessions does not wipe or swap the chat.
+`Ctrl+H` / `/resume` browses and re-opens whole Cockpit Sessions — even if the
+underlying transcript is gone (read-only view). It's stored under
 `$CC_COPILOT_STATE_DIR` (default `~/.local/state/cc-copilot`, never under `~/.claude`),
 dirs `0700` / files `0600`; opt out with `--no-persist`, `[history] enabled = false`,
 or `CC_COPILOT_HISTORY=0`.
@@ -284,7 +300,7 @@ cc-copilot chat           # pins to that project's most-recent OTHER session
 ```
 
 ```
-🛰  cc-copilot chat — attached to b5c53c29….jsonl
+🛰  cc-copilot chat — cockpit sess-b5c53c29
 [🟢 running · idle 12s · 1840 ev · safety: review]
 ask a question, or /help.  Ctrl-D to exit.
 
@@ -301,10 +317,9 @@ you> is it safe to let it keep going?
 - **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
   lag the observed session; cockpit header/activity surfaces also refresh on the
   poll interval.
-- **Explicit scope** — `/scope session|multi|project` changes what evidence
-  questions are grounded in while keeping the backend read-only. In the cockpit,
-  the header and activity strip change shape for single-session, selected
-  multi-session, and project views.
+- **Explicit evidence range** — `/scope session|multi|project` changes which
+  agent sessions questions are grounded in while project context stays on and
+  the backend remains read-only.
 - **Multi-turn** — it remembers the conversation; follow-ups resolve against both
   the prior answers and the just-refreshed state.
 - **Push alerts** — a background thread pings you inline when the agent stalls /
@@ -313,7 +328,7 @@ you> is it safe to let it keep going?
   reading only; your separate copilot Q&A is persisted under cc-copilot's state
   dir unless disabled. It cannot touch the agent it watches.
 - **LLM-free escape hatches** — `/observe`, `/brief`, `/check`, `/diff`, `/refresh`,
-  `/session`, `/history` work without a backend, and let you verify any prose
+  `/session`, `/resume` work without a backend, and let you verify any prose
   answer against cited evidence in the same window.
 
 Grounding is identical to `ask`: the chat LLM sees only the cited brief, and

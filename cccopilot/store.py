@@ -1,10 +1,8 @@
-"""Persistent copilot history (stdlib-only).
+"""Persistent resumable cockpit sessions (stdlib-only).
 
 cc-copilot is a read-only observer of a Claude Code session; *this* module
-persists the SEPARATE thing the human and the copilot say to each other ABOUT
-that session, so switching sessions in the cockpit — or relaunching entirely —
-restores the prior dialogue instead of losing it. It never writes under
-``~/.claude``.
+persists the SEPARATE Cockpit session: the human/copilot Q&A plus the selected
+read target. It never writes under ``~/.claude``.
 
 Layout (under the state home — ``$CC_COPILOT_STATE_DIR`` >
 ``$XDG_STATE_HOME/cc-copilot`` > ``~/.local/state/cc-copilot``)::
@@ -12,11 +10,12 @@ Layout (under the state home — ``$CC_COPILOT_STATE_DIR`` >
     conversations/<conv_id>/turns.jsonl   append-only, the source of truth
     conversations/<conv_id>/meta.json     derived cache (cheap listing), rebuildable
 
-``conv_id`` is the observed Claude Code session uuid, so re-attaching to the same
-agent restores the same conversation. ``turns.jsonl`` holds one self-describing
-``{"kind":"head",...}`` line then one ``{"kind":"turn",...}`` line per answered
-Q&A; readers skip blank / unparseable / unknown-``kind`` lines, so a torn final
-write loses at most that line and unknown future kinds are ignored.
+Older stores used the observed Claude Code session uuid as ``conv_id``. v0.6
+keeps those readable and adds independent Cockpit session ids for new/forked
+cockpits. ``turns.jsonl`` holds one self-describing ``{"kind":"head",...}``
+line then one ``{"kind":"turn",...}`` line per answered Q&A; readers skip blank
+/ unparseable / unknown-``kind`` lines, so a torn final write loses at most that
+line and unknown future kinds are ignored.
 
 Concurrency: two cockpits may observe one CC session and thus share one log. A
 single ``fcntl.flock(LOCK_EX)`` is held across the WHOLE critical section (append
@@ -37,6 +36,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 
 try:
@@ -124,6 +124,8 @@ class ConvHeader:
     model: str = ""
     transcript_present: bool = False
     sources: list = field(default_factory=list)
+    scope: str = "session"
+    scope_sessions: list = field(default_factory=list)
 
     @classmethod
     def from_meta(cls, d: dict) -> "ConvHeader":
@@ -137,6 +139,8 @@ class ConvHeader:
             backend=d.get("backend") or "", model=d.get("model") or "",
             transcript_present=bool(d.get("transcript_present", False)),
             sources=list(d.get("sources") or []),
+            scope=d.get("scope") or "session",
+            scope_sessions=list(d.get("scope_sessions") or []),
         )
 
     def ago(self) -> str:
@@ -153,10 +157,22 @@ class Store:
         self.session_id = ""
         self.cwd = ""
         self.title = ""
+        self.scope = "session"
+        self.scope_sessions = []
 
     @classmethod
     def open_for(cls, path, enabled: bool = True, tr=None) -> "Store":
         s = cls(conv_id_for(path, tr), enabled=enabled)
+        s.transcript = os.path.abspath(path) if path else ""
+        if tr is not None:
+            s.session_id = getattr(tr, "session_id", "") or ""
+            s.cwd = getattr(tr, "cwd", "") or ""
+            s.title = getattr(tr, "title", "") or ""
+        return s
+
+    @classmethod
+    def new_for(cls, path, enabled: bool = True, tr=None) -> "Store":
+        s = cls("cockpit-" + uuid.uuid4().hex[:16], enabled=enabled)
         s.transcript = os.path.abspath(path) if path else ""
         if tr is not None:
             s.session_id = getattr(tr, "session_id", "") or ""
@@ -187,6 +203,32 @@ class Store:
             return True
         except Exception as e:        # best-effort: a storage error never breaks an answer
             _warn_once(f"cc-copilot: history write failed ({e}); continuing in-memory only")
+            return False
+
+    def record_state(self, st=None, scope=None, scope_sessions=None,
+                     backend=None, model=None) -> bool:
+        """Persist cockpit-session metadata even before any Q&A turn exists."""
+        if not self.enabled:
+            return False
+        try:
+            self._refresh_from(st)
+            if scope:
+                self.scope = scope
+            if scope_sessions is not None:
+                self.scope_sessions = list(scope_sessions or [])
+            os.makedirs(self.dir, mode=0o700, exist_ok=True)
+            _chmod(self.dir, 0o700)
+            _chmod(_conv_root(), 0o700)
+            _chmod(state_home(), 0o700)
+            prev = _read_json(self.meta_path) or {}
+            now = time.time()
+            self._write_meta(int(prev.get("turns", 0) or 0),
+                             prev.get("last_q", ""), prev.get("last_a_head", ""),
+                             backend or prev.get("backend"),
+                             model or prev.get("model"))
+            return True
+        except Exception as e:
+            _warn_once(f"cc-copilot: cockpit state write failed ({e}); continuing in-memory only")
             return False
 
     def _refresh_from(self, st):
@@ -233,9 +275,10 @@ class Store:
         return n
 
     def _head(self) -> dict:
-        return {"kind": "head", "schema": 1, "conv_id": self.conv_id,
+        return {"kind": "head", "schema": 2, "conv_id": self.conv_id,
                 "session_id": self.session_id, "cwd": self.cwd,
-                "transcript": self.transcript, "created": time.time()}
+                "transcript": self.transcript, "created": time.time(),
+                "scope": self.scope, "scope_sessions": list(self.scope_sessions or [])}
 
     def _turn(self, q, a, st, backend, model) -> dict:
         tr = getattr(st, "tr", None)
@@ -249,6 +292,8 @@ class Store:
                 "transcript": self.transcript,
                 "tr_lines": getattr(tr, "raw_lines", 0) if tr else 0,
                 "status": getattr(st, "status", "") if st is not None else "",
+                "scope": self.scope,
+                "scope_sessions": list(self.scope_sessions or []),
             },
         }
 
@@ -256,9 +301,10 @@ class Store:
         prev = _read_json(self.meta_path) or {}
         now = time.time()
         transcript = self.transcript or prev.get("transcript", "")
-        title = self.title or prev.get("title") or _title_from(q)
+        prev_title = prev.get("title") or ""
+        title = self.title or (prev_title if prev_title != "(untitled)" else "") or _title_from(q)
         meta = {
-            "schema": 1, "conv_id": self.conv_id,
+            "schema": 2, "conv_id": self.conv_id,
             "session_id": self.session_id or prev.get("session_id", ""),
             "cwd": self.cwd or prev.get("cwd", ""),
             "transcript": transcript, "title": title,
@@ -268,6 +314,8 @@ class Store:
             "model": model or prev.get("model"),
             "transcript_present": bool(transcript and os.path.isfile(transcript)),
             "sources": prev.get("sources") or ([self.session_id] if self.session_id else []),
+            "scope": self.scope or prev.get("scope") or "session",
+            "scope_sessions": list(self.scope_sessions or prev.get("scope_sessions") or []),
         }
         tmp = self.meta_path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -355,6 +403,14 @@ class Store:
         h = ConvHeader.from_meta(d)
         h.transcript_present = bool(h.transcript and os.path.isfile(h.transcript))
         return h
+
+    def apply_header(self, h: "ConvHeader") -> None:
+        self.transcript = h.transcript or self.transcript
+        self.session_id = h.session_id or self.session_id
+        self.cwd = h.cwd or self.cwd
+        self.title = h.title or self.title
+        self.scope = h.scope or self.scope
+        self.scope_sessions = list(h.scope_sessions or [])
 
 
 # ── module-level helpers ────────────────────────────────────────────────────
@@ -475,6 +531,8 @@ def _rebuild_meta_dict(conv_id: str):
         "backend": last.get("backend"), "model": last.get("model"),
         "transcript_present": bool(transcript and os.path.isfile(transcript)),
         "sources": [head.get("session_id")] if head.get("session_id") else [],
+        "scope": src.get("scope") or "session",
+        "scope_sessions": list(src.get("scope_sessions") or []),
     }
     return d
 

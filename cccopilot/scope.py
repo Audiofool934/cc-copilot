@@ -78,7 +78,7 @@ def parse_selectors(value) -> list:
 
 
 def render_evidence(path: str, st=None, scope: str = SESSION,
-                    sessions=None) -> EvidenceBrief:
+                    sessions=None, project_context: bool = False) -> EvidenceBrief:
     """Render the read-only evidence brief for ``scope``.
 
     ``path`` is still the cockpit's anchor session. Wider scopes use it to find
@@ -90,9 +90,14 @@ def render_evidence(path: str, st=None, scope: str = SESSION,
     if sc == SESSION:
         title = _session_title(st, None) if st is not None else "history-only session"
         text = B.render(st) if st is not None else _history_only(path)
+        if project_context:
+            text += "\n\n" + render_project_facts(_project_root(path, st)) + "\n\n" + _footer(PROJECT)
         return EvidenceBrief(sc, title, text)
     if sc == MULTI:
         text = render_multi_session(path, st, selectors=parse_selectors(sessions))
+        if project_context:
+            text += "\n\n" + render_project_facts(_project_root(path, st))
+            return EvidenceBrief(sc, "multi-session project view", text + "\n\n" + _footer(PROJECT))
         return EvidenceBrief(sc, "multi-session project view", text + "\n\n" + _footer(sc))
     root = _project_root(path, st)
     text = (render_multi_session(path, st, selectors=parse_selectors(sessions))

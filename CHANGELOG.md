@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 — 2026-06-07
+
+**Cockpit Sessions**
+- Promoted persisted chat state into resumable **Cockpit Sessions**: Q&A,
+  backend/model, project cwd, evidence range, and selected evidence sessions now
+  resume together.
+- Changing the agent evidence session no longer swaps to another chat log; it
+  keeps the current Cockpit Session and updates the saved evidence target.
+- Added `/resume` and `cc-copilot resume`; `/history` and `cc-copilot history`
+  remain backward-compatible aliases.
+- Added `/new` to start an independent Cockpit Session over the current project
+  and evidence target.
+
+**Always-on project context**
+- Conversational Q&A surfaces now include bounded read-only project context by
+  default, even when the agent evidence range is a single session.
+- The cockpit header and status language now distinguish Cockpit Session,
+  project context, and agent-session evidence instead of leaking the old
+  "attached session + scope" model.
+
 ## 0.5.1 — 2026-06-07
 
 **Cockpit hotfix**

@@ -99,6 +99,24 @@ class TestChatScope(unittest.TestCase):
         self.assertIn("Scoped Project", seen[0])
         self.assertIn("[README.md:L1]", seen[0])
 
+    def test_chat_session_includes_project_context_by_default(self):
+        cwd = tempfile.mkdtemp(prefix="ccscope-chat-default-project-")
+        d = tempfile.mkdtemp(prefix="ccscope-chat-default-sessions-")
+        p = os.path.join(d, "sess-A.jsonl")
+        _write_at(p, [user("inspect project", 60, sessionId="sess-A", cwd=cwd), asst("ok", 5)])
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Always On Project\n")
+        seen = []
+        real = N.chat_brief
+        N.chat_brief = lambda brief, history, q, model=None, backend=None: seen.append(brief) or "answer"
+        try:
+            s = C.ChatSession(p, alerts=False, persist=False)
+            self.assertEqual(s.answer("what project context do you have?"), "answer")
+        finally:
+            N.chat_brief = real
+        self.assertIn("Always On Project", seen[0])
+        self.assertIn("[README.md:L1]", seen[0])
+
     def test_chat_session_answers_from_selected_multi_session_brief(self):
         cwd = tempfile.mkdtemp(prefix="ccscope-chat-multi-")
         d = tempfile.mkdtemp(prefix="ccscope-chat-multi-sessions-")

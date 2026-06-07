@@ -57,19 +57,21 @@ class _StateHome(unittest.TestCase):
 
 
 class TestRestore(_StateHome):
-    def test_switch_restores_prior_dialogue(self):
+    def test_switch_keeps_current_cockpit_dialogue(self):
         a, b = _tx("sess-A"), _tx("sess-B")
         s = C.ChatSession(a, backend="codex", alerts=False)
         s.answer("q1 on A")
         s.answer("q2 on A")
         s.switch_path(b)
-        self.assertEqual(s.history, [])                 # B is fresh
-        s.answer("q1 on B")
-        s.switch_path(a)                                # ← was the data-loss point
         self.assertEqual([t for r, t in s.history if r == "user"],
                          ["q1 on A", "q2 on A"])
+        s.answer("q1 after switching evidence")
+        s.switch_path(a)                                # ← was the data-loss point
+        self.assertEqual([t for r, t in s.history if r == "user"],
+                         ["q1 on A", "q2 on A", "q1 after switching evidence"])
         s.switch_path(b)
-        self.assertEqual([t for r, t in s.history if r == "user"], ["q1 on B"])
+        self.assertEqual([t for r, t in s.history if r == "user"],
+                         ["q1 on A", "q2 on A", "q1 after switching evidence"])
 
     def test_relaunch_restores(self):
         a = _tx("sess-A")
@@ -78,15 +80,32 @@ class TestRestore(_StateHome):
         self.assertEqual(fresh.history[:2],
                          [("user", "hello there"), ("assistant", "A:hello there")])
 
-    def test_switch_message_reports_restore(self):
+    def test_switch_message_reports_evidence_change(self):
         a, b = _tx("sess-A"), _tx("sess-B")
         s = C.ChatSession(a, alerts=False)
         s.answer("hi")
         s.answer("again")
-        s.switch_path(b)                                # now on B (no prior chat)
         s._listing = [a, b]                             # control /use's session list
-        msg = s._switch(os.path.basename(a)[:-6])       # switch back to A by id
-        self.assertIn("restored 2 prior turns", msg)
+        msg = s._switch(os.path.basename(b)[:-6])
+        self.assertIn("cockpit chat kept", msg)
+        self.assertEqual([t for r, t in s.history if r == "user"], ["hi", "again"])
+
+    def test_resume_restores_scope_and_dialogue(self):
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False)
+        sid = os.path.basename(a)[:-6]
+        s.meta(f"/scope multi {sid}")
+        s.answer("remember scoped cockpit")
+        header = [h for h in ST.list_conversations(None) if h.conv_id == s.store.conv_id][0]
+
+        fresh = C.ChatSession(_tx("sess-B"), alerts=False)
+        live = fresh.attach_conv(header)
+
+        self.assertTrue(live)
+        self.assertEqual(fresh.scope, "multi-session")
+        self.assertEqual(fresh.scope_sessions, [sid])
+        self.assertEqual([t for r, t in fresh.history if r == "user"],
+                         ["remember scoped cockpit"])
 
     def test_session_list_shows_renamed_titles(self):
         d = tempfile.mkdtemp(prefix="ccsess-")
@@ -225,6 +244,7 @@ class TestCliHistory(_StateHome):
         self.assertEqual(rc, 0)
         self.assertIn("sess-A"[:8], out)
         self.assertIn("研究一下解析器", out)
+        self.assertIn("resumable cockpit sessions", out)
 
     def test_history_empty(self):
         args = types.SimpleNamespace(all=False, cwd="/nonexistent/proj")
@@ -233,7 +253,7 @@ class TestCliHistory(_StateHome):
         with redirect_stdout(buf):
             rc = cli.cmd_history(args)
         self.assertEqual(rc, 1)
-        self.assertIn("no saved copilot conversations", buf.getvalue())
+        self.assertIn("no resumable cockpit sessions", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -120,17 +120,17 @@ def cmd_sessions(args) -> int:
 def cmd_history(args) -> int:
     from . import store as ST
     if not ST.enabled():
-        print("history is disabled (set [history] enabled = true in ~/.cc-copilot.toml, "
+        print("resume is disabled (set [history] enabled = true in ~/.cc-copilot.toml, "
               "or unset CC_COPILOT_HISTORY)")
         return 1
     cwd = None if getattr(args, "all", False) else (args.cwd or os.getcwd())
     headers = ST.list_conversations(cwd)
     if not headers:
         scope = "any project" if cwd is None else cwd
-        print(f"(no saved copilot conversations for {scope})\n  history dir: {ST.state_home()}")
+        print(f"(no resumable cockpit sessions for {scope})\n  state dir: {ST.state_home()}")
         return 1
     scope = "all projects" if cwd is None else cwd
-    print(f"saved copilot conversations — {scope}  ({len(headers)}):")
+    print(f"resumable cockpit sessions — {scope}  ({len(headers)}):")
     for h in headers:
         gone = "  (transcript gone)" if not h.transcript_present else ""
         proj = os.path.basename(h.cwd) or "?"
@@ -184,7 +184,8 @@ def cmd_ask(args) -> int:
         return 2
     try:
         ev = SC.render_evidence(path, st, getattr(args, "scope", SC.SESSION),
-                                sessions=getattr(args, "scope_sessions", ""))
+                                sessions=getattr(args, "scope_sessions", ""),
+                                project_context=True)
     except ValueError as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 2
@@ -412,10 +413,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="show cc-copilot's own narration sessions instead of hiding them")
     sp.set_defaults(func=cmd_sessions)
 
-    sp = sub.add_parser("history", help="list saved copilot conversations (newest first)")
+    sp = sub.add_parser("resume", aliases=["history"],
+                        help="list resumable cockpit sessions (newest first)")
     common(sp)
     sp.add_argument("--all", action="store_true",
-                    help="every project's conversations, not just this cwd's")
+                    help="every project's cockpit sessions, not just this cwd's")
     sp.set_defaults(func=cmd_history)
 
     sp = sub.add_parser("status", aliases=["fleet"],
@@ -436,9 +438,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also print the resolved transcript path to stderr")
 
     def scope_arg(sp):
-        sp.add_argument("--scope", type=SC.normalize, default=SC.SESSION,
-                        help="grounding scope: session, multi-session, or project "
-                             "(aliases: multi, repo)")
+        sp.add_argument("--scope", type=SC.normalize, default=None,
+                        help="evidence range: session, multi-session, or project "
+                             "(aliases: multi, repo; Q&A always includes project context)")
         sp.add_argument("--scope-sessions", default="",
                         help="comma-separated (or quoted space-separated) session numbers, ids, "
                              "prefixes, or paths for multi-session/project scope (default: all)")
@@ -495,7 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--no-alerts", action="store_true",
                         help="disable the background stall/off-track alert thread")
         sp.add_argument("--no-persist", dest="persist", action="store_false", default=None,
-                        help="don't save/restore this chat's history (in-memory only)")
+                        help="don't save/restore this cockpit session (in-memory only)")
         sp.add_argument("--poll", type=int, default=2,
                         help="alert/header poll interval in seconds (default 2)")
         scope_arg(sp)

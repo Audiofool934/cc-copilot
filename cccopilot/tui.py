@@ -78,8 +78,9 @@ _HELP_TEXT = (
     "type `/` for command suggestions (Tab completes; also the palette, Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /diff                   changes since last turn\n"
-    "  /sessions               switch which session you observe   (Ctrl+S)\n"
-    "  /history                browse & restore past conversations (Ctrl+H)\n"
+    "  /sessions               choose agent evidence              (Ctrl+S)\n"
+    "  /resume                 resume a cockpit session           (Ctrl+H)\n"
+    "  /new                    start a new cockpit session\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
@@ -91,14 +92,16 @@ _SLASH_CMDS = [
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
-    ("/sessions", "switch which live agent session you observe", False),
-    ("/history", "browse & reopen saved copilot conversations", False),
-    ("/scope", "switch grounding scope", True),
+    ("/sessions", "choose agent sessions used as evidence", False),
+    ("/resume", "browse & resume cockpit sessions", False),
+    ("/history", "alias for /resume", False),
+    ("/new", "start a new independent cockpit session", False),
+    ("/scope", "switch evidence range", True),
     ("/model", "switch the LLM backend", True),
-    ("/use", "switch observed session by number / id", True),
+    ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
-    ("/forget", "delete THIS conversation's saved history", False),
+    ("/forget", "delete THIS cockpit session's saved state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
     ("/help", "show help", False),
     ("/quit", "exit the cockpit", False),
@@ -720,7 +723,7 @@ class Cockpit(App):
         self.session.refresh()
         self.title = "cc-copilot cockpit"
         self.sub_title = os.path.basename(self.session.path)[:8]
-        self._chat(self._role(Text(f"attached to {os.path.basename(self.session.path)} · "
+        self._chat(self._role(Text(f"cockpit {self.session.store.conv_id[:12]} · "
                                    f"backend {N.backend_name(self.backend).split(' (')[0]}",
                                    "dim"), "role-event"))
         self._rebuild_chat(clear=False)        # repaint any restored prior dialogue
@@ -822,9 +825,10 @@ class Cockpit(App):
         yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
         yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
-        yield SystemCommand("Sessions", "Pick a session to observe", self.action_sessions)
-        yield SystemCommand("History", "Browse past copilot conversations", self.action_history)
-        yield SystemCommand("Scope", "Switch grounding scope", self.action_scope)
+        yield SystemCommand("Evidence", "Choose agent sessions used as evidence",
+                            self.action_sessions)
+        yield SystemCommand("Resume", "Browse resumable cockpit sessions", self.action_history)
+        yield SystemCommand("Target", "Switch evidence range", self.action_scope)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
@@ -926,8 +930,8 @@ class Cockpit(App):
             sid = _sid(st=st, path=self.session.path)
             status = st.status if st is not None else "missing"
             verdict = a.verdict if a is not None else "empty"
-            t.append("scope ", style=_PAL["muted"])
-            t.append("session", style=_PAL["accent"])
+            t.append("evidence ", style=_PAL["muted"])
+            t.append("one agent session", style=_PAL["accent"])
             t.append(f" · {title} · {sid}", style=_PAL["text"])
             t.append(f" · {status}", style="bold")
             t.append(f" · {verdict}", style=_VERDICT_HEX.get(verdict, _PAL["muted"]))
@@ -940,7 +944,7 @@ class Cockpit(App):
         label = self.session.scope_label()
         selected = _selection_label(self.session, snap)
         health = " · ".join(_health_bits(snap.get("items", [])))
-        t.append("scope ", style=_PAL["muted"])
+        t.append("evidence ", style=_PAL["muted"])
         t.append(label, style=_PAL["accent"])
         t.append(f" · {selected} sessions", style=_PAL["text"])
         if snap.get("error"):
@@ -949,11 +953,7 @@ class Cockpit(App):
             t.append(f" · {health}", style=_PAL["muted"])
         t.append("\n")
 
-        title = _short_activity(_session_title(st), 42) if st is not None else "history-only"
-        sid = _sid(st=st, path=self.session.path)
-        status = st.status if st is not None else "missing"
-        verdict = a.verdict if a is not None else "empty"
-        t.append(f"anchor {title} · {sid} · {status} · {verdict}",
+        t.append(f"cockpit {self.session.store.conv_id[:12]} · project context always on",
                  style=_PAL["muted"])
         return t
 
@@ -979,7 +979,7 @@ class Cockpit(App):
             t.append("  ")
             be = N.backend_name(self.backend).split(" (")[0]
             t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-            t.append(f"   scope {self.session.scope_label()}", style=_PAL["accent"])
+            t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
             status.update(t)
             return
         a = A.assess(st)
@@ -990,7 +990,7 @@ class Cockpit(App):
         t.append("  ")
         be = N.backend_name(self.backend).split(" (")[0]
         t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-        t.append(f"   scope {self.session.scope_label()}", style=_PAL["accent"])
+        t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
@@ -1060,6 +1060,8 @@ class Cockpit(App):
             # the cockpit's single durable write-site (the REPL has its own in
             # ChatSession.answer); _answer runs on a worker thread, hence here.
             # Persist to the originating store, even if the user has switched away.
+            store.scope = self.session.scope
+            store.scope_sessions = list(self.session.scope_sessions)
             store.record_turn(text, ans, st=st, backend=self.backend, model=self.model)
             if same:
                 self.session.history.append(("user", text))
@@ -1136,8 +1138,14 @@ class Cockpit(App):
             self.action_diff(); return
         if low in ("/sessions", "/session"):
             self.action_sessions(); return
-        if low == "/history" or low.startswith("/history"):
+        if low == "/resume" or low.startswith("/resume") or low == "/history" or low.startswith("/history"):
             self.action_history(); return
+        if low == "/new" or low == "/new-cockpit":
+            out = self.session.new_cockpit()
+            self._rebuild_chat()
+            self._refresh_scope_view()
+            self.notify(str(out).splitlines()[0], severity="information")
+            return
         if low == "/scope" or low.startswith("/scope "):
             arg = cmd.strip()[6:].strip()
             if arg:
@@ -1165,7 +1173,6 @@ class Cockpit(App):
         if low.startswith("/use"):
             out = self.session.meta(cmd)
             self.notify(str(out).splitlines()[0])
-            self._rebuild_chat()       # restore the switched-to session's dialogue
             self._reset_watch_baseline()
             self._refresh_scope_view(); return
         self.notify(f"unknown command {cmd!r}", severity="warning")
@@ -1271,24 +1278,26 @@ class Cockpit(App):
         for r in self.session.sibling_refs():
             opts.append((_session_picker_label(r, self.session.path), r.path))
         chosen = await self.push_screen_wait(
-            Picker("observe a different live agent session", opts))
+            Picker("choose one agent session as evidence", opts))
         if chosen:
-            self.session.switch_path(chosen)   # restores chosen session's history
-            self._rebuild_chat()               # repaint it (the old data-loss site)
+            self.session.switch_path(chosen)
+            self.session.scope = SC.SESSION
+            self.session.scope_sessions = []
+            self.session._persist_state()
             self._reset_watch_baseline()
             self.sub_title = os.path.basename(chosen)[:-6][:8]
             self._refresh_scope_view()
-            self.notify(f"→ {os.path.basename(chosen)[:8]}")
+            self.notify(f"evidence → {os.path.basename(chosen)[:8]}")
 
     @work
     async def action_history(self):
         if not self.session.store.enabled:
-            self.notify("history is off (--no-persist or [history] enabled=false)",
+            self.notify("resume is off (--no-persist or [history] enabled=false)",
                         severity="warning")
             return
         headers = ST.list_conversations(getattr(self.session, "cwd", None) or None)
         if not headers:
-            self.notify("no saved copilot conversations yet"); return
+            self.notify("no resumable cockpit sessions yet"); return
         opts = []
         for h in headers:
             gone = "  (gone)" if not h.transcript_present else ""
@@ -1296,7 +1305,7 @@ class Cockpit(App):
             opts.append((f"{(h.title or '(untitled)')[:32]:<32} · {h.turns:>2}t · "
                          f"{h.ago()} · {proj}{gone}", h))
         chosen = await self.push_screen_wait(
-            Picker("reopen a saved copilot conversation", opts))
+            Picker("resume a cockpit session", opts))
         if chosen:
             live = self.session.attach_conv(chosen)
             self._rebuild_chat()

@@ -287,7 +287,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             header = str(app.query_one("#status-header", Static).content)
         self.assertIn("project", header)
-        self.assertIn("scope session", header)
+        self.assertIn("evidence one agent session", header)
         self.assertIn("sess-A", header)
         self.assertIn("activity current session", header)
 
@@ -304,24 +304,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
         self.assertIn("fresh auto activity", "\n".join(rows))
 
-    async def test_in_flight_answer_records_to_origin_after_switch(self):
+    async def test_in_flight_answer_stays_with_cockpit_after_evidence_switch(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
-            origin_store = app.session.store          # A's store, captured at "submit"
+            origin_store = app.session.store
             origin_st = app.session.st
             b = write([user("task", 100, sessionId="sess-B"), asst("ok", 5)])
-            app.session.switch_path(b)                # user switches mid-flight
+            app.session.switch_path(b)                # user changes evidence mid-flight
             app._rebuild_chat()
             await pilot.pause()
-            # the answer for A returns AFTER the switch
+            # the answer for the cockpit returns AFTER the evidence switch.
             app._answer_done("q-for-A", "answer-A [L1]", True, origin_st, origin_store)
             await pilot.pause()
         self.assertEqual(origin_store.load_history(),
                          [("user", "q-for-A"), ("assistant", "answer-A [L1]")])
-        self.assertEqual(app.session.store.load_history(), [])   # B uncontaminated
-        self.assertEqual(app.session.history, [])                # B in-memory clean
+        self.assertIs(app.session.store, origin_store)
+        self.assertEqual(app.session.history,
+                         [("user", "q-for-A"), ("assistant", "answer-A [L1]")])
 
     async def test_slash_autocomplete(self):
         from textual.widgets import OptionList
@@ -354,8 +355,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._meta("/scope project")
             await pilot.pause()
             self.assertEqual(app.session.scope, "project")
-            self.assertIn("scope project", str(app.query_one("#status", Static).content))
-            self.assertIn("scope project", str(app.query_one("#status-header", Static).content))
+            self.assertIn("evidence project", str(app.query_one("#status", Static).content))
+            self.assertIn("evidence project", str(app.query_one("#status-header", Static).content))
             rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
             self.assertIn("project activity", "\n".join(rows))
 
@@ -370,9 +371,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.session.scope, "multi-session")
             self.assertEqual(app.session.scope_sessions, [sid])
-            self.assertIn("scope multi-session:1",
+            self.assertIn("evidence multi-session:1",
                           str(app.query_one("#status", Static).content))
-            self.assertIn("scope multi-session:1",
+            self.assertIn("evidence multi-session:1",
                           str(app.query_one("#status-header", Static).content))
             rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
             self.assertIn("multi-session activity", "\n".join(rows))
