@@ -555,10 +555,14 @@ The differentiated product is the full stack:
   (`ask` / `--narrate`) — an LLM layer *grounded in the cited state*
 
 The stack the [landscape](#landscape) said was the open gap is now built end to
-end. Next: hook-driven push ("it stalled 10 min ago" — `check`'s exit code
-already supports this), a live `watch` + narrate loop, and other agents (Codex,
-Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
-Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
+end. The next product direction is the
+[evidence context engine](docs/evidence-context-engine.md): move cockpit Q&A
+from "brief-only grounding" toward retrieval over complete observable session
+history while preserving citations. After that: hook-driven push ("it stalled
+10 min ago" — `check`'s exit code already supports this), a live `watch` +
+narrate loop, and other agents (Codex, Gemini CLI) behind the same `State`
+model (only the `transcript.py` parser is Claude-Code-specific;
+`state`/`assess`/`brief`/`narrate` are agent-agnostic).
 
 Rust migration is documented as a deferred architecture decision in
 [docs/rust-migration.md](docs/rust-migration.md). Current guidance: keep
