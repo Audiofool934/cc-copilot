@@ -50,26 +50,95 @@ from . import (transcript as T, state as S, assess as A, narrate as N,
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
-# ── theme (single branded palette; everything references semantic tokens) ──
-COCKPIT_THEME = Theme(
-    name="cockpit",
-    primary="#fab283", secondary="#5c9cf5", accent="#9d7cd8",
-    foreground="#c0caf5", background="#1a1b26", surface="#1f2335", panel="#24283b",
-    success="#9ece6a", warning="#e0af68", error="#f7768e", dark=True,
-    variables={
-        "verdict-intervene": "#f7768e", "verdict-review": "#e0af68",
-        "verdict-clear": "#9ece6a", "verdict-idle": "#565f89",
-        "verdict-awaiting": "#7aa2f7", "verdict-empty": "#565f89",
+# ── themes (small curated set; everything references semantic tokens) ──
+COCKPIT_THEME_SPECS = {
+    "cockpit": {
+        "label": "Cockpit",
+        "description": "ink, apricot, blue, and violet",
+        "primary": "#fab283", "secondary": "#5c9cf5", "accent": "#9d7cd8",
+        "foreground": "#c0caf5", "background": "#1a1b26",
+        "surface": "#1f2335", "panel": "#24283b", "boost": "#292e42",
+        "success": "#9ece6a", "warning": "#e0af68", "error": "#f7768e",
+        "muted": "#565f89", "dark": True,
     },
+    "graphite": {
+        "label": "Graphite",
+        "description": "charcoal, steel, cyan, and amber",
+        "primary": "#8bd5ca", "secondary": "#8aadf4", "accent": "#f5a97f",
+        "foreground": "#d7dee8", "background": "#111318",
+        "surface": "#191d24", "panel": "#20252d", "boost": "#272d36",
+        "success": "#a6da95", "warning": "#eed49f", "error": "#ed8796",
+        "muted": "#7a8494", "dark": True,
+    },
+    "signal": {
+        "label": "Signal",
+        "description": "near-black, green, blue, and coral",
+        "primary": "#7dd3a8", "secondary": "#7aa2f7", "accent": "#ffb86c",
+        "foreground": "#d8e2dc", "background": "#0f1412",
+        "surface": "#151c19", "panel": "#1d2521", "boost": "#24302a",
+        "success": "#9ece6a", "warning": "#e0af68", "error": "#ff7b72",
+        "muted": "#738078", "dark": True,
+    },
+    "daybreak": {
+        "label": "Daybreak",
+        "description": "light, quiet, blue, and persimmon",
+        "primary": "#2f6f9f", "secondary": "#4f7f52", "accent": "#b85c38",
+        "foreground": "#1f2933", "background": "#f5f7fa",
+        "surface": "#eef2f6", "panel": "#e4eaf0", "boost": "#dae3ec",
+        "success": "#3f7d4f", "warning": "#9a6b16", "error": "#b23a48",
+        "muted": "#697586", "dark": False,
+    },
+}
+
+
+def _theme_from_spec(name: str, spec: dict) -> Theme:
+    return Theme(
+        name=name,
+        primary=spec["primary"], secondary=spec["secondary"], accent=spec["accent"],
+        foreground=spec["foreground"], background=spec["background"],
+        surface=spec["surface"], panel=spec["panel"], boost=spec["boost"],
+        success=spec["success"], warning=spec["warning"], error=spec["error"],
+        dark=spec.get("dark", True),
+        variables={
+            "verdict-intervene": spec["error"], "verdict-review": spec["warning"],
+            "verdict-clear": spec["success"], "verdict-idle": spec["muted"],
+            "verdict-awaiting": spec["secondary"], "verdict-empty": spec["muted"],
+        },
+    )
+
+
+COCKPIT_THEMES = tuple(
+    _theme_from_spec(name, spec) for name, spec in COCKPIT_THEME_SPECS.items()
 )
+COCKPIT_THEME_NAMES = tuple(COCKPIT_THEME_SPECS)
 _STATUS_GLYPH = {"running": "●", "stalled": "■", "awaiting-agent": "◆",
                  "idle": "○", "empty": "·"}
 # concrete hex (Rich Text styles can't resolve Textual $variables) — mirrors the theme
-_PAL = {"primary": "#fab283", "secondary": "#5c9cf5", "accent": "#9d7cd8",
-        "muted": "#565f89", "error": "#f7768e", "warning": "#e0af68",
-        "success": "#9ece6a", "text": "#c0caf5", "bg": "#1a1b26"}
-_VERDICT_HEX = {"intervene": "#f7768e", "review": "#e0af68", "clear": "#9ece6a",
-                "idle": "#565f89", "awaiting": "#7aa2f7", "empty": "#565f89"}
+def _rich_palette(name: str) -> dict:
+    spec = COCKPIT_THEME_SPECS.get(name, COCKPIT_THEME_SPECS["cockpit"])
+    return {
+        "primary": spec["primary"], "secondary": spec["secondary"],
+        "accent": spec["accent"], "muted": spec["muted"],
+        "error": spec["error"], "warning": spec["warning"],
+        "success": spec["success"], "text": spec["foreground"],
+        "bg": spec["background"],
+    }
+
+
+def _verdict_palette(name: str) -> dict:
+    spec = COCKPIT_THEME_SPECS.get(name, COCKPIT_THEME_SPECS["cockpit"])
+    return {"intervene": spec["error"], "review": spec["warning"],
+            "clear": spec["success"], "idle": spec["muted"],
+            "awaiting": spec["secondary"], "empty": spec["muted"]}
+
+
+def _theme_name(name: str = "") -> str:
+    key = (name or "").strip().lower()
+    return key if key in COCKPIT_THEME_SPECS else "cockpit"
+
+
+_PAL = _rich_palette("cockpit")
+_VERDICT_HEX = _verdict_palette("cockpit")
 _BUSY_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TIMELINE_TITLE = "session activity"
 
@@ -81,6 +150,7 @@ _HELP_TEXT = (
     "  /sessions               choose evidence sessions\n"
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
+    "  /theme                  switch cockpit palette\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
@@ -95,6 +165,7 @@ _SLASH_CMDS = [
     ("/sessions", "choose one or more evidence sessions", False),
     ("/resume", "browse & resume cockpit sessions", False),
     ("/new", "start a new independent cockpit session", False),
+    ("/theme", "switch cockpit palette", False),
     ("/model", "switch the LLM backend", True),
     ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
@@ -755,8 +826,10 @@ class Cockpit(App):
         yield Footer()
 
     def on_mount(self):
-        self.register_theme(COCKPIT_THEME)
-        self.theme = "cockpit"
+        for theme in COCKPIT_THEMES:
+            self.register_theme(theme)
+        self.theme = _theme_name(os.environ.get("CC_COPILOT_THEME", "cockpit"))
+        self._sync_rich_palette()
         self.session.refresh()
         self.title = "cc-copilot cockpit"
         self.sub_title = os.path.basename(self.session.path)[:8]
@@ -870,7 +943,9 @@ class Cockpit(App):
 
     # ---- command palette ----
     def get_system_commands(self, screen):
-        yield from super().get_system_commands(screen)
+        for command in super().get_system_commands(screen):
+            if command.title != "Theme":
+                yield command
         yield SystemCommand("Observe", "Attention queue + next human decision",
                             self.action_observe)
         yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
@@ -881,6 +956,8 @@ class Cockpit(App):
         yield SystemCommand("Resume", "Browse resumable cockpit sessions", self.action_history)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
+        yield SystemCommand("Cockpit Theme", "Switch curated cockpit palette",
+                            self.action_theme)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
 
     # ---- render helpers ----
@@ -1196,6 +1273,13 @@ class Cockpit(App):
             self._refresh_scope_view()
             self.notify(str(out).splitlines()[0], severity="information")
             return
+        if low == "/theme" or low.startswith("/theme "):
+            arg = cmd.strip()[6:].strip().lower()
+            if arg:
+                self._set_theme(arg)
+            else:
+                self.action_theme()
+            return
         if low == "/scope" or low.startswith("/scope "):
             arg = cmd.strip()[6:].strip()
             if arg:
@@ -1378,6 +1462,37 @@ class Cockpit(App):
         chosen = await self.push_screen_wait(Picker("switch backend", opts))
         if chosen:
             self._set_backend(chosen)
+
+    def action_change_theme(self) -> None:
+        self.action_theme()
+
+    @work
+    async def action_theme(self):
+        opts = []
+        for name in COCKPIT_THEME_NAMES:
+            spec = COCKPIT_THEME_SPECS[name]
+            mark = "  ✓" if name == self.theme else ""
+            opts.append((f"{spec['label']:<10} · {spec['description']}{mark}", name))
+        chosen = await self.push_screen_wait(Picker("switch cockpit theme", opts))
+        if chosen:
+            self._set_theme(chosen)
+
+    def _sync_rich_palette(self) -> None:
+        global _PAL, _VERDICT_HEX
+        _PAL = _rich_palette(self.theme)
+        _VERDICT_HEX = _verdict_palette(self.theme)
+
+    def _set_theme(self, name: str) -> None:
+        if name not in COCKPIT_THEME_SPECS:
+            self.notify(f"unknown theme {name!r}", severity="warning")
+            return
+        self.theme = name
+        self._sync_rich_palette()
+        self._rebuild_timeline()
+        self._update_header()
+        self._update_status()
+        label = COCKPIT_THEME_SPECS[name]["label"]
+        self.notify(f"theme → {label}", severity="information")
 
     def _set_backend(self, name):
         try:

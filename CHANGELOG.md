@@ -16,6 +16,12 @@
 - Pressing Enter on an open slash-command suggestion now accepts the highlighted
   command; Tab completion is optional.
 
+**Cockpit theme polish**
+- Replaced Textual's generic theme picker with a curated cockpit palette
+  switcher: `cockpit`, `graphite`, `signal`, and `daybreak`.
+- Added `/theme` and a `Cockpit Theme` command palette action.
+- Added `CC_COPILOT_THEME` for selecting the startup palette.
+
 ## 0.6.0 — 2026-06-07
 
 **Cockpit Sessions**

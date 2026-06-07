@@ -243,6 +243,19 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         sess.scope_sessions = ["a"]
         self.assertEqual(tui._session_selection_ids(sess, refs), ["a"])
 
+    async def test_theme_surface_is_curated(self):
+        self.assertEqual(tui.COCKPIT_THEME_NAMES,
+                         ("cockpit", "graphite", "signal", "daybreak"))
+        self.assertIn("/theme", [name for name, *_ in tui._SLASH_CMDS])
+        self.assertEqual(tui._theme_name("Graphite"), "graphite")
+        self.assertEqual(tui._theme_name("nope"), "cockpit")
+        for name in tui.COCKPIT_THEME_NAMES:
+            spec = tui.COCKPIT_THEME_SPECS[name]
+            for key in ("primary", "secondary", "accent", "foreground",
+                        "background", "surface", "panel", "success",
+                        "warning", "error", "muted"):
+                self.assertIn(key, spec)
+
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
@@ -379,6 +392,24 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app._slash_open)           # /scope is hidden in TUI
             comp.text = "hello"; app._slash_update()
             self.assertFalse(app._slash_open)           # non-slash text hides it
+
+    async def test_theme_switcher_is_cockpit_curated(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+            self.assertIn("Cockpit Theme", titles)
+            self.assertNotIn("Theme", titles)
+
+            app._meta("/theme graphite")
+            await pilot.pause()
+            self.assertEqual(app.theme, "graphite")
+            self.assertEqual(tui._PAL["bg"],
+                             tui.COCKPIT_THEME_SPECS["graphite"]["background"])
+            app._meta("/theme signal")
+            await pilot.pause()
+            self.assertEqual(app.theme, "signal")
 
     async def test_scope_command_updates_status(self):
         from textual.widgets import Static

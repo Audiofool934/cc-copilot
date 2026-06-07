@@ -340,10 +340,14 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 
 In-cockpit: `Enter` send · `/` suggestions (`Enter` accepts, `Tab` completes) ·
 `/help` · `/observe` `/brief` `/check` `/diff` (LLM-free) · `/sessions`
-checkbox evidence picker · `/resume` · `/new` · `/model <name>` · `Ctrl+R`
-refresh · `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved
-verbatim in the log — the faithfulness guarantee holds in the TUI exactly as in
-the CLI.
+checkbox evidence picker · `/resume` · `/new` · `/model <name>` · `/theme` ·
+`Ctrl+R` refresh · `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are
+preserved verbatim in the log — the faithfulness guarantee holds in the TUI
+exactly as in the CLI.
+
+The cockpit ships a small curated palette set (`cockpit`, `graphite`, `signal`,
+`daybreak`) instead of exposing Textual's generic theme catalogue. Set
+`CC_COPILOT_THEME=graphite` to choose a startup default.
 
 **Your Cockpit Sessions persist.** Each cockpit is saved locally with its Q&A and
 evidence selection, so changing evidence sessions does not wipe or swap the chat.
