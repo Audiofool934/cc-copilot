@@ -2,6 +2,15 @@
 
 ## 0.2.1 (unreleased)
 
+**Rewind** (Codex-style, conversation-only)
+- Fork the copilot chat from an earlier message: **Esc on an empty composer** (or
+  `/rewind`, the palette, `Ctrl+P`) opens a picker of your prior questions; choosing
+  one discards it and everything after, truncates the saved history to match, and
+  reloads that message into the composer to edit and re-ask. REPL: `/rewind` lists,
+  `/rewind <n>` forks. Because cc-copilot is read-only on the agent, rewind only
+  affects *your* conversation — never the observed agent's code (the same scope as
+  Codex's Esc-rewind). Backed by `Store.truncate(n)` (atomic, under the lock).
+
 **Cockpit fixes from real-world testing**
 - **Multi-character CJK / IME input** no longer garbles. The Kitty keyboard
   protocol's "associated text" feature encoded pinyin-committed text as

@@ -215,6 +215,23 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.history, [])
         self.assertEqual(sess.store.load_history(), [])
 
+    async def test_rewind_forks_conversation(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for i in range(3):
+                app._answer_done(f"q{i}", f"a{i} [L1]", True,
+                                 app.session.st, app.session.store)
+                await pilot.pause()
+            app._rewind_to(1)                           # fork before message #2
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            self.assertEqual(comp.text, "q1")           # forked message reloaded
+        self.assertEqual(sess.history, [("user", "q0"), ("assistant", "a0 [L1]")])
+        self.assertEqual(sess.store.load_history(),
+                         [("user", "q0"), ("assistant", "a0 [L1]")])
+
     async def test_answer_done_records_once(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)

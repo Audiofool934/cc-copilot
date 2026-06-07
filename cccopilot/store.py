@@ -308,6 +308,44 @@ class Store:
         except OSError:
             return False
 
+    def truncate(self, n: int) -> bool:
+        """Keep only the first ``n`` turns (drop the rest) — for rewind/fork.
+        Rewrites the log atomically under the lock and refreshes the meta cache."""
+        if not self.enabled or not os.path.isfile(self.turns_path):
+            return False
+        try:
+            fd = os.open(self.turns_path, os.O_RDWR, 0o600)
+            with os.fdopen(fd, "r+", encoding="utf-8", errors="replace", newline="") as fh:
+                with _locked(fh):
+                    fh.seek(0)
+                    head_line, turns = None, []
+                    for line in fh:
+                        obj = _parse(line)
+                        if obj is None:
+                            continue
+                        nl = line if line.endswith("\n") else line + "\n"
+                        if obj.get("kind") == "head" and head_line is None:
+                            head_line = nl
+                        elif obj.get("kind") == "turn":
+                            turns.append((nl, obj))
+                    kept = turns[:max(0, n)]
+                    tmp = self.turns_path + ".tmp"
+                    tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(tfd, "w", encoding="utf-8", newline="") as tf:
+                        if head_line:
+                            tf.write(head_line)
+                        tf.writelines(nl for nl, _ in kept)
+                        tf.flush()
+                        os.fsync(tf.fileno())
+                    os.replace(tmp, self.turns_path)
+                    _fsync_dir(self.dir)
+                    last = kept[-1][1] if kept else {}
+                    self._write_meta(len(kept), last.get("q", ""), last.get("a", ""),
+                                     last.get("backend"), last.get("model"))
+            return True
+        except (OSError, ValueError):
+            return False
+
     def header(self) -> "ConvHeader | None":
         d = _read_json(self.meta_path)
         if d is None:

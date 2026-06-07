@@ -35,6 +35,7 @@ _HELP = """commands (all but questions are LLM-free):
   /history this     past copilot conversations in this project
   /history all      past copilot conversations across every project
   /forget           delete THIS conversation's saved history
+  /rewind [n]       fork from an earlier message (list, or re-ask #n)
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
 anything else → a question answered grounded in the live session state."""
@@ -201,6 +202,23 @@ class ChatSession:
             self.store.delete()
             self.history = []
             return "forgot this conversation's saved history"
+        if c == "/rewind" or c.startswith("/rewind "):
+            qs = [t for r, t in self.history if r == "user"]
+            if not qs:
+                return "(nothing to rewind — no questions yet)"
+            arg = c[7:].strip()
+            if not arg.isdigit():
+                lines = ["rewind to which message?  `/rewind <n>` re-asks it:"]
+                lines += [f"  {i}. {q[:60]}" for i, q in enumerate(qs, 1)]
+                return "\n".join(lines)
+            k = int(arg) - 1
+            if not (0 <= k < len(qs)):
+                return f"no message #{arg} (have 1–{len(qs)})"
+            question = qs[k]
+            self.history = self.history[:2 * k]
+            self.store.truncate(k)
+            return (f"rewound to before message #{k + 1}. Ask it again, edited as you like:\n"
+                    f"  {question}")
         return f"unknown command {cmd!r} — try /help"
 
     # ---- session switching (select among multiple sessions) --------------

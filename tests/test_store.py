@@ -259,6 +259,29 @@ class TestCrashRecovery(_Base):
         self.assertEqual(s.load_history(), [("user", "q"), ("assistant", "a")])
 
 
+class TestTruncate(_Base):
+    def test_truncate_keeps_first_n(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        for i in range(3):
+            s.record_turn(f"q{i}", f"a{i}", st=_St(_Tr()))
+        self.assertTrue(s.truncate(1))
+        self.assertEqual(s.load_history(), [("user", "q0"), ("assistant", "a0")])
+        with open(s.turns_path, encoding="utf-8") as fh:
+            kinds = [json.loads(l)["kind"] for l in fh]
+        self.assertEqual(kinds, ["head", "turn"])           # head preserved, one turn
+        with open(s.meta_path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["turns"], 1)
+
+    def test_truncate_to_zero_clears(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        s.record_turn("q", "a", st=_St(_Tr()))
+        self.assertTrue(s.truncate(0))
+        self.assertEqual(s.load_history(), [])
+        # and we can keep appending afterward (fork continues cleanly)
+        s.record_turn("q2", "a2", st=_St(_Tr()))
+        self.assertEqual(s.load_history(), [("user", "q2"), ("assistant", "a2")])
+
+
 class TestDurability(_Base):
     def test_fsync_called_for_log_and_meta(self):
         calls = []

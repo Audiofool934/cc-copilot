@@ -95,6 +95,26 @@ class TestRestore(_StateHome):
         self.assertIsNone(live.st)
         self.assertEqual(len(live.history), 2)          # still viewable
 
+    def test_rewind_truncates_and_persists(self):
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False)
+        s.answer("q0"); s.answer("q1"); s.answer("q2")
+        out = s.meta("/rewind 2")                        # re-ask message #2 (keep turn 0)
+        self.assertIn("rewound", out)
+        self.assertIn("q1", out)
+        self.assertEqual([t for r, t in s.history if r == "user"], ["q0"])
+        # persisted across a fresh session
+        fresh = C.ChatSession(a, alerts=False)
+        self.assertEqual([t for r, t in fresh.history if r == "user"], ["q0"])
+
+    def test_rewind_lists_without_arg(self):
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False)
+        s.answer("first question"); s.answer("second question")
+        out = s.meta("/rewind")
+        self.assertIn("1. first question", out)
+        self.assertIn("2. second question", out)
+
     def test_history_only_refresh_does_not_raise(self):
         a = _tx("sess-A")
         s = C.ChatSession(a, alerts=False)

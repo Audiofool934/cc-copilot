@@ -75,6 +75,7 @@ _HELP_TEXT = (
     "  /brief /check /diff     recap · safety · changes (LLM-free)\n"
     "  /sessions               switch which session you observe   (Ctrl+S)\n"
     "  /history                browse & restore past conversations (Ctrl+H)\n"
+    "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
     "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+C quit")
@@ -88,6 +89,7 @@ _SLASH_CMDS = [
     ("/history", "browse & reopen saved copilot conversations", False),
     ("/model", "switch the LLM backend", True),
     ("/use", "switch observed session by number / id", True),
+    ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
     ("/forget", "delete THIS conversation's saved history", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
@@ -121,6 +123,13 @@ class Composer(TextArea):
                 event.prevent_default(); event.stop(); app._slash_complete(); return
             if event.key == "escape":
                 event.prevent_default(); event.stop(); app._slash_hide(); return
+        # Esc on an empty composer rewinds the conversation (Codex-style): fork
+        # from an earlier message. Only when there's something to rewind to.
+        if (event.key == "escape" and not self.text.strip()
+                and any(r == "user" for r, _ in app.session.history)):
+            event.prevent_default(); event.stop()
+            app.action_rewind()
+            return
         # Enter submits. Shift+Enter / Ctrl+J insert a newline (TextArea's own
         # newline is bound to plain Enter, which we've taken for submit, so we
         # have to insert it ourselves). Everything else — including all CJK /
@@ -360,6 +369,7 @@ class Cockpit(App):
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
         yield SystemCommand("Sessions", "Pick a session to observe", self.action_sessions)
         yield SystemCommand("History", "Browse past copilot conversations", self.action_history)
+        yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
 
@@ -540,6 +550,8 @@ class Cockpit(App):
             self.action_clear_chat(); return
         if low == "/forget":
             self.action_forget(); return
+        if low == "/rewind":
+            self.action_rewind(); return
         if low.startswith("/use"):
             out = self.session.meta(cmd)
             self.notify(str(out).splitlines()[0])
@@ -640,6 +652,39 @@ class Cockpit(App):
             self._update_status()
             self.notify(("→ " if live else "history-only → ") + chosen.conv_id[:8],
                         severity="information" if live else "warning")
+
+    @work
+    async def action_rewind(self):
+        hist = self.session.history
+        qs = [t for r, t in hist if r == "user"]
+        if not qs:
+            self.notify("nothing to rewind — no questions yet"); return
+        opts = []
+        for k, q in enumerate(qs):
+            ans = hist[2 * k + 1][1] if 2 * k + 1 < len(hist) else ""
+            label = f"#{k + 1}  {q[:46]}" + (f"   → {ans[:26]}" if ans else "")
+            opts.append((label, k))
+        opts.reverse()                                  # newest first
+        chosen = await self.push_screen_wait(
+            Picker("rewind — fork from an earlier message (re-asks it)", opts))
+        if chosen is not None:
+            self._rewind_to(chosen)
+
+    def _rewind_to(self, k):
+        # keep turns [0, k); drop message k and everything after; re-load it for editing
+        hist = self.session.history
+        qs = [t for r, t in hist if r == "user"]
+        if not (0 <= k < len(qs)):
+            return
+        question = qs[k]
+        self.session.history = hist[:2 * k]             # turns are user/assistant pairs
+        self.session.store.truncate(k)                  # persist the fork
+        self._rebuild_chat()
+        comp = self.query_one("#composer", Composer)
+        comp.text = question
+        comp.move_cursor(comp.document.end)
+        comp.focus()
+        self.notify(f"rewound to message #{k + 1} — edit & Enter to re-ask")
 
     @work
     async def action_model(self):
