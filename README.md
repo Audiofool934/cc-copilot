@@ -556,6 +556,11 @@ already supports this), a live `watch` + narrate loop, and other agents (Codex,
 Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
 Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 
+Rust migration is documented as a deferred architecture decision in
+[docs/rust-migration.md](docs/rust-migration.md). Current guidance: keep
+iterating in Python/Textual until the cockpit interaction model stabilizes; if
+we later need a native TUI rewrite, prefer Rust + Ratatui/crossterm.
+
 ## Development
 
 ```bash
