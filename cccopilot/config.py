@@ -57,11 +57,13 @@ def path() -> str:
 
 
 def _load_simple(p: str) -> dict:
-    """Minimal fallback parser (key = "value", [env] sections, # comments) for
-    Pythons without ``tomllib``."""
-    data, env, section = {}, {}, None
+    """Minimal fallback parser (key = "value", [tables], # comments) for Pythons
+    without ``tomllib``. Every ``[section]`` nests into its own dict, so e.g.
+    ``[history] enabled = false`` reads back as ``data["history"]["enabled"]``."""
+    data, section = {}, None
     try:
-        lines = open(p, encoding="utf-8").read().splitlines()
+        with open(p, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
     except OSError:
         return {}
     for raw in lines:
@@ -70,6 +72,7 @@ def _load_simple(p: str) -> dict:
             continue
         if s.startswith("[") and s.endswith("]"):
             section = s[1:-1].strip()
+            data.setdefault(section, {})
             continue
         if "=" not in s:
             continue
@@ -77,9 +80,8 @@ def _load_simple(p: str) -> dict:
         k, v = k.strip(), v.strip().strip('"').strip("'")
         if v.lower() in ("true", "false"):
             v = v.lower() == "true"
-        (env if section == "env" else data)[k] = v
-    if env:
-        data["env"] = env
+        target = data[section] if section is not None else data
+        target[k] = v
     return data
 
 

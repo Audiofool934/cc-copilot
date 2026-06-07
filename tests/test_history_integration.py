@@ -150,6 +150,15 @@ class TestConfigToggle(unittest.TestCase):
         os.environ.pop("CC_COPILOT_HISTORY", None)
         self.assertTrue(CFG.history_enabled())
 
+    def test_fallback_parser_nests_sections(self):
+        # the py<3.11 path (no tomllib) must nest [history] like tomllib does
+        self.cfg.write("backend = \"codex\"\n[history]\nenabled = false\n"
+                       "[env]\nK = \"v\"\n"); self.cfg.close()
+        d = CFG._load_simple(self.cfg.name)
+        self.assertEqual(d["backend"], "codex")
+        self.assertEqual(d["history"], {"enabled": False})
+        self.assertEqual(d["env"], {"K": "v"})
+
 
 class TestCliHistory(_StateHome):
     def test_history_command_lists(self):
