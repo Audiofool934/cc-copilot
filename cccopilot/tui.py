@@ -33,7 +33,8 @@ except ImportError:
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
         "(or: pip install 'cc-copilot[tui]')")
 
-from . import transcript as T, state as S, assess as A, narrate as N, backends as BK
+from . import (transcript as T, state as S, assess as A, narrate as N,
+               backends as BK, store as ST)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -63,6 +64,7 @@ _HELP_TEXT = (
     "commands (also in the command palette, Ctrl+P):\n"
     "  /brief /check /diff     recap · safety · changes (LLM-free)\n"
     "  /sessions               switch which session you observe   (Ctrl+S)\n"
+    "  /history                browse & restore past conversations (Ctrl+H)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /quit\n"
     "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+C quit")
@@ -80,8 +82,10 @@ class Composer(TextArea):
                          tab_behavior="focus", **kw)
 
     async def _on_key(self, event: events.Key) -> None:
-        # Enter submits; everything else (incl. Shift+Enter / Ctrl+J for a
-        # newline, and all typing) falls through to TextArea's own handler.
+        # Enter submits. Shift+Enter / Ctrl+J insert a newline (TextArea's own
+        # newline is bound to plain Enter, which we've taken for submit, so we
+        # have to insert it ourselves). Everything else — including all CJK /
+        # multilingual typing — falls through to TextArea's handler.
         if event.key == "enter":
             event.prevent_default()
             event.stop()
@@ -89,6 +93,11 @@ class Composer(TextArea):
             self.text = ""
             if text:
                 self.post_message(self.Submitted(text))
+            return
+        if event.key in ("shift+enter", "ctrl+j"):
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
             return
         await super()._on_key(event)
 
@@ -173,6 +182,7 @@ class Cockpit(App):
         Binding("ctrl+l", "clear_chat", "clear"),
         Binding("ctrl+s", "sessions", "sessions"),
         Binding("ctrl+t", "model", "model"),
+        Binding("ctrl+h", "history", "history"),
     ]
 
     def __init__(self, session, poll=5, alerts=True):
@@ -187,9 +197,16 @@ class Cockpit(App):
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="timeline"):
-            yield Static("agent timeline — window-1", id="timeline-title")
-        yield VerticalScroll(id="chat")
+        timeline = VerticalScroll(
+            Static("agent timeline — window-1", id="timeline-title"), id="timeline")
+        chat = VerticalScroll(id="chat")
+        # The timeline and chat are display-only. Keep them out of the focus
+        # chain so a click (or Tab) can never strand focus on a scroll pane —
+        # that used to leave typed / IME (e.g. Chinese) input with no target.
+        # Mouse-wheel scrolling still works without focus.
+        timeline.can_focus = chat.can_focus = False
+        yield timeline
+        yield chat
         yield Static("", id="status")
         yield Composer(id="composer")
         yield Footer()
@@ -203,6 +220,7 @@ class Cockpit(App):
         self._chat(self._role(Text(f"attached to {os.path.basename(self.session.path)} · "
                                    f"backend {N.backend_name(self.backend).split(' (')[0]}",
                                    "dim"), "role-event"))
+        self._rebuild_chat(clear=False)        # repaint any restored prior dialogue
         if not N.available(self.backend):
             self.notify("backend unavailable — /model to switch", severity="warning")
         self._update_status()
@@ -216,6 +234,25 @@ class Cockpit(App):
     def on_unmount(self):
         self._watch_stop.set()
 
+    # ---- focus: a click anywhere (or re-entering the app) lands on the
+    #      composer, so the user never has to aim at the box, and IME /
+    #      multilingual typing always has somewhere to go. ----
+    def _focus_composer(self) -> None:
+        if len(self.screen_stack) > 1:
+            return  # a modal picker / palette is up — don't steal its focus
+        try:
+            composer = self.query_one("#composer", Composer)
+        except Exception:
+            return
+        if not composer.has_focus:
+            composer.focus()
+
+    def on_click(self, event: events.Click) -> None:
+        self._focus_composer()
+
+    def on_app_focus(self, event: events.AppFocus) -> None:
+        self._focus_composer()
+
     # ---- command palette ----
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
@@ -223,6 +260,7 @@ class Cockpit(App):
         yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
         yield SystemCommand("Sessions", "Pick a session to observe", self.action_sessions)
+        yield SystemCommand("History", "Browse past copilot conversations", self.action_history)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
 
@@ -241,10 +279,38 @@ class Cockpit(App):
         tl.mount(Static(renderable, classes=cls))
         tl.scroll_end(animate=False)
 
+    def _rebuild_chat(self, clear=True):
+        """Repaint the chat pane from the session's (possibly restored) history,
+        the SAME way live turns render — so switching/relaunching shows prior
+        dialogue instead of losing it. Markdown re-render keeps [L…] citations."""
+        chat = self.query_one("#chat", VerticalScroll)
+        if clear:
+            chat.remove_children()
+        hist = self.session.history
+        if hist:
+            n = len(hist) // 2
+            chat.mount(self._role(
+                Text(f"── restored {n} prior turn{'s' if n != 1 else ''} ──", "dim"),
+                "role-event"))
+            for role, txt in hist:
+                if role == "user":
+                    chat.mount(self._role(Text("› " + txt, style="bold"), "role-user"))
+                else:
+                    chat.mount(Markdown(txt, classes="role-assistant"))
+        chat.scroll_end(animate=False)
+
     def _update_status(self):
         st = self.session.st
-        a = A.assess(st)
         t = Text()
+        if st is None:                         # history-only (transcript gone)
+            t.append(" ⌁ history-only ", style="bold")
+            t.append(" transcript gone ", style=f"bold {_PAL['bg']} on {_PAL['warning']}")
+            t.append("  ")
+            be = N.backend_name(self.backend).split(" (")[0]
+            t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
+            self.query_one("#status", Static).update(t)
+            return
+        a = A.assess(st)
         t.append(f" {_STATUS_GLYPH.get(st.status, '·')} {st.status} ", style="bold")
         t.append("  ")
         t.append(f" {a.verdict.upper()} ",
@@ -269,29 +335,45 @@ class Cockpit(App):
         if self._busy:
             self.notify("still answering the previous question", severity="warning")
             return
+        if self.session.st is None:
+            self.notify("history-only view (transcript gone) — /sessions to attach a "
+                        "live session", severity="warning")
+            return
         if not N.available(self.backend):
             self.notify("no backend — /model to switch", severity="error")
             return
         self.session.refresh()
         self._busy = True
         self._update_status()
-        self._answer(text, self.session.st, list(self.session.history))
+        # Capture the originating conversation (store + state). If the user
+        # switches sessions before the backend returns, the answer is recorded
+        # against the session it was ASKED in — not whatever is current now.
+        self._answer(text, self.session.st, list(self.session.history),
+                     self.session.store)
 
     @work(thread=True)
-    def _answer(self, text, st, history):
+    def _answer(self, text, st, history, store):
         try:
             ans, ok = N.chat(st, history, text, model=self.model, backend=self.backend), True
         except Exception as e:
             ans, ok = f"# error: {e}", False
-        self.call_from_thread(self._answer_done, text, ans, ok)
+        self.call_from_thread(self._answer_done, text, ans, ok, st, store)
 
-    def _answer_done(self, text, ans, ok):
+    def _answer_done(self, text, ans, ok, st, store):
         self._busy = False
+        same = store is self.session.store     # still on the originating conversation?
         if ok:
-            self.session.history.append(("user", text))
-            self.session.history.append(("assistant", ans))
-            self._chat(Markdown(ans, classes="role-assistant"))
-        else:
+            # the cockpit's single durable write-site (the REPL has its own in
+            # ChatSession.answer); _answer runs on a worker thread, hence here.
+            # Persist to the originating store, even if the user has switched away.
+            store.record_turn(text, ans, st=st, backend=self.backend, model=self.model)
+            if same:
+                self.session.history.append(("user", text))
+                self.session.history.append(("assistant", ans))
+                self._chat(Markdown(ans, classes="role-assistant"))
+            # if switched away: the turn is safe on disk and reappears on return,
+            # so we don't render it into the now-current (different) conversation.
+        elif same:
             self._chat(self._role(Text(ans, style=_PAL["error"]), "role-alert"))
         self._update_status()
 
@@ -343,6 +425,8 @@ class Cockpit(App):
             self.action_diff(); return
         if low in ("/sessions", "/session"):
             self.action_sessions(); return
+        if low == "/history" or low.startswith("/history"):
+            self.action_history(); return
         if low == "/model" or low.startswith("/model "):
             arg = cmd.strip()[6:].strip()
             if arg:
@@ -354,7 +438,9 @@ class Cockpit(App):
             self.action_refresh_now(); return
         if low.startswith("/use"):
             out = self.session.meta(cmd)
-            self.notify(str(out).splitlines()[0]); self._update_status(); return
+            self.notify(str(out).splitlines()[0])
+            self._rebuild_chat()       # restore the switched-to session's dialogue
+            self._update_status(); return
         self.notify(f"unknown command {cmd!r}", severity="warning")
 
     def _collapsible(self, title, body):
@@ -379,18 +465,31 @@ class Cockpit(App):
             t.append(f"\n  ✗ {f.tool} [L{f.line}]: {f.summary[:70]}", style=_PAL["error"])
         return t
 
+    def _no_live(self) -> bool:
+        if self.session.st is None:        # history-only (transcript gone)
+            self.notify("history-only view — /sessions to attach a live session",
+                        severity="warning")
+            return True
+        return False
+
     def action_brief(self):
         self.session.refresh()
+        if self._no_live():
+            return
         self._collapsible("/brief — recap", B_render(self.session.st))
         self._update_status()
 
     def action_check(self):
         self.session.refresh()
+        if self._no_live():
+            return
         self._collapsible("/check — safety", _check_text(self.session.st))
         self._update_status()
 
     def action_diff(self):
         self.session.refresh()
+        if self._no_live():
+            return
         self._collapsible("/diff — changes since last turn",
                           self._diff_renderable(S.diff(self.session.prev, self.session.st)))
 
@@ -406,10 +505,35 @@ class Cockpit(App):
             opts.append((f"{os.path.basename(p)[:-6][:8]}  {kb} KB{cur}", p))
         chosen = await self.push_screen_wait(Picker("switch session", opts))
         if chosen:
-            self.session.switch_path(chosen)
-            self.query_one("#chat", VerticalScroll).remove_children()
+            self.session.switch_path(chosen)   # restores chosen session's history
+            self._rebuild_chat()               # repaint it (the old data-loss site)
+            self.sub_title = os.path.basename(chosen)[:-6][:8]
             self._update_status()
             self.notify(f"→ {os.path.basename(chosen)[:8]}")
+
+    @work
+    async def action_history(self):
+        if not self.session.store.enabled:
+            self.notify("history is off (--no-persist or [history] enabled=false)",
+                        severity="warning")
+            return
+        headers = ST.list_conversations(getattr(self.session, "cwd", None) or None)
+        if not headers:
+            self.notify("no saved copilot conversations yet"); return
+        opts = []
+        for h in headers:
+            gone = "  (gone)" if not h.transcript_present else ""
+            proj = os.path.basename(h.cwd) or "?"
+            opts.append((f"{(h.title or '(untitled)')[:32]:<32} · {h.turns:>2}t · "
+                         f"{h.ago()} · {proj}{gone}", h))
+        chosen = await self.push_screen_wait(Picker("history — past conversations", opts))
+        if chosen:
+            live = self.session.attach_conv(chosen)
+            self._rebuild_chat()
+            self.sub_title = chosen.conv_id[:8]
+            self._update_status()
+            self.notify(("→ " if live else "history-only → ") + chosen.conv_id[:8],
+                        severity="information" if live else "warning")
 
     @work
     async def action_model(self):
@@ -431,9 +555,12 @@ class Cockpit(App):
     def action_refresh_now(self):
         self.session.refresh()
         self._update_status()
-        self.notify("refreshed")
+        self.notify("history-only — no live session" if self.session.st is None
+                    else "refreshed")
 
     def action_clear_chat(self):
+        # Visual only — clears the pane, never the on-disk history. (Don't wire a
+        # store delete here; Ctrl+L is muscle-memory for "tidy the screen".)
         self.query_one("#chat", VerticalScroll).remove_children()
 
 

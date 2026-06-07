@@ -40,6 +40,15 @@ backend = "claude"
 # CC_COPILOT_API_BASE = "http://localhost:11434"
 # CC_COPILOT_API_KEY = "..."
 # CC_COPILOT_MODEL = "qwen2.5"
+
+# Persist your copilot Q&A so switching sessions / relaunching restores prior
+# chats. Stored locally under $CC_COPILOT_STATE_DIR (default ~/.local/state/
+# cc-copilot), dir 0700 / files 0600. These files hold your questions and the
+# copilot's answers in plaintext — set enabled = false to keep everything in
+# memory only. Never written under ~/.claude.
+[history]
+enabled = true
+# dir = "~/.local/state/cc-copilot"   # or set $CC_COPILOT_STATE_DIR
 '''
 
 
@@ -48,11 +57,13 @@ def path() -> str:
 
 
 def _load_simple(p: str) -> dict:
-    """Minimal fallback parser (key = "value", [env] sections, # comments) for
-    Pythons without ``tomllib``."""
-    data, env, section = {}, {}, None
+    """Minimal fallback parser (key = "value", [tables], # comments) for Pythons
+    without ``tomllib``. Every ``[section]`` nests into its own dict, so e.g.
+    ``[history] enabled = false`` reads back as ``data["history"]["enabled"]``."""
+    data, section = {}, None
     try:
-        lines = open(p, encoding="utf-8").read().splitlines()
+        with open(p, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
     except OSError:
         return {}
     for raw in lines:
@@ -61,6 +72,7 @@ def _load_simple(p: str) -> dict:
             continue
         if s.startswith("[") and s.endswith("]"):
             section = s[1:-1].strip()
+            data.setdefault(section, {})
             continue
         if "=" not in s:
             continue
@@ -68,9 +80,8 @@ def _load_simple(p: str) -> dict:
         k, v = k.strip(), v.strip().strip('"').strip("'")
         if v.lower() in ("true", "false"):
             v = v.lower() == "true"
-        (env if section == "env" else data)[k] = v
-    if env:
-        data["env"] = env
+        target = data[section] if section is not None else data
+        target[k] = v
     return data
 
 
@@ -108,6 +119,30 @@ def apply_defaults(args) -> None:
     # model: a plain default when --model wasn't passed.
     if hasattr(args, "model") and getattr(args, "model", None) is None and data.get("model"):
         args.model = str(data["model"])
+    # state dir: surface [history].dir as CC_COPILOT_STATE_DIR (mirrors backend).
+    if not os.environ.get("CC_COPILOT_STATE_DIR"):
+        h = data.get("history")
+        d = h.get("dir") if isinstance(h, dict) else None
+        if d:
+            os.environ["CC_COPILOT_STATE_DIR"] = os.path.expanduser(str(d))
+    # persist: fill the chat/cockpit toggle from [history].enabled when unset.
+    if hasattr(args, "persist") and getattr(args, "persist", None) is None:
+        args.persist = history_enabled()
+
+
+def history_enabled() -> bool:
+    """Whether to persist copilot conversations. Env wins, then the file, then on.
+
+    ``CC_COPILOT_HISTORY=0|false|no|off`` (or empty) forces it off for a single
+    invocation; otherwise ``[history].enabled`` from the config decides; default on.
+    """
+    env = os.environ.get("CC_COPILOT_HISTORY")
+    if env is not None:
+        return env.strip().lower() not in ("0", "false", "no", "off", "")
+    h = load().get("history")
+    if isinstance(h, dict) and "enabled" in h:
+        return bool(h["enabled"])
+    return True
 
 
 def init_file() -> str:

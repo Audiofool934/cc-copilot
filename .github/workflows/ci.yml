@@ -17,9 +17,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Unit tests (stdlib only)
         run: python -m unittest discover -s tests -t .
+      - name: Unit tests under C locale (UTF-8 locale independence)
+        run: LC_ALL=C LANG=C python -m unittest discover -s tests -t .
       - name: Zero-dependency import smoke
         run: python -c "import cccopilot.cli; print('core/CLI imports on stdlib alone')"
-      - name: Cockpit imports with the optional extra
+      - name: Cockpit import + full suite with the optional extra
         run: |
           python -m pip install --quiet textual
           python -c "import cccopilot.tui; print('cockpit (textual) imports')"
+          python -m unittest discover -s tests -t .

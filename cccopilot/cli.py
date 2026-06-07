@@ -113,6 +113,28 @@ def cmd_sessions(args) -> int:
     return 0
 
 
+def cmd_history(args) -> int:
+    from . import store as ST
+    if not ST.enabled():
+        print("history is disabled (set [history] enabled = true in ~/.cc-copilot.toml, "
+              "or unset CC_COPILOT_HISTORY)")
+        return 1
+    cwd = None if getattr(args, "all", False) else (args.cwd or os.getcwd())
+    headers = ST.list_conversations(cwd)
+    if not headers:
+        scope = "any project" if cwd is None else cwd
+        print(f"(no saved copilot conversations for {scope})\n  history dir: {ST.state_home()}")
+        return 1
+    scope = "all projects" if cwd is None else cwd
+    print(f"saved copilot conversations — {scope}  ({len(headers)}):")
+    for h in headers:
+        gone = "  (transcript gone)" if not h.transcript_present else ""
+        proj = os.path.basename(h.cwd) or "?"
+        print(f"  {h.conv_id[:8]}  {locate.ago(h.updated):>5} ago  {h.turns:>3}t  "
+              f"{(h.title or '(untitled)')[:40]:<40}  {proj}{gone}")
+    return 0
+
+
 def _load(args):
     path = _resolve_or_die(args)
     tr = T.parse(path)
@@ -261,6 +283,7 @@ def cmd_chat(args) -> int:
         backend=getattr(args, "backend", None),
         alerts=not getattr(args, "no_alerts", False),
         poll=getattr(args, "poll", 5),
+        persist=getattr(args, "persist", None) is not False,  # None/True persist; False off
     )
     if getattr(args, "tui", False):
         from . import tui
@@ -348,6 +371,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="show cc-copilot's own narration sessions instead of hiding them")
     sp.set_defaults(func=cmd_sessions)
 
+    sp = sub.add_parser("history", help="list saved copilot conversations (newest first)")
+    common(sp)
+    sp.add_argument("--all", action="store_true",
+                    help="every project's conversations, not just this cwd's")
+    sp.set_defaults(func=cmd_history)
+
     sp = sub.add_parser("status", aliases=["fleet"],
                         help="overview of ALL sessions in a project (status + safety), neediest first")
     common(sp)
@@ -407,6 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--backend", help="LLM backend (codex/claude/deepseek/ollama/…)")
         sp.add_argument("--no-alerts", action="store_true",
                         help="disable the background stall/off-track alert thread")
+        sp.add_argument("--no-persist", dest="persist", action="store_false", default=None,
+                        help="don't save/restore this chat's history (in-memory only)")
         sp.add_argument("--poll", type=int, default=5,
                         help="alert poll interval in seconds (default 5)")
 

@@ -129,7 +129,7 @@ def _flatten_content(content: Any) -> str:
                 elif b.get("type") == "image":
                     out.append("[image]")
                 else:
-                    out.append(json.dumps(b)[:200])
+                    out.append(json.dumps(b, ensure_ascii=False)[:200])
             else:
                 out.append(str(b))
         return "\n".join(out)

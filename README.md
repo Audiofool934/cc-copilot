@@ -96,6 +96,7 @@ cc-copilot cockpit                  # ⭐ full-screen TUI cockpit (needs cc-copi
 cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
+cc-copilot history                  # saved copilot conversations (--all = every project)
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
 cc-copilot check                    # just the "is it safe to continue?" verdict
 cc-copilot ask "did it drift?"      # one-shot grounded Q&A over the session state
@@ -190,7 +191,9 @@ Claude Code's Ink UI: a **reactive header** (status · safety verdict · backend
 · idle), a **scrolling log** that interleaves window-1's live timeline with your
 chat, a **background watcher** that pushes stall/off-track alerts as the agent
 works, and **off-thread backend turns** so it never freezes. Default backend is
-**codex** (ChatGPT OAuth); `/model <name>` swaps it live.
+**codex** (ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus
+the composer, which takes full multilingual input (CJK / emoji); `Shift+Enter`
+(or `Ctrl+J`) inserts a newline, `Enter` sends.
 
 ```bash
 cc-copilot cockpit            # just run it — first launch auto-installs the TUI
@@ -200,9 +203,17 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 ```
 
 In-cockpit: `Enter` send · `/help` · `/brief` `/check` `/diff` (LLM-free) ·
-`/sessions` `/use <n|id>` · `/model <name>` · `Ctrl+R` refresh · `Ctrl+L` clear ·
-`Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log — the
-faithfulness guarantee holds in the TUI exactly as in the CLI.
+`/sessions` `/use <n|id>` · `/history` (Ctrl+H) · `/model <name>` · `Ctrl+R` refresh ·
+`Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
+— the faithfulness guarantee holds in the TUI exactly as in the CLI.
+
+**Your chat persists.** Each conversation is saved locally, keyed to the observed
+session, so switching sessions (or relaunching) restores its prior dialogue instead
+of losing it. `Ctrl+H` / `/history` browses and re-opens past conversations — even if
+the underlying transcript is gone (read-only view). It's stored under
+`$CC_COPILOT_STATE_DIR` (default `~/.local/state/cc-copilot`, never under `~/.claude`),
+dirs `0700` / files `0600`; opt out with `--no-persist`, `[history] enabled = false`,
+or `CC_COPILOT_HISTORY=0`.
 
 The core and the plain `cc-copilot chat` REPL stay **zero-dependency**; Textual is
 lazy-imported only by the cockpit, and `python -c "import cccopilot.cli"` works on
