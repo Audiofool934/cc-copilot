@@ -34,6 +34,23 @@ def _tui_importable() -> bool:
     return importlib.util.find_spec("textual") is not None
 
 
+def _setup_troubleshooting() -> str:
+    return (
+        "cc-copilot setup: could not install Textual.\n"
+        "\n"
+        "On Debian/Ubuntu minimal Python installs, venv support is often split out:\n"
+        "  sudo apt-get update && sudo apt-get install -y python3-venv python3-pip\n"
+        "  cc-copilot setup\n"
+        "\n"
+        "If you cannot use sudo, install Textual into your current/user Python instead:\n"
+        "  python3 -m pip install --user 'textual>=2.0'\n"
+        "\n"
+        "Or install cc-copilot with the TUI extra:\n"
+        "  python3 -m pip install --user "
+        "\"cc-copilot[tui] @ git+https://github.com/Audiofool934/cc-copilot.git\"\n"
+    )
+
+
 def _ensure_tui_runtime(quiet: bool = False) -> str:
     """Return a python that has Textual — the project .venv, creating it and
     installing the [tui] extra on first use. Returns None on failure."""
@@ -46,6 +63,8 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
         return subprocess.run([py, "-c", "import textual"],
                               capture_output=True).returncode == 0
 
+    if _tui_importable():
+        return sys.executable
     if os.path.isfile(vpy) and has_textual(vpy):
         return vpy
     if not os.path.isfile(vpy):
@@ -55,11 +74,15 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
             venv.create(vdir, with_pip=True)
         except Exception as e:
             sys.stderr.write(f"# venv creation failed: {e}\n")
+            if not quiet:
+                sys.stderr.write(_setup_troubleshooting())
             return None
     if not quiet:
         sys.stderr.write("# cc-copilot: installing the cockpit (textual), one-time …\n")
     r = subprocess.run([vpy, "-m", "pip", "install", "-q", "--upgrade", "textual"])
     if r.returncode != 0 or not has_textual(vpy):
+        if not quiet:
+            sys.stderr.write(_setup_troubleshooting())
         return None
     return vpy
 
@@ -68,8 +91,6 @@ def cmd_setup(args) -> int:
     import subprocess
     vpy = _ensure_tui_runtime()
     if not vpy:
-        sys.stderr.write("cc-copilot setup: could not install textual.\n"
-                         "Try manually:  python3 -m venv .venv && .venv/bin/pip install textual\n")
         return 1
     subprocess.run([vpy, "-c",
                     "import textual; print('cockpit ready · textual', textual.__version__)"])

@@ -119,6 +119,21 @@ First-time cockpit/model setup:
 Use `cc-copilot ...` instead of `./cc-copilot ...` after adding the script to
 your PATH or installing the package.
 
+On fresh Debian/Ubuntu servers, `cc-copilot setup` may ask for Python's venv
+package:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-venv python3-pip
+cc-copilot setup
+```
+
+Without sudo, install the TUI dependency into your user Python instead:
+
+```bash
+python3 -m pip install --user 'textual>=2.0'
+```
+
 The deterministic commands (`brief`, `check`, `observe`, `status`, `sessions`)
 need no model. The conversational commands (`ask`, `chat`, `cockpit` Q&A,
 `brief --narrate`) use the backend configured in `~/.cc-copilot.toml`,
