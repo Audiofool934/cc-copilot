@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (unreleased)
+## 0.3.0 — 2026-06-07
 
 **Rewind** (Codex-style, conversation-only)
 - Fork the copilot chat from an earlier message: **Esc on an empty composer** (or
