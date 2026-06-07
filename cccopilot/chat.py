@@ -17,7 +17,8 @@ import os
 import sys
 import threading
 
-from . import transcript as T, state as S, brief as B, assess as A, narrate as N, locate as LOC
+from . import (transcript as T, state as S, brief as B, assess as A,
+               narrate as N, locate as LOC, store as ST)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -29,8 +30,10 @@ _HELP = """commands (all but questions are LLM-free):
   /refresh          re-read the session now
   /session          which session is attached
   /sessions         list other sessions in this project
-  /use <n|id>       switch to another session (clears chat context)
+  /use <n|id>       switch to another session (restores its prior chat)
   /history          this chat's turns
+  /history this     past copilot conversations in this project
+  /history all      past copilot conversations across every project
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
 anything else → a question answered grounded in the live session state."""
@@ -81,26 +84,47 @@ def _fmt_alert(d) -> str:
     return " · ".join(bits) + tail
 
 
+def _fmt_conv_list(headers, scope="") -> str:
+    """One row per saved copilot conversation (newest first)."""
+    if not headers:
+        where = f" for {scope}" if scope else ""
+        return (f"(no saved copilot conversations{where})\n"
+                f"  history dir: {ST.state_home()}")
+    out = ["saved copilot conversations" + (f" — {scope}" if scope else "")
+           + f"  ({len(headers)}):"]
+    for h in headers:
+        gone = "  (transcript gone)" if not h.transcript_present else ""
+        proj = os.path.basename(h.cwd) or "?"
+        out.append(f"  {h.conv_id[:8]}  {LOC.ago(h.updated):>5} ago  {h.turns:>3}t  "
+                   f"{(h.title or '(untitled)')[:40]:<40}  {proj}{gone}")
+    return "\n".join(out)
+
+
 class ChatSession:
-    def __init__(self, path, model=None, backend=None, alerts=True, poll=5):
+    def __init__(self, path, model=None, backend=None, alerts=True, poll=5, persist=True):
         self.path = path
         self.model = model
         self.backend = backend
         self.poll = max(2, poll)
-        self.history = []          # [(role, text)]
+        self.history = []          # [(role, text)] — restored from the store in _attach
+        self.cwd = ""
         self.st = None
         self.prev = None
         self.last_size = -1
         self._alerts = alerts
+        self._persist = persist and ST.enabled()
+        self.store = ST.Store.open_for(path, enabled=self._persist)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._alert_size = -1
         self._alert_state = None
         self._thread = None
+        self._attach(path)         # load state + restore prior copilot dialogue
 
     # ---- live state ------------------------------------------------------
     def refresh(self) -> bool:
-        """Re-read the session if it grew. Returns True if it changed."""
+        """Re-read the session if it grew. Returns True if it changed. Tolerates a
+        gone/unreadable transcript (history-only mode) by leaving ``st`` None."""
         try:
             size = os.path.getsize(self.path)
         except OSError:
@@ -109,11 +133,17 @@ class ChatSession:
             return False
         self.last_size = size
         self.prev = self.st
-        self.st = S.build(T.parse(self.path))
+        try:
+            self.st = S.build(T.parse(self.path))
+        except OSError:                    # transcript gone — stay in history-only mode
+            self.st = None
+            return False
         return True
 
     def banner(self) -> str:
         st = self.st
+        if st is None:
+            return "[∅ no live session — transcript gone (history-only)]"
         return (f"[{_GLYPH.get(st.status, '?')} {st.status} · idle "
                 f"{_dur(st.idle_seconds)} · {st.tr.raw_lines} ev · "
                 f"safety: {A.assess(st).verdict}]")
@@ -123,6 +153,8 @@ class ChatSession:
         txt = N.chat(self.st, self.history, q, model=self.model, backend=self.backend)
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
+        # durable copilot history (best-effort; never breaks the answer)
+        self.store.record_turn(q, txt, st=self.st, backend=self.backend, model=self.model)
         return txt
 
     def meta(self, cmd: str):
@@ -131,6 +163,8 @@ class ChatSession:
         if c in ("/exit", "/quit"):
             return False
         self.refresh()
+        if self.st is None and c in ("/brief", "/check", "/diff"):
+            return "(no live session — transcript gone; history-only view)"
         if c == "/help":
             return _HELP
         if c == "/brief":
@@ -145,9 +179,15 @@ class ChatSession:
             return self._list_sessions()
         if c.startswith("/use"):
             return self._switch(cmd.strip()[4:].strip())
-        if c == "/history":
+        if c == "/history" or c.startswith("/history "):
+            arg = c[8:].strip()
+            if arg in ("all", "*"):
+                return _fmt_conv_list(ST.list_conversations(None), "all projects")
+            if arg in ("this", "project"):
+                cwd = self.cwd or os.getcwd()
+                return _fmt_conv_list(ST.list_conversations(cwd), cwd)
             if not self.history:
-                return "(no turns yet)"
+                return "(no turns yet — try `/history this` for past conversations)"
             return "\n".join(("you> " if r == "user" else "cc > ") + t[:200]
                              for r, t in self.history)
         if c == "/diff":
@@ -206,18 +246,45 @@ class ChatSession:
         if os.path.samefile(target, self.path):
             return "already attached to that session"
         self.switch_path(target)
+        n = len(self.history) // 2
+        restored = f"restored {n} prior turn{'s' if n != 1 else ''}" if n else "no prior chat"
         return (f"switched → {os.path.basename(target)[:-6][:8]} "
-                f"(chat context cleared)\n{self.banner()}")
+                f"({restored})\n{self.banner()}")
 
     def switch_path(self, path):
-        """Re-pin to another session: fresh state + fresh conversation context."""
+        """Re-pin to another session: fresh state, and RESTORE that session's
+        prior copilot dialogue from disk (was previously wiped — the data loss
+        the user hit when switching)."""
+        self._attach(path)
+
+    def _attach(self, path):
+        """Point at ``path``: reset live state, re-open the store for it, and
+        load any persisted copilot history. Survives a missing transcript."""
         self.path = path
         self.st = self.prev = None
         self.last_size = -1
-        self.history = []
         self._alert_state = None
         self._alert_size = -1
-        self.refresh()
+        self.refresh()                       # st may stay None if the file is gone
+        tr = getattr(self.st, "tr", None)
+        self.store = ST.Store.open_for(path, enabled=self._persist, tr=tr)
+        self.history = self.store.load_history()
+        self.cwd = (getattr(tr, "cwd", "") or LOC.read_cwd(path) or "")
+
+    def attach_conv(self, header) -> bool:
+        """Attach by a stored conversation header (from /history). Returns True
+        for a live re-attach, False when the transcript is gone (history-only)."""
+        if header.transcript and os.path.isfile(header.transcript):
+            self._attach(header.transcript)
+            return True
+        self.path = header.transcript
+        self.st = self.prev = None
+        self.last_size = -1
+        self.store = ST.Store(header.conv_id, enabled=self._persist)
+        self.store.transcript = header.transcript
+        self.history = self.store.load_history()
+        self.cwd = header.cwd
+        return False
 
     def siblings(self):
         """Public list of sibling session paths (newest first), own-filtered."""
