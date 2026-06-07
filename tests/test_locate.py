@@ -23,6 +23,21 @@ def _jsonl_lines(path, objs):
 
 
 class TestLocate(unittest.TestCase):
+    def test_claude_config_dir_overrides_default_home(self):
+        root = tempfile.mkdtemp()
+        old = os.environ.get("CLAUDE_CONFIG_DIR")
+        try:
+            os.environ["CLAUDE_CONFIG_DIR"] = root
+            self.assertEqual(L.claude_home(), root)
+            self.assertEqual(L.projects_root(), os.path.join(root, "projects"))
+            self.assertEqual(L.sessions_root(), os.path.join(root, "sessions"))
+        finally:
+            if old is None:
+                os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            else:
+                os.environ["CLAUDE_CONFIG_DIR"] = old
+            shutil.rmtree(root)
+
     def test_encode_cwd(self):
         self.assertEqual(L.encode_cwd("/Users/a/Projects"), "-Users-a-Projects")
         self.assertEqual(L.encode_cwd("/x/a.b.c"), "-x-a-b-c")

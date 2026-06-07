@@ -1,8 +1,9 @@
 """Find Claude Code session transcripts on disk.
 
-Claude Code stores transcripts under ``~/.claude/projects/<encoded>/`` where
-``<encoded>`` is the project's absolute cwd with every non-alphanumeric
-character replaced by ``-`` (verified: ``/Users/audiofool/Projects`` ->
+Claude Code stores transcripts under
+``${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded>/`` where ``<encoded>`` is
+the project's absolute cwd with every non-alphanumeric character replaced by
+``-`` (verified: ``/Users/audiofool/Projects`` ->
 ``-Users-audiofool-Projects``; ``audiofool.github.io`` -> ``audiofool-github-io``).
 
 We use the encoding as a fast path, but always fall back to scanning, since the
@@ -19,8 +20,16 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+def claude_home() -> str:
+    return os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+
+
 def projects_root() -> str:
-    return os.path.expanduser("~/.claude/projects")
+    return os.path.join(claude_home(), "projects")
+
+
+def sessions_root() -> str:
+    return os.path.join(claude_home(), "sessions")
 
 
 def encode_cwd(cwd: str) -> str:
@@ -65,7 +74,7 @@ def is_own_session(path: str) -> bool:
 def _session_meta_name(session_id: str) -> str:
     if not session_id:
         return ""
-    d = os.path.expanduser("~/.claude/sessions")
+    d = sessions_root()
     try:
         names = os.listdir(d)
     except OSError:
@@ -97,7 +106,8 @@ def read_title(path: str, session_id: str = "") -> str:
     Claude has used both ``type: ai-title``/``aiTitle`` and
     ``type: custom-title``/``customTitle`` for session names. Renames append a
     later title event, so latest wins. Active sessions can also expose the name
-    under ``~/.claude/sessions/*.json``; use that as a fallback.
+    under ``${CLAUDE_CONFIG_DIR:-~/.claude}/sessions/*.json``; use that as a
+    fallback.
     """
     title = ""
     try:

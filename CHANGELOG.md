@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Claude config directory**
+- Session discovery now honors `$CLAUDE_CONFIG_DIR`, while keeping `~/.claude`
+  as the fallback, so cockpit/status work with isolated Claude config roots.
+
 **Cockpit keyboard cleanup**
 - Deprecated `Ctrl+S`, `Ctrl+O`, and `Ctrl+H` cockpit shortcuts. Use slash
   commands or the command palette instead.

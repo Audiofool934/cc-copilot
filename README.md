@@ -81,7 +81,8 @@ This is enforced, not aspirational — see [Verification](#verification).
 ## Install / run
 
 Requirements: Python 3.9+. For Claude Code projects, cc-copilot reads existing
-transcripts from `~/.claude/projects/...`; it never writes there.
+transcripts from `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/...`; it never
+writes there.
 
 Clone and run directly:
 
@@ -164,10 +165,11 @@ cc-copilot state --json             # the raw state model + assessment (machine-
 cc-copilot watch                    # re-render the brief as the transcript grows
 ```
 
-It resolves sessions from `~/.claude/projects/<encoded-cwd>/<session>.jsonl`,
-and by default reports on the most recent session *other than the current one*
-(so running `brief` from inside a live session targets the agent you want to
-watch — set `$CLAUDE_SESSION_ID` to make that exclusion exact).
+It resolves sessions from
+`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded-cwd>/<session>.jsonl`, and
+by default reports on the most recent session *other than the current one* (so
+running `brief` from inside a live session targets the agent you want to watch —
+set `$CLAUDE_SESSION_ID` to make that exclusion exact).
 
 ## Status semantics
 
@@ -498,7 +500,7 @@ state.py        fold records into a deterministic working-state model — plan,
 brief.py        render the evidence-cited recap
 observe.py      rank attention and render the next-human-decision report
 scope.py        render session / multi-session / project evidence scopes
-locate.py       map cwd ⇄ ~/.claude/projects session files
+locate.py       map cwd ⇄ Claude config projects session files
 cli.py          sessions / observe / brief / state / watch
 ```
 
