@@ -34,6 +34,7 @@ _HELP = """commands (all but questions are LLM-free):
   /history          this chat's turns
   /history this     past copilot conversations in this project
   /history all      past copilot conversations across every project
+  /forget           delete THIS conversation's saved history
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
 anything else → a question answered grounded in the live session state."""
@@ -194,6 +195,12 @@ class ChatSession:
                              for r, t in self.history)
         if c == "/diff":
             return _fmt_diff(S.diff(self.prev, self.st))
+        if c == "/forget":
+            if not self.store.enabled:
+                return "(history is off — nothing saved to forget)"
+            self.store.delete()
+            self.history = []
+            return "forgot this conversation's saved history"
         return f"unknown command {cmd!r} — try /help"
 
     # ---- session switching (select among multiple sessions) --------------

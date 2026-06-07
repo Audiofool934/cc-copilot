@@ -14,7 +14,17 @@ the I/O surface changes. Textual is imported lazily so the core stays zero-dep.
 from __future__ import annotations
 
 import os
+import re
 import threading
+
+# Disable the Kitty keyboard protocol by default. Its "associated text" feature
+# encodes IME-committed input (e.g. multi-character Chinese from pinyin) as
+# colon-separated codepoints that Textual's parser mishandles, leaking raw
+# escapes like `[49;;29616:22312u` into the box. Plain UTF-8 (the fallback)
+# handles multilingual input correctly. Cost: we lose Shift+Enter newline
+# disambiguation, so Ctrl+J is the newline key. Set TEXTUAL_DISABLE_KITTY_KEY=0
+# to re-enable Kitty (and Shift+Enter) if you never type via an IME.
+os.environ.setdefault("TEXTUAL_DISABLE_KITTY_KEY", "1")
 
 try:
     from textual import events, on, work
@@ -60,14 +70,31 @@ _VERDICT_HEX = {"intervene": "#f7768e", "review": "#e0af68", "clear": "#9ece6a",
                 "idle": "#565f89", "awaiting": "#7aa2f7", "empty": "#565f89"}
 
 _HELP_TEXT = (
-    "ask a question (multiline: Shift+Enter / Ctrl+J · send: Enter)\n"
-    "commands (also in the command palette, Ctrl+P):\n"
+    "ask a question (newline: Ctrl+J · send: Enter)\n"
+    "type `/` for command suggestions (Tab completes; also the palette, Ctrl+P):\n"
     "  /brief /check /diff     recap · safety · changes (LLM-free)\n"
     "  /sessions               switch which session you observe   (Ctrl+S)\n"
     "  /history                browse & restore past conversations (Ctrl+H)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
-    "  /use <n|id>  /refresh   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+C quit")
+    "  /use <n|id>  /refresh   /forget   /quit\n"
+    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+C quit")
+
+# Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
+_SLASH_CMDS = [
+    ("/brief", "evidence-cited recap (LLM-free)", False),
+    ("/check", "safety / off-track verdict (LLM-free)", False),
+    ("/diff", "what changed since your last turn", False),
+    ("/sessions", "switch which live agent session you observe", False),
+    ("/history", "browse & reopen saved copilot conversations", False),
+    ("/model", "switch the LLM backend", True),
+    ("/use", "switch observed session by number / id", True),
+    ("/refresh", "re-read the observed session now", False),
+    ("/forget", "delete THIS conversation's saved history", False),
+    ("/clear", "clear the chat view (keeps saved history)", False),
+    ("/help", "show help", False),
+    ("/quit", "exit the cockpit", False),
+]
+_ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 
 
 # ── multiline composer ─────────────────────────────────────────────────────
@@ -82,6 +109,18 @@ class Composer(TextArea):
                          tab_behavior="focus", **kw)
 
     async def _on_key(self, event: events.Key) -> None:
+        # When the `/` suggestion popup is open, the arrow/Tab/Esc keys drive it
+        # instead of the text cursor.
+        app = self.app
+        if getattr(app, "_slash_open", False):
+            if event.key == "down":
+                event.prevent_default(); event.stop(); app._slash_move(1); return
+            if event.key == "up":
+                event.prevent_default(); event.stop(); app._slash_move(-1); return
+            if event.key == "tab":
+                event.prevent_default(); event.stop(); app._slash_complete(); return
+            if event.key == "escape":
+                event.prevent_default(); event.stop(); app._slash_hide(); return
         # Enter submits. Shift+Enter / Ctrl+J insert a newline (TextArea's own
         # newline is bound to plain Enter, which we've taken for submit, so we
         # have to insert it ourselves). Everything else — including all CJK /
@@ -162,6 +201,8 @@ class Cockpit(App):
         background: $surface;
     }
     #composer:focus-within { border: round $primary; }
+    #slash { height: auto; max-height: 7; margin: 0 1; padding: 0;
+             border: round $secondary; background: $panel; }
 
     .role-user      { border-left: thick $secondary; padding-left: 1; }
     .role-assistant { border-left: thick $primary;   padding-left: 1; }
@@ -179,7 +220,7 @@ class Cockpit(App):
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit"),
         Binding("ctrl+r", "refresh_now", "refresh"),
-        Binding("ctrl+l", "clear_chat", "clear"),
+        Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+s", "sessions", "sessions"),
         Binding("ctrl+t", "model", "model"),
         Binding("ctrl+h", "history", "history"),
@@ -193,6 +234,7 @@ class Cockpit(App):
         self.poll = max(2, poll)
         self.alerts = alerts
         self._busy = False
+        self._slash_open = False
         self._watch_stop = threading.Event()
 
     # ---- layout ----
@@ -208,6 +250,10 @@ class Cockpit(App):
         yield timeline
         yield chat
         yield Static("", id="status")
+        slash = OptionList(id="slash")          # `/` command autocomplete
+        slash.can_focus = False
+        slash.display = False
+        yield slash
         yield Composer(id="composer")
         yield Footer()
 
@@ -226,7 +272,7 @@ class Cockpit(App):
         self._update_status()
         composer = self.query_one("#composer", Composer)
         composer.border_title = "› ask the copilot"
-        composer.border_subtitle = "Enter send · ⇧+Enter newline · Ctrl+P palette"
+        composer.border_subtitle = "Enter send · Ctrl+J newline · / commands · Ctrl+P palette"
         composer.focus()
         if self.alerts:
             self.watch_agent()
@@ -252,6 +298,59 @@ class Cockpit(App):
 
     def on_app_focus(self, event: events.AppFocus) -> None:
         self._focus_composer()
+
+    # ---- `/` command autocomplete ----
+    @on(TextArea.Changed, "#composer")
+    def _slash_update(self, event=None) -> None:
+        try:
+            comp = self.query_one("#composer", Composer)
+            ol = self.query_one("#slash", OptionList)
+        except Exception:
+            return
+        text = comp.text
+        single = re.fullmatch(r"/[\w-]*", text)   # one token: '/', no space/newline
+        matches = [(c, d) for c, d, _ in _SLASH_CMDS
+                   if c.startswith(text.lower())] if single else []
+        if not matches:
+            self._slash_open = False
+            ol.display = False
+            return
+        ol.clear_options()
+        for c, d in matches:
+            label = Text(c, style=f"bold {_PAL['primary']}")
+            label.append(f"   {d}", style=_PAL["muted"])
+            ol.add_option(Option(label, id=c))
+        ol.display = True
+        self._slash_open = True
+        ol.highlighted = 0
+
+    def _slash_move(self, delta) -> None:
+        ol = self.query_one("#slash", OptionList)
+        if ol.option_count:
+            ol.highlighted = max(0, min(ol.option_count - 1, (ol.highlighted or 0) + delta))
+
+    def _slash_hide(self) -> None:
+        self._slash_open = False
+        try:
+            self.query_one("#slash", OptionList).display = False
+        except Exception:
+            pass
+
+    def _slash_apply(self, cmd) -> None:
+        comp = self.query_one("#composer", Composer)
+        comp.text = cmd + (" " if cmd in _ARG_CMDS else "")  # arg cmds wait for input
+        comp.move_cursor(comp.document.end)
+        self._slash_hide()
+        comp.focus()
+
+    def _slash_complete(self) -> None:
+        ol = self.query_one("#slash", OptionList)
+        if ol.option_count:
+            self._slash_apply(ol.get_option_at_index(ol.highlighted or 0).id)
+
+    @on(OptionList.OptionSelected, "#slash")
+    def _slash_pick(self, event) -> None:
+        self._slash_apply(event.option.id)
 
     # ---- command palette ----
     def get_system_commands(self, screen):
@@ -327,6 +426,7 @@ class Cockpit(App):
     # ---- input ----
     @on(Composer.Submitted)
     def _on_submit(self, event: Composer.Submitted):
+        self._slash_hide()
         text = event.text
         if text.startswith("/"):
             self._meta(text)
@@ -436,6 +536,10 @@ class Cockpit(App):
             return
         if low == "/refresh":
             self.action_refresh_now(); return
+        if low in ("/clear", "/cls"):
+            self.action_clear_chat(); return
+        if low == "/forget":
+            self.action_forget(); return
         if low.startswith("/use"):
             out = self.session.meta(cmd)
             self.notify(str(out).splitlines()[0])
@@ -503,7 +607,8 @@ class Cockpit(App):
                 kb = 0
             cur = " (current)" if os.path.abspath(p) == os.path.abspath(self.session.path) else ""
             opts.append((f"{os.path.basename(p)[:-6][:8]}  {kb} KB{cur}", p))
-        chosen = await self.push_screen_wait(Picker("switch session", opts))
+        chosen = await self.push_screen_wait(
+            Picker("observe a different live agent session", opts))
         if chosen:
             self.session.switch_path(chosen)   # restores chosen session's history
             self._rebuild_chat()               # repaint it (the old data-loss site)
@@ -526,7 +631,8 @@ class Cockpit(App):
             proj = os.path.basename(h.cwd) or "?"
             opts.append((f"{(h.title or '(untitled)')[:32]:<32} · {h.turns:>2}t · "
                          f"{h.ago()} · {proj}{gone}", h))
-        chosen = await self.push_screen_wait(Picker("history — past conversations", opts))
+        chosen = await self.push_screen_wait(
+            Picker("reopen a saved copilot conversation", opts))
         if chosen:
             live = self.session.attach_conv(chosen)
             self._rebuild_chat()
@@ -559,9 +665,24 @@ class Cockpit(App):
                     else "refreshed")
 
     def action_clear_chat(self):
-        # Visual only — clears the pane, never the on-disk history. (Don't wire a
-        # store delete here; Ctrl+L is muscle-memory for "tidy the screen".)
+        # Visual only — tidies the pane, keeps the saved history (so it returns
+        # on switch-back / relaunch). Use /forget to actually delete it.
         self.query_one("#chat", VerticalScroll).remove_children()
+        self.notify("view cleared (saved history kept — /forget to delete it)")
+
+    def action_forget(self):
+        # Delete THIS conversation's saved history from disk + clear the view.
+        store = self.session.store
+        if not store.enabled:
+            self.notify("history is off — nothing saved to forget", severity="warning")
+            return
+        store.delete()
+        self.session.history = []
+        chat = self.query_one("#chat", VerticalScroll)
+        chat.remove_children()
+        chat.mount(self._role(
+            Text("(forgot this conversation's saved history)", "dim"), "role-event"))
+        self.notify("forgot this conversation's saved history", severity="warning")
 
 
 # small adapters so the cockpit doesn't reach into private chat internals
