@@ -173,6 +173,30 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(chosen, ["g"])
 
+    async def test_multi_picker_space_toggles_and_enter_selects(self):
+        from textual.widgets import OptionList, Static
+
+        chosen = []
+
+        class Harness(App):
+            def compose(self):
+                yield Static("root")
+
+        app = Harness()
+        async with app.run_test() as pilot:
+            picker = tui.MultiPicker("pick many", [
+                ("Alpha", "a"), ("Beta", "b"), ("Gamma", "g"),
+            ])
+            await app.push_screen(picker, chosen.append)
+            await pilot.pause()
+            ol = picker.query_one("#picker-list", OptionList)
+            self.assertEqual(ol.highlighted, 0)
+
+            await pilot.press("down", "space", "enter")
+            await pilot.pause()
+
+        self.assertEqual(chosen, [["b"]])
+
     async def test_session_picker_label_includes_title(self):
         ref = types.SimpleNamespace(
             title="test-session-A", session_id="abcdef123456", size=4096,

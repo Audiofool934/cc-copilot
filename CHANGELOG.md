@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 — 2026-06-07
+
+**Cockpit hotfix**
+- Fixed a Textual crash when opening `multi-session · select sessions` or
+  `project · select sessions` from the scope picker.
+- Renamed the multi-picker's internal option rebuild helper so it no longer
+  collides with Textual's widget rendering internals.
+- Added regression coverage for keyboard-only multi-session selection.
+
 ## 0.5.0 — 2026-06-07
 
 **Agent observability core**

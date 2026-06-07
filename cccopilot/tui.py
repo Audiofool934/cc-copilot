@@ -419,6 +419,17 @@ class Composer(TextArea):
 
 
 # ── reusable fuzzy-filter picker modal ─────────────────────────────────────
+class PickerFilter(Input):
+    async def _on_key(self, event: events.Key) -> None:
+        toggle = getattr(self.screen, "_toggle_from_filter", None)
+        if event.key == "space" and not self.value and toggle is not None:
+            event.prevent_default()
+            event.stop()
+            toggle()
+            return
+        await super()._on_key(event)
+
+
 class Picker(ModalScreen):
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
@@ -431,7 +442,7 @@ class Picker(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
             yield Static(self._title, id="picker-title")
-            yield Input(placeholder="filter…", id="picker-filter")
+            yield PickerFilter(placeholder="filter…", id="picker-filter")
             yield OptionList(
                 *[Option(l, id=str(i)) for i, (l, v) in enumerate(self._options)],
                 id="picker-list")
@@ -514,7 +525,10 @@ class Picker(ModalScreen):
 
 
 class MultiPicker(ModalScreen):
-    BINDINGS = [Binding("escape", "cancel", "cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("space", "toggle", "toggle", show=False),
+    ]
 
     def __init__(self, title: str, options: list, selected=None):
         super().__init__()
@@ -525,18 +539,18 @@ class MultiPicker(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
             yield Static(self._title, id="picker-title")
-            yield Input(placeholder="filter…", id="picker-filter")
+            yield PickerFilter(placeholder="filter…", id="picker-filter")
             yield OptionList(id="picker-list")
 
     def on_mount(self):
         self.query_one("#picker-filter", Input).focus()
-        self._render()
+        self._render_options()
         self._highlight(0)
 
     def _list(self) -> OptionList:
         return self.query_one("#picker-list", OptionList)
 
-    def _render(self) -> None:
+    def _render_options(self) -> None:
         q = self.query_one("#picker-filter", Input).value.lower()
         ol = self._list()
         ol.clear_options()
@@ -576,7 +590,7 @@ class MultiPicker(ModalScreen):
         else:
             self._selected.add(value)
         keep = self._list().highlighted or 0
-        self._render()
+        self._render_options()
         self._highlight(keep)
 
     async def _on_key(self, event: events.Key) -> None:
@@ -593,7 +607,7 @@ class MultiPicker(ModalScreen):
 
     @on(Input.Changed, "#picker-filter")
     def _filter(self, event: Input.Changed):
-        self._render()
+        self._render_options()
 
     @on(OptionList.OptionSelected)
     def _choose(self, event: OptionList.OptionSelected):
@@ -601,6 +615,12 @@ class MultiPicker(ModalScreen):
 
     def action_cancel(self):
         self.dismiss(None)
+
+    def action_toggle(self):
+        self._toggle()
+
+    def _toggle_from_filter(self):
+        self._toggle()
 
 
 # ── the cockpit ────────────────────────────────────────────────────────────
@@ -640,6 +660,7 @@ class Cockpit(App):
     Collapsible { border-left: thick $accent; }
 
     Picker { align: center middle; }
+    MultiPicker { align: center middle; }
     #picker { width: 80; max-width: 90%; height: auto; max-height: 80%;
               background: $surface; border: round $accent; padding: 1; }
     #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
