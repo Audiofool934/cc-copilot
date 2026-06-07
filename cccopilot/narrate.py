@@ -2,9 +2,9 @@
 
 The whole point of cc-copilot is *not* being a second hallucinating agent. So
 the LLM here never sees raw transcripts or ambient repo access — it sees a
-**deterministic, evidence-cited brief** produced by legs ①/② (and, for project
-scope, read-only file facts) and is told to answer only from it, keeping the
-citations. It narrates grounded facts; it doesn't invent.
+**deterministic, evidence-cited context** produced by legs ①/② (and, for
+project scope, read-only file facts), keeping citations for observed facts.
+It can synthesize and recommend from that evidence; it doesn't invent.
 
 The backend is pluggable (see :mod:`cccopilot.backends`): a local agent CLI
 (`claude`, `codex`, `gemini`, `llm`) or any OpenAI-compatible HTTP API
@@ -18,24 +18,30 @@ from __future__ import annotations
 from .brief import render
 from .backends import resolve, Backend, BackendError
 
-_PREAMBLE = """You are cc-copilot's narration layer. Below is a DETERMINISTIC, \
-evidence-cited brief from a read-only sidecar. Citations may be session transcript \
-lines (`[L<n>]` or `[session:L<n>]`), project file lines (`[path:L<n>]`), or \
-deterministic collector facts (`[tree]`, `[git:*]`).
+_PREAMBLE = """You are cc-copilot, a read-only cockpit agent for supervising \
+coding agents. Below is an EVIDENCE CONTEXT PACK assembled from observable \
+session history and bounded read-only project facts. Citations may be session \
+transcript lines (`[L<n>]` or `[session:L<n>]`), project file lines \
+(`[path:L<n>]`), or deterministic collector facts (`[tree]`, `[git:*]`).
 
 STRICT RULES:
-- Answer ONLY from the brief below. Do NOT invent files, commands, errors, \
-statuses, or actions that aren't in it.
-- Keep the citation when you state a specific fact.
-- If the brief doesn't contain enough to answer, say so plainly — do not guess.
-- Be concise and concrete. Prose only; do not use any tools or read any files.\
+- Use the evidence context as the source for observed facts. Do NOT invent \
+files, commands, errors, statuses, or actions that aren't in it.
+- Keep citations when you state observed facts.
+- You may synthesize, judge risk, and recommend next steps when grounded in \
+the cited evidence; label hypotheses as inference.
+- If evidence is insufficient, state the missing observed evidence without \
+referring to internal packet names.
+- Do not mention internal packet names unless the user asks about sources.
+- Answer in the user's language. Be concise and concrete. Prose only; do not \
+use any tools or read any files.\
 """
 
 _NARRATE_TASK = (
-    "Brief the returning human in 3–5 sentences: what did this agent do while "
+    "Orient the returning human in 3–5 sentences: what did this agent do while "
     "they were away, does it look safe to let it keep running (use the Safety "
     "verdict), and the single most important thing to look at next? "
-            "Keep citations for specific claims."
+    "Keep citations for specific observed claims."
 )
 
 
@@ -57,11 +63,28 @@ def backend_name(backend=None) -> str:
         return str(e)
 
 
+def _as_evidence_context(brief_text: str) -> str:
+    """Remove "brief" identity cues before sending deterministic text to an LLM."""
+    lines = []
+    for line in brief_text.splitlines():
+        if line.startswith("# cc-copilot multi-session brief"):
+            line = line.replace("# cc-copilot multi-session brief",
+                                "# cc-copilot multi-session evidence context", 1)
+        elif line.startswith("# 🛰  cc-copilot brief"):
+            line = line.replace("# 🛰  cc-copilot brief",
+                                "# cc-copilot evidence context", 1)
+        elif line.startswith("# cc-copilot brief"):
+            line = line.replace("# cc-copilot brief",
+                                "# cc-copilot evidence context", 1)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _prompt(brief_text: str, task: str) -> str:
     return (_PREAMBLE
-            + "\n\n=== BRIEF (the only ground truth you may use) ===\n"
-            + brief_text
-            + "\n=== END BRIEF ===\n\n" + task)
+            + "\n\n=== EVIDENCE CONTEXT (observed facts and citations) ===\n"
+            + _as_evidence_context(brief_text)
+            + "\n=== END EVIDENCE CONTEXT ===\n\n" + task)
 
 
 def run(state, task: str, model: str = None, backend=None, timeout: int = 180) -> str:
@@ -91,8 +114,9 @@ def ask(state, question: str, model: str = None, backend=None) -> str:
 
 def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -> str:
     task = ('The returning human asks: "' + question.strip() + '"\n'
-            "Answer grounded in the brief, with citations. "
-            "If the brief lacks the information, say so rather than guessing.")
+            "Answer as cc-copilot. Use cited evidence for observed facts. "
+            "Synthesize or recommend when grounded; label inference. "
+            "If the answer needs unavailable evidence, name what is missing.")
     return run_brief(brief_text, task, model=model, backend=backend)
 
 
@@ -103,10 +127,11 @@ def chat(state, history, question: str, model: str = None, backend=None) -> str:
 def chat_brief(brief_text: str, history, question: str, model: str = None, backend=None) -> str:
     """Multi-turn sibling of :func:`ask` for the live chat sidecar.
 
-    The CURRENT brief (re-read this turn, prepended by :func:`run`) is the only
-    source of new facts. Prior turns are replayed as *already-grounded* answers
-    — referenced for continuity, never treated as fresh evidence — so a later
-    answer cannot launder an un-cited claim from an earlier one.
+    The current evidence context (re-read this turn, prepended by
+    :func:`run_brief`) is the only source of new observed facts. Prior turns are
+    replayed as *already-grounded* answers — referenced for continuity, never
+    treated as fresh evidence — so a later answer cannot launder an un-cited
+    claim from an earlier one.
     """
     convo = ""
     if history:
@@ -114,10 +139,12 @@ def chat_brief(brief_text: str, history, question: str, model: str = None, backe
         for role, text in history[-8:]:
             parts.append(("User: " if role == "user" else "You: ") + text)
         convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
-                 "continuity, but the CURRENT brief above is the only source of "
-                 "new facts):\n" + "\n".join(parts) + "\n\n")
+                 "continuity, but the current evidence context above is the "
+                 "source of new observed facts):\n" + "\n".join(parts) + "\n\n")
     task = (convo + 'Current question from the returning human: "'
             + question.strip() + '"\n'
-            "Answer ONLY from the current brief above, keeping citations. "
-            "If it lacks the info, say so plainly.")
+            "Answer as cc-copilot. Use the current evidence context for "
+            "observed facts and keep citations. Synthesize or recommend when "
+            "grounded; label inference. If the answer needs unavailable "
+            "evidence, name what is missing.")
     return run_brief(brief_text, task, model=model, backend=backend)

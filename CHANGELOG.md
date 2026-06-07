@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Cockpit answer quality**
+- Reframed LLM-backed `ask`, `chat`, and narration prompts around cited
+  evidence context instead of a "brief", so the cockpit agent is less likely to
+  answer by describing its own packet and more likely to synthesize grounded
+  next steps.
+- Kept legacy self-session detection while hiding new backend narration calls
+  from project session lists.
+
 **Claude config directory**
 - Session discovery now honors `$CLAUDE_CONFIG_DIR`, while keeping `~/.claude`
   as the fallback, so cockpit/status work with isolated Claude config roots.

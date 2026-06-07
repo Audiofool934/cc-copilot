@@ -405,16 +405,16 @@ you> is it safe to let it keep going?
   `/session`, `/resume` work without a backend, and let you verify any prose
   answer against cited evidence in the same window.
 
-Grounding is identical to `ask`: the chat LLM sees only the cited brief, and
-prior turns are replayed as *already-grounded* answers — never as new facts — so
-a long conversation can't launder an un-cited claim into a later reply.
+Grounding is identical to `ask`: the chat LLM sees only cited evidence context,
+and prior turns are replayed as *already-grounded* answers — never as new facts
+— so a long conversation can't launder an un-cited claim into a later reply.
 
 ## Observer chat — leg ④ (`cc-copilot ask`, `brief --narrate`)
 
 The conversational layer — *grounded* so it can't become a second hallucinating
-agent. The LLM never sees the raw transcript; it sees the **deterministic,
-evidence-cited brief** from legs ①/② and is told to answer only from it, keeping
-the `[L…]` citations:
+agent. The LLM never sees the raw transcript; it sees **deterministic,
+evidence-cited context** from legs ①/②, keeps `[L…]` citations for observed
+facts, and can synthesize or recommend from that evidence:
 
 ```bash
 cc-copilot ask "did it go off-track, and is it safe to continue?"
@@ -458,9 +458,10 @@ Two escape hatches for anything else (both zero-dep):
 - **Any CLI** — `CC_COPILOT_LLM_CMD` (e.g. `"llm -m gpt-4o"`); the prompt is
   appended as the final argument.
 
-Grounding is identical across all of them: every backend receives only the cited
-brief with the no-invention preamble. If the selected backend is unavailable,
-`--narrate` degrades to the plain (LLM-free) brief and `ask`/`chat` say so.
+Grounding is identical across all of them: every backend receives only cited
+evidence context with the no-invention preamble. If the selected backend is
+unavailable, `--narrate` degrades to the plain (LLM-free) brief and `ask`/`chat`
+say so.
 
 ### Set defaults once — `~/.cc-copilot.toml`
 

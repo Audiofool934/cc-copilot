@@ -43,7 +43,15 @@ class TestLocate(unittest.TestCase):
         self.assertEqual(L.encode_cwd("/x/a.b.c"), "-x-a-b-c")
         self.assertEqual(L.encode_cwd("/p/My Repo"), "-p-My-Repo")
 
-    def test_is_own_session_true(self):
+    def test_is_own_session_true_current_prompt(self):
+        p = _jsonl({"type": "user", "message": {"role": "user",
+                   "content": "You are cc-copilot, a read-only cockpit agent for supervising coding agents."}})
+        try:
+            self.assertTrue(L.is_own_session(p))
+        finally:
+            os.unlink(p)
+
+    def test_is_own_session_true_legacy_prompt(self):
         p = _jsonl({"type": "user", "message": {"role": "user",
                    "content": "You are cc-copilot's narration layer. Below is a brief…"}})
         try:

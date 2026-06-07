@@ -56,10 +56,13 @@ class SessionRef:
         return datetime.fromtimestamp(self.mtime).strftime("%Y-%m-%d %H:%M")
 
 
-# Unique signature of cc-copilot's own narration prompt (see narrate._PREAMBLE).
+# Unique signatures of cc-copilot's own narration prompt (see narrate._PREAMBLE).
 # Using `claude -p`/`codex exec` as a backend logs a session transcript per call;
 # we recognize and hide our own so they never masquerade as the user's sessions.
-_OWN_SIG = b"cc-copilot's narration layer"
+_OWN_SIGS = (
+    b"read-only cockpit agent for supervising coding agents",
+    b"cc-copilot's narration layer",  # legacy v0.6 and earlier prompts
+)
 
 
 def is_own_session(path: str) -> bool:
@@ -68,7 +71,7 @@ def is_own_session(path: str) -> bool:
             head = f.read(16384)   # the prompt is the first user message, near the top
     except OSError:
         return False
-    return _OWN_SIG in head
+    return any(sig in head for sig in _OWN_SIGS)
 
 
 def _session_meta_name(session_id: str) -> str:
