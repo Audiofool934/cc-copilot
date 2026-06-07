@@ -24,8 +24,8 @@ TEMPLATE = '''\
 # Defaults for the LLM-backed commands (ask / chat / brief --narrate).
 # The deterministic core (brief / check / alerts) needs none of this.
 
-# Default backend: claude | codex | deepseek | openai | openrouter | ollama | gemini | llm
-backend = "claude"
+# Default backend: codex | claude | deepseek | openai | openrouter | ollama | gemini | llm
+backend = "codex"
 
 # Default model for that backend (optional — omit to use the backend's own default)
 # model = "deepseek-reasoner"

@@ -1,7 +1,7 @@
 """The full-screen "cockpit" TUI (optional `cc-copilot[tui]` extra).
 
 A Textual app that ports OpenCode-style polish onto cc-copilot's read-only
-observer: a branded theme, a split **agent-timeline / chat** layout, per-role
+observer: a branded theme, a split **observed-activity / chat** layout, per-role
 left-gutter message blocks, a status bar with a colored **verdict pill** + a
 `Footer`, a multiline composer, `/`-commands in the command palette, watcher
 **toasts**, collapsible long output, modal session/model pickers, and Markdown
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import threading
 
 # Disable the Kitty keyboard protocol by default. Its "associated text" feature
@@ -44,7 +45,7 @@ except ImportError:
         "(or: pip install 'cc-copilot[tui]')")
 
 from . import (transcript as T, state as S, assess as A, narrate as N,
-               backends as BK, store as ST)
+               backends as BK, store as ST, scope as SC, locate as LOC)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -68,6 +69,8 @@ _PAL = {"primary": "#fab283", "secondary": "#5c9cf5", "accent": "#9d7cd8",
         "success": "#9ece6a", "text": "#c0caf5", "bg": "#1a1b26"}
 _VERDICT_HEX = {"intervene": "#f7768e", "review": "#e0af68", "clear": "#9ece6a",
                 "idle": "#565f89", "awaiting": "#7aa2f7", "empty": "#565f89"}
+_BUSY_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_TIMELINE_TITLE = "session activity"
 
 _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
@@ -87,6 +90,7 @@ _SLASH_CMDS = [
     ("/diff", "what changed since your last turn", False),
     ("/sessions", "switch which live agent session you observe", False),
     ("/history", "browse & reopen saved copilot conversations", False),
+    ("/scope", "switch grounding scope", True),
     ("/model", "switch the LLM backend", True),
     ("/use", "switch observed session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
@@ -97,6 +101,259 @@ _SLASH_CMDS = [
     ("/quit", "exit the cockpit", False),
 ]
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
+
+
+def _session_picker_label(ref, current_path: str = "") -> str:
+    title = ref.title or "(untitled)"
+    cur = " (current)" if current_path and os.path.abspath(ref.path) == os.path.abspath(current_path) else ""
+    return f"{title[:44]:<44} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}"
+
+
+def _busy_indicator(frame: int) -> str:
+    return f"{_BUSY_FRAMES[frame % len(_BUSY_FRAMES)]} answering"
+
+
+def _short_activity(text: str, limit: int = 70) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _tool_activity_target(record) -> str:
+    inp = record.tool_input if isinstance(record.tool_input, dict) else {}
+    if record.tool_name == "Bash":
+        return inp.get("description") or inp.get("command") or ""
+    if record.tool_name == "TodoWrite":
+        return "todos"
+    return inp.get("file_path") or inp.get("notebook_path") or ""
+
+
+def _activity_line(record):
+    if record.kind == "human" and not record.housekeeping:
+        t = Text(f"{record.hhmm} ", style=_PAL["muted"])
+        t.append("user", style=_PAL["secondary"])
+        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        return t
+    if record.kind == "agent_text":
+        t = Text(f"{record.hhmm} ", style=_PAL["muted"])
+        t.append("agent", style=_PAL["primary"])
+        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        return t
+    if record.kind == "agent_thinking":
+        return Text(f"{record.hhmm} agent thinking", style=_PAL["muted"])
+    if record.kind == "tool_call":
+        target = _short_activity(_tool_activity_target(record), 58)
+        t = Text(f"{record.hhmm} ", style=_PAL["muted"])
+        t.append(record.tool_name or "tool", style=_PAL["accent"])
+        if target:
+            t.append(" · " + target, style=_PAL["text"])
+        return t
+    if record.kind == "tool_result" and record.is_error:
+        t = Text(f"{record.hhmm} ", style=_PAL["muted"])
+        t.append("tool error", style=_PAL["error"])
+        if record.text:
+            t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        return t
+    return None
+
+
+def _recent_activity_lines(st, limit: int = 5) -> list:
+    if st is None:
+        return []
+    rows = []
+    for record in reversed(getattr(st.tr, "records", [])):
+        line = _activity_line(record)
+        if line is None:
+            continue
+        rows.append(line)
+        if len(rows) >= limit:
+            break
+    rows.reverse()
+    return rows
+
+
+def _sid(ref=None, st=None, path: str = "") -> str:
+    sid = ""
+    tr = getattr(st, "tr", None)
+    if tr is not None:
+        sid = getattr(tr, "session_id", "") or sid
+    sid = sid or getattr(ref, "session_id", "")
+    if not sid and path:
+        sid = os.path.basename(path)[:-6]
+    return (sid[:8] or "session")
+
+
+def _session_title(st=None, ref=None) -> str:
+    tr = getattr(st, "tr", None)
+    title = getattr(tr, "title", "") if tr is not None else ""
+    title = title or getattr(ref, "title", "")
+    intents = getattr(st, "intents", None)
+    if not title and intents:
+        title = getattr(intents[-1], "text", "")
+    return title or "(untitled)"
+
+
+def _project_cwd(session) -> str:
+    st = getattr(session, "st", None)
+    tr = getattr(st, "tr", None)
+    cwd = (getattr(tr, "cwd", "") if tr is not None else "")
+    cwd = cwd or getattr(session, "cwd", "") or LOC.read_cwd(getattr(session, "path", "") or "")
+    return os.path.abspath(cwd or os.getcwd())
+
+
+def _git(root: str, *args: str) -> str:
+    if not root or not os.path.isdir(root):
+        return ""
+    try:
+        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def _git_summary(root: str) -> tuple:
+    branch = _git(root, "branch", "--show-current") or _git(root, "rev-parse", "--short", "HEAD")
+    status = _git(root, "status", "--short")
+    changed = len(status.splitlines()) if status else 0
+    return branch or "?", changed
+
+
+def _scope_rank(status: str, verdict: str) -> int:
+    if status == "stalled" or verdict == "intervene":
+        return 0
+    if status == "awaiting-agent":
+        return 1
+    if status == "running":
+        return 2 if verdict == "review" else 3
+    if verdict == "review":
+        return 4
+    if status == "idle":
+        return 5
+    return 6
+
+
+def _scope_snapshot(session) -> dict:
+    scope = getattr(session, "scope", SC.SESSION)
+    if scope == SC.SESSION:
+        st = getattr(session, "st", None)
+        a = A.assess(st) if st is not None else None
+        return {"scope": scope, "total": 1 if st is not None else 0,
+                "selected": 1 if st is not None else 0, "items": [],
+                "anchor": (None, st, a), "error": ""}
+
+    try:
+        all_refs = SC.resolve_session_refs(session.path, [])
+        refs = SC.resolve_session_refs(session.path, session.scope_sessions)
+    except ValueError as e:
+        return {"scope": scope, "total": 0, "selected": 0, "items": [],
+                "anchor": (None, getattr(session, "st", None), None), "error": str(e)}
+
+    here = os.path.abspath(session.path) if getattr(session, "path", "") else ""
+    items = []
+    for ref in refs:
+        try:
+            st = (session.st if os.path.abspath(ref.path) == here and session.st is not None
+                  else S.build(T.parse(ref.path)))
+            a = A.assess(st)
+        except Exception:
+            continue
+        items.append((ref, st, a))
+    items.sort(key=lambda x: (_scope_rank(x[1].status, x[2].verdict),
+                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9,
+                              -x[0].mtime))
+    anchor_a = A.assess(session.st) if getattr(session, "st", None) is not None else None
+    return {"scope": scope, "total": len(all_refs), "selected": len(items),
+            "items": items, "anchor": (None, getattr(session, "st", None), anchor_a),
+            "error": ""}
+
+
+def _health_bits(items: list) -> list:
+    counts = {}
+    verdicts = {}
+    for _ref, st, a in items:
+        counts[st.status] = counts.get(st.status, 0) + 1
+        verdicts[a.verdict] = verdicts.get(a.verdict, 0) + 1
+    bits = []
+    for status in ("stalled", "running", "awaiting-agent", "idle"):
+        n = counts.get(status, 0)
+        if n:
+            bits.append(f"{n} {status}")
+    for verdict in ("intervene", "review"):
+        n = verdicts.get(verdict, 0)
+        if n:
+            bits.append(f"{n} {verdict}")
+    return bits or ["no activity"]
+
+
+def _selection_label(session, snap: dict) -> str:
+    selected, total = snap.get("selected", 0), snap.get("total", 0)
+    if getattr(session, "scope", SC.SESSION) == SC.SESSION:
+        return "current session"
+    if getattr(session, "scope_sessions", None):
+        return f"{selected} selected of {total}"
+    return f"all {total}"
+
+
+def _scope_activity_title(session, snap=None) -> str:
+    snap = snap or _scope_snapshot(session)
+    if getattr(session, "scope", SC.SESSION) == SC.SESSION:
+        return "session activity"
+    if session.scope == SC.MULTI:
+        return f"multi-session activity · {_selection_label(session, snap)}"
+    return f"project activity · {_selection_label(session, snap)}"
+
+
+def _prefixed_activity_line(sid: str, line) -> Text:
+    t = Text(f"{sid} · ", style=_PAL["muted"])
+    t.append(str(line), style=_PAL["text"])
+    return t
+
+
+def _scoped_recent_activity_lines(items: list, limit: int = 5) -> list:
+    entries = []
+    for ref, st, _a in items:
+        for record in reversed(getattr(st.tr, "records", [])):
+            line = _activity_line(record)
+            if line is None:
+                continue
+            ts = record.ts.timestamp() if record.ts is not None else 0
+            entries.append((ts, _sid(ref, st), line))
+            break
+    entries.sort(key=lambda x: x[0])
+    return [_prefixed_activity_line(sid, line) for _ts, sid, line in entries[-limit:]]
+
+
+def _scope_timeline_summary(session, snap: dict) -> Text:
+    if snap.get("error"):
+        return Text("scope error · " + snap["error"], style=_PAL["warning"])
+    items = snap.get("items", [])
+    t = Text()
+    t.append(f"{_selection_label(session, snap)} sessions", style=_PAL["muted"])
+    t.append(" · " + " · ".join(_health_bits(items)), style=_PAL["text"])
+    return t
+
+
+def _timeline_status_line(st):
+    if st is None:
+        return Text("⌁ history-only · transcript unavailable", style=_PAL["warning"])
+    t = Text()
+    t.append(f"{_STATUS_GLYPH.get(st.status, '·')} {st.status}", style="bold")
+    t.append(f" · {st.tr.raw_lines} events · idle {_dur(st.idle_seconds)}",
+             style=_PAL["muted"])
+    return t
+
+
+def _timeline_delta_line(st, d):
+    t = Text(f"+{d.new_events} events", style=_PAL["muted"])
+    if d.status_from != d.status_to:
+        t.append(f" · {d.status_from or 'empty'} → {d.status_to}",
+                 style=_PAL["secondary"])
+    else:
+        t.append(f" · {st.status}", style=_PAL["muted"])
+    if d.verdict_from != d.verdict_to:
+        t.append(f" · safety {d.verdict_from or 'empty'} → {d.verdict_to}",
+                 style=_VERDICT_HEX.get(d.verdict_to, _PAL["muted"]))
+    return t
 
 
 # ── multiline composer ─────────────────────────────────────────────────────
@@ -170,19 +427,166 @@ class Picker(ModalScreen):
 
     def on_mount(self):
         self.query_one("#picker-filter", Input).focus()
+        self._highlight(0)
+
+    def _list(self) -> OptionList:
+        return self.query_one("#picker-list", OptionList)
+
+    def _highlight(self, index: int) -> None:
+        ol = self._list()
+        if not ol.option_count:
+            return
+        ol.highlighted = max(0, min(ol.option_count - 1, index))
+
+    def _move(self, delta: int) -> None:
+        ol = self._list()
+        if not ol.option_count:
+            return
+        cur = ol.highlighted if ol.highlighted is not None else 0
+        self._highlight(cur + delta)
+
+    def _choose_highlighted(self) -> None:
+        ol = self._list()
+        if not ol.option_count:
+            return
+        idx = ol.highlighted if ol.highlighted is not None else 0
+        self.dismiss(self._by_id.get(ol.get_option_at_index(idx).id))
+
+    async def _on_key(self, event: events.Key) -> None:
+        """Keep typing in the filter, but make row selection keyboard-first."""
+        if event.key in ("down", "ctrl+n"):
+            event.prevent_default(); event.stop()
+            self._move(1)
+            return
+        if event.key in ("up", "ctrl+p"):
+            event.prevent_default(); event.stop()
+            self._move(-1)
+            return
+        if event.key == "pagedown":
+            event.prevent_default(); event.stop()
+            self._move(8)
+            return
+        if event.key == "pageup":
+            event.prevent_default(); event.stop()
+            self._move(-8)
+            return
+        if event.key == "home":
+            event.prevent_default(); event.stop()
+            self._highlight(0)
+            return
+        if event.key == "end":
+            event.prevent_default(); event.stop()
+            self._highlight(10**9)
+            return
+        if event.key == "enter":
+            event.prevent_default(); event.stop()
+            self._choose_highlighted()
+            return
 
     @on(Input.Changed, "#picker-filter")
     def _filter(self, event: Input.Changed):
         q = event.value.lower()
-        ol = self.query_one("#picker-list", OptionList)
+        ol = self._list()
         ol.clear_options()
         for i, (label, _) in enumerate(self._options):
             if q in label.lower():
                 ol.add_option(Option(label, id=str(i)))
+        if ol.option_count:
+            ol.highlighted = 0
 
     @on(OptionList.OptionSelected)
     def _choose(self, event: OptionList.OptionSelected):
         self.dismiss(self._by_id.get(event.option.id))
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class MultiPicker(ModalScreen):
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, title: str, options: list, selected=None):
+        super().__init__()
+        self._title = title
+        self._options = options            # [(label, value), …]
+        self._selected = set(selected or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker"):
+            yield Static(self._title, id="picker-title")
+            yield Input(placeholder="filter…", id="picker-filter")
+            yield OptionList(id="picker-list")
+
+    def on_mount(self):
+        self.query_one("#picker-filter", Input).focus()
+        self._render()
+        self._highlight(0)
+
+    def _list(self) -> OptionList:
+        return self.query_one("#picker-list", OptionList)
+
+    def _render(self) -> None:
+        q = self.query_one("#picker-filter", Input).value.lower()
+        ol = self._list()
+        ol.clear_options()
+        for i, (label, value) in enumerate(self._options):
+            if q and q not in label.lower():
+                continue
+            mark = "[x]" if value in self._selected else "[ ]"
+            ol.add_option(Option(f"{mark} {label}", id=str(i)))
+        if ol.option_count:
+            ol.highlighted = 0
+
+    def _highlight(self, index: int) -> None:
+        ol = self._list()
+        if ol.option_count:
+            ol.highlighted = max(0, min(ol.option_count - 1, index))
+
+    def _move(self, delta: int) -> None:
+        ol = self._list()
+        if ol.option_count:
+            cur = ol.highlighted if ol.highlighted is not None else 0
+            self._highlight(cur + delta)
+
+    def _value_at_highlight(self):
+        ol = self._list()
+        if not ol.option_count:
+            return None
+        idx = ol.highlighted if ol.highlighted is not None else 0
+        opt_id = ol.get_option_at_index(idx).id
+        return self._options[int(opt_id)][1] if opt_id is not None else None
+
+    def _toggle(self) -> None:
+        value = self._value_at_highlight()
+        if value is None:
+            return
+        if value in self._selected:
+            self._selected.remove(value)
+        else:
+            self._selected.add(value)
+        keep = self._list().highlighted or 0
+        self._render()
+        self._highlight(keep)
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key in ("down", "ctrl+n"):
+            event.prevent_default(); event.stop(); self._move(1); return
+        if event.key in ("up", "ctrl+p"):
+            event.prevent_default(); event.stop(); self._move(-1); return
+        if event.key == "space":
+            event.prevent_default(); event.stop(); self._toggle(); return
+        if event.key == "enter":
+            event.prevent_default(); event.stop()
+            self.dismiss(list(self._selected))
+            return
+
+    @on(Input.Changed, "#picker-filter")
+    def _filter(self, event: Input.Changed):
+        self._render()
+
+    @on(OptionList.OptionSelected)
+    def _choose(self, event: OptionList.OptionSelected):
+        self._toggle()
 
     def action_cancel(self):
         self.dismiss(None)
@@ -193,8 +597,13 @@ class Cockpit(App):
     CSS = """
     Screen { layout: vertical; }
 
+    #status-header {
+        height: 3;
+        border-bottom: solid $secondary;
+        background: $panel; padding: 0 1;
+    }
     #timeline {
-        dock: top; height: 8;
+        height: 6;
         border-bottom: solid $accent;
         background: $panel; padding: 0 1;
     }
@@ -231,6 +640,7 @@ class Cockpit(App):
         Binding("ctrl+r", "refresh_now", "refresh"),
         Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+s", "sessions", "sessions"),
+        Binding("ctrl+o", "scope", "scope"),
         Binding("ctrl+t", "model", "model"),
         Binding("ctrl+h", "history", "history"),
     ]
@@ -243,19 +653,25 @@ class Cockpit(App):
         self.poll = max(2, poll)
         self.alerts = alerts
         self._busy = False
+        self._busy_frame = 0
         self._slash_open = False
         self._watch_stop = threading.Event()
+        self._watch_path = None
+        self._watch_size = -1
+        self._watch_state = None
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
+        header = Static("", id="status-header")
         timeline = VerticalScroll(
-            Static("agent timeline — window-1", id="timeline-title"), id="timeline")
+            Static(_TIMELINE_TITLE, id="timeline-title"), id="timeline")
         chat = VerticalScroll(id="chat")
         # The timeline and chat are display-only. Keep them out of the focus
         # chain so a click (or Tab) can never strand focus on a scroll pane —
         # that used to leave typed / IME (e.g. Chinese) input with no target.
         # Mouse-wheel scrolling still works without focus.
-        timeline.can_focus = chat.can_focus = False
+        header.can_focus = timeline.can_focus = chat.can_focus = False
+        yield header
         yield timeline
         yield chat
         yield Static("", id="status")
@@ -276,6 +692,8 @@ class Cockpit(App):
                                    f"backend {N.backend_name(self.backend).split(' (')[0]}",
                                    "dim"), "role-event"))
         self._rebuild_chat(clear=False)        # repaint any restored prior dialogue
+        self._rebuild_timeline()
+        self._update_header()
         if not N.available(self.backend):
             self.notify("backend unavailable — /model to switch", severity="warning")
         self._update_status()
@@ -283,10 +701,13 @@ class Cockpit(App):
         composer.border_title = "› ask the copilot"
         composer.border_subtitle = "Enter send · Ctrl+J newline · / commands · Ctrl+P palette"
         composer.focus()
+        self.set_interval(0.12, self._tick_busy, name="busy-spinner")
+        self.set_interval(self.poll, self._tick_refresh, name="auto-refresh")
         if self.alerts:
             self.watch_agent()
 
     def on_unmount(self):
+        self._busy = False
         self._watch_stop.set()
 
     # ---- focus: a click anywhere (or re-entering the app) lands on the
@@ -369,6 +790,7 @@ class Cockpit(App):
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
         yield SystemCommand("Sessions", "Pick a session to observe", self.action_sessions)
         yield SystemCommand("History", "Browse past copilot conversations", self.action_history)
+        yield SystemCommand("Scope", "Switch grounding scope", self.action_scope)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
         yield SystemCommand("Refresh", "Re-read the session now", self.action_refresh_now)
@@ -385,8 +807,33 @@ class Cockpit(App):
 
     def _timeline(self, renderable, cls="role-event"):
         tl = self.query_one("#timeline", VerticalScroll)
-        tl.mount(Static(renderable, classes=cls))
+        tl.mount(Static(renderable, classes=(cls + " timeline-row").strip()))
         tl.scroll_end(animate=False)
+
+    def _rebuild_timeline(self):
+        tl = self.query_one("#timeline", VerticalScroll)
+        snap = _scope_snapshot(self.session)
+        title = _scope_activity_title(self.session, snap)
+        try:
+            self.query_one("#timeline-title", Static).update(title)
+        except Exception:
+            tl.mount(Static(title, id="timeline-title"))
+        for child in list(tl.query(".timeline-row")):
+            child.remove()
+        if self.session.scope == SC.SESSION:
+            self._timeline(_timeline_status_line(self.session.st))
+            for line in _recent_activity_lines(self.session.st):
+                self._timeline(line)
+            return
+        if self.session.scope == SC.PROJECT:
+            root = _project_cwd(self.session)
+            branch, changed = _git_summary(root)
+            self._timeline(Text(f"project · {branch} · {changed} git change"
+                                f"{'s' if changed != 1 else ''} · {_short_activity(root, 62)}",
+                                style=_PAL["muted"]))
+        self._timeline(_scope_timeline_summary(self.session, snap))
+        for line in _scoped_recent_activity_lines(snap.get("items", [])):
+            self._timeline(line)
 
     def _rebuild_chat(self, clear=True):
         """Repaint the chat pane from the session's (possibly restored) history,
@@ -408,7 +855,83 @@ class Cockpit(App):
                     chat.mount(Markdown(txt, classes="role-assistant"))
         chat.scroll_end(animate=False)
 
+    def _status(self):
+        try:
+            return self.query_one("#status", Static)
+        except Exception:
+            return None
+
+    def _header(self):
+        try:
+            return self.query_one("#status-header", Static)
+        except Exception:
+            return None
+
+    def _header_text(self) -> Text:
+        root = _project_cwd(self.session)
+        project = os.path.basename(root.rstrip(os.sep)) or root
+        branch, changed = _git_summary(root)
+        snap = _scope_snapshot(self.session)
+        st = self.session.st
+        a = A.assess(st) if st is not None else None
+        t = Text()
+        t.append("project ", style=_PAL["muted"])
+        t.append(_short_activity(project, 28), style=_PAL["primary"])
+        t.append(f" · {branch}", style=_PAL["secondary"])
+        t.append(f" · {changed} git change{'s' if changed != 1 else ''}", style=_PAL["muted"])
+        t.append(f" · {_short_activity(root, 62)}", style=_PAL["muted"])
+        t.append("\n")
+
+        if self.session.scope == SC.SESSION:
+            title = _short_activity(_session_title(st), 42) if st is not None else "history-only"
+            sid = _sid(st=st, path=self.session.path)
+            status = st.status if st is not None else "missing"
+            verdict = a.verdict if a is not None else "empty"
+            t.append("scope ", style=_PAL["muted"])
+            t.append("session", style=_PAL["accent"])
+            t.append(f" · {title} · {sid}", style=_PAL["text"])
+            t.append(f" · {status}", style="bold")
+            t.append(f" · {verdict}", style=_VERDICT_HEX.get(verdict, _PAL["muted"]))
+            t.append("\n")
+            ev = st.tr.raw_lines if st is not None else 0
+            idle = _dur(st.idle_seconds) if st is not None else "?"
+            t.append(f"activity current session · idle {idle} · {ev} ev", style=_PAL["muted"])
+            return t
+
+        label = self.session.scope_label()
+        selected = _selection_label(self.session, snap)
+        health = " · ".join(_health_bits(snap.get("items", [])))
+        t.append("scope ", style=_PAL["muted"])
+        t.append(label, style=_PAL["accent"])
+        t.append(f" · {selected} sessions", style=_PAL["text"])
+        if snap.get("error"):
+            t.append(f" · {snap['error']}", style=_PAL["warning"])
+        else:
+            t.append(f" · {health}", style=_PAL["muted"])
+        t.append("\n")
+
+        title = _short_activity(_session_title(st), 42) if st is not None else "history-only"
+        sid = _sid(st=st, path=self.session.path)
+        status = st.status if st is not None else "missing"
+        verdict = a.verdict if a is not None else "empty"
+        t.append(f"anchor {title} · {sid} · {status} · {verdict}",
+                 style=_PAL["muted"])
+        return t
+
+    def _update_header(self):
+        header = self._header()
+        if header is not None:
+            header.update(self._header_text())
+
+    def _refresh_scope_view(self):
+        self._rebuild_timeline()
+        self._update_header()
+        self._update_status()
+
     def _update_status(self):
+        status = self._status()
+        if status is None:
+            return
         st = self.session.st
         t = Text()
         if st is None:                         # history-only (transcript gone)
@@ -417,7 +940,8 @@ class Cockpit(App):
             t.append("  ")
             be = N.backend_name(self.backend).split(" (")[0]
             t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-            self.query_one("#status", Static).update(t)
+            t.append(f"   scope {self.session.scope_label()}", style=_PAL["accent"])
+            status.update(t)
             return
         a = A.assess(st)
         t.append(f" {_STATUS_GLYPH.get(st.status, '·')} {st.status} ", style="bold")
@@ -427,11 +951,28 @@ class Cockpit(App):
         t.append("  ")
         be = N.backend_name(self.backend).split(" (")[0]
         t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
+        t.append(f"   scope {self.session.scope_label()}", style=_PAL["accent"])
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
-            t.append("   ⠿ working", style=_PAL["accent"])
-        self.query_one("#status", Static).update(t)
+            t.append("   " + _busy_indicator(self._busy_frame), style=_PAL["accent"])
+        status.update(t)
+
+    def _tick_busy(self) -> None:
+        if not self._busy:
+            return
+        self._busy_frame = (self._busy_frame + 1) % len(_BUSY_FRAMES)
+        self._update_status()
+
+    def _tick_refresh(self) -> None:
+        # The watcher owns rich per-event deltas when alerts are enabled. This
+        # periodic pass keeps the wider scope/project surfaces current, and also
+        # keeps the cockpit reactive when alert toasts are disabled.
+        changed = self.session.refresh() if not self.alerts else False
+        if changed or self.session.scope != SC.SESSION:
+            self._rebuild_timeline()
+        self._update_header()
+        self._update_status()
 
     # ---- input ----
     @on(Composer.Submitted)
@@ -453,24 +994,28 @@ class Cockpit(App):
             self.notify("no backend — /model to switch", severity="error")
             return
         self.session.refresh()
+        ev = self.session.evidence()
         self._busy = True
+        self._busy_frame = 0
         self._update_status()
         # Capture the originating conversation (store + state). If the user
         # switches sessions before the backend returns, the answer is recorded
         # against the session it was ASKED in — not whatever is current now.
-        self._answer(text, self.session.st, list(self.session.history),
+        self._answer(text, ev.text, self.session.st, list(self.session.history),
                      self.session.store)
 
     @work(thread=True)
-    def _answer(self, text, st, history, store):
+    def _answer(self, text, brief_text, st, history, store):
         try:
-            ans, ok = N.chat(st, history, text, model=self.model, backend=self.backend), True
+            ans = N.chat_brief(brief_text, history, text, model=self.model, backend=self.backend)
+            ok = True
         except Exception as e:
             ans, ok = f"# error: {e}", False
         self.call_from_thread(self._answer_done, text, ans, ok, st, store)
 
     def _answer_done(self, text, ans, ok, st, store):
         self._busy = False
+        self._busy_frame = 0
         same = store is self.session.store     # still on the originating conversation?
         if ok:
             # the cockpit's single durable write-site (the REPL has its own in
@@ -485,32 +1030,47 @@ class Cockpit(App):
             # so we don't render it into the now-current (different) conversation.
         elif same:
             self._chat(self._role(Text(ans, style=_PAL["error"]), "role-alert"))
+        self._update_header()
         self._update_status()
 
     # ---- background watcher ----
+    def _reset_watch_baseline(self):
+        self._watch_path = self.session.path
+        self._watch_size = self.session.last_size
+        self._watch_state = self.session.st
+
     @work(thread=True, exclusive=True, group="watch")
     def watch_agent(self):
-        last_size = self.session.last_size
-        last_state = self.session.st
+        self._reset_watch_baseline()
         while not self._watch_stop.wait(self.poll):
+            path = self.session.path
+            if path != self._watch_path:
+                self._reset_watch_baseline()
+                continue
             try:
-                size = os.path.getsize(self.session.path)
+                size = os.path.getsize(path)
             except OSError:
                 continue
-            if size == last_size:
+            if size == self._watch_size:
                 continue
-            last_size = size
+            self._watch_size = size
             try:
-                st = S.build(T.parse(self.session.path))
+                st = S.build(T.parse(path))
             except Exception:
                 continue
-            d = S.diff(last_state, st)
-            last_state = st
+            d = S.diff(self._watch_state, st)
+            self._watch_state = st
             self.call_from_thread(self._on_watch, st, d)
 
     def _on_watch(self, st, d):
         self.session.st = st
+        self._update_header()
         self._update_status()
+        if d.new_events or d.status_from != d.status_to or d.verdict_from != d.verdict_to:
+            self._timeline(_timeline_delta_line(st, d))
+            line = _activity_line(st.last_record) if st.last_record is not None else None
+            if line is not None:
+                self._timeline(line)
         for fc in d.new_changed[:4]:
             self._timeline(Text(f"✎ {os.path.basename(fc.path)}  ({fc.total} edit/write)  [L{fc.last_line}]"))
         for f in d.new_failures[:4]:
@@ -518,7 +1078,7 @@ class Cockpit(App):
         msg = _fmt_alert(d)
         if msg:
             sev = "error" if "INTERVENE" in msg or "STALLED" in msg else "warning"
-            self.notify(msg, severity=sev, title="window-1")
+            self.notify(msg, severity=sev, title="observed session")
 
     # ---- meta commands (typed `/…` still works) ----
     def _meta(self, cmd):
@@ -537,6 +1097,15 @@ class Cockpit(App):
             self.action_sessions(); return
         if low == "/history" or low.startswith("/history"):
             self.action_history(); return
+        if low == "/scope" or low.startswith("/scope "):
+            arg = cmd.strip()[6:].strip()
+            if arg:
+                out = self.session.meta(cmd)
+                self.notify(str(out).splitlines()[0])
+                self._refresh_scope_view()
+            else:
+                self.action_scope()
+            return
         if low == "/model" or low.startswith("/model "):
             arg = cmd.strip()[6:].strip()
             if arg:
@@ -556,7 +1125,8 @@ class Cockpit(App):
             out = self.session.meta(cmd)
             self.notify(str(out).splitlines()[0])
             self._rebuild_chat()       # restore the switched-to session's dialogue
-            self._update_status(); return
+            self._reset_watch_baseline()
+            self._refresh_scope_view(); return
         self.notify(f"unknown command {cmd!r}", severity="warning")
 
     def _collapsible(self, title, body):
@@ -592,14 +1162,17 @@ class Cockpit(App):
         self.session.refresh()
         if self._no_live():
             return
-        self._collapsible("/brief — recap", B_render(self.session.st))
+        self._collapsible(f"/brief — {self.session.scope_label()}",
+                          self.session.evidence().text)
         self._update_status()
 
     def action_check(self):
         self.session.refresh()
         if self._no_live():
             return
-        self._collapsible("/check — safety", _check_text(self.session.st))
+        body = (_check_text(self.session.st) if self.session.scope == SC.SESSION
+                else self.session.evidence().text)
+        self._collapsible(f"/check — {self.session.scope_label()}", body)
         self._update_status()
 
     def action_diff(self):
@@ -610,22 +1183,47 @@ class Cockpit(App):
                           self._diff_renderable(S.diff(self.session.prev, self.session.st)))
 
     @work
+    async def action_scope(self):
+        opts = [("session", ("scope", SC.SESSION, []))]
+        for name in (SC.MULTI, SC.PROJECT):
+            mark = "  ✓" if name == self.session.scope and not self.session.scope_sessions else ""
+            subset_mark = ("  ✓" if name == self.session.scope and self.session.scope_sessions
+                           else "")
+            opts.append((f"{name} · all{mark}", ("scope", name, [])))
+            opts.append((f"{name} · select sessions{subset_mark}", ("pick", name, None)))
+        chosen = await self.push_screen_wait(Picker("set grounding scope", opts))
+        if chosen:
+            mode, name, selectors = chosen
+            if mode == "pick":
+                selectors = await self._pick_scope_sessions(name)
+                if selectors is None:
+                    return
+            self.session.scope = SC.normalize(name)
+            self.session.scope_sessions = selectors or []
+            self._refresh_scope_view()
+            self.notify(f"scope → {self.session.scope_label()}", severity="information")
+
+    async def _pick_scope_sessions(self, scope_name: str):
+        refs = self.session.sibling_refs()
+        opts = [(_session_picker_label(r, self.session.path), r.session_id) for r in refs]
+        selected = await self.push_screen_wait(
+            MultiPicker(f"select sessions for {scope_name} scope",
+                        opts, selected=self.session.scope_sessions))
+        return selected
+
+    @work
     async def action_sessions(self):
         opts = []
-        for p in self.session.siblings():
-            try:
-                kb = os.path.getsize(p) // 1024
-            except OSError:
-                kb = 0
-            cur = " (current)" if os.path.abspath(p) == os.path.abspath(self.session.path) else ""
-            opts.append((f"{os.path.basename(p)[:-6][:8]}  {kb} KB{cur}", p))
+        for r in self.session.sibling_refs():
+            opts.append((_session_picker_label(r, self.session.path), r.path))
         chosen = await self.push_screen_wait(
             Picker("observe a different live agent session", opts))
         if chosen:
             self.session.switch_path(chosen)   # restores chosen session's history
             self._rebuild_chat()               # repaint it (the old data-loss site)
+            self._reset_watch_baseline()
             self.sub_title = os.path.basename(chosen)[:-6][:8]
-            self._update_status()
+            self._refresh_scope_view()
             self.notify(f"→ {os.path.basename(chosen)[:8]}")
 
     @work
@@ -648,8 +1246,9 @@ class Cockpit(App):
         if chosen:
             live = self.session.attach_conv(chosen)
             self._rebuild_chat()
+            self._reset_watch_baseline()
             self.sub_title = chosen.conv_id[:8]
-            self._update_status()
+            self._refresh_scope_view()
             self.notify(("→ " if live else "history-only → ") + chosen.conv_id[:8],
                         severity="information" if live else "warning")
 
@@ -705,6 +1304,8 @@ class Cockpit(App):
 
     def action_refresh_now(self):
         self.session.refresh()
+        self._rebuild_timeline()
+        self._update_header()
         self._update_status()
         self.notify("history-only — no live session" if self.session.st is None
                     else "refreshed")

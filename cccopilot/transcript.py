@@ -213,8 +213,10 @@ def _ingest(tr: Transcript, line: int, obj: dict) -> None:
         tr.version = obj["version"]
     if typ in ("permission-mode", "mode") and obj.get("permissionMode"):
         tr.permission_mode = obj["permissionMode"]
-    if typ == "ai-title" and obj.get("aiTitle"):
-        tr.title = obj["aiTitle"]
+    if typ in ("ai-title", "custom-title"):
+        title = obj.get("aiTitle") or obj.get("customTitle")
+        if isinstance(title, str) and title.strip():
+            tr.title = title.strip()
 
     # Harness-injected, NOT the human's/agent's own words. A returning person
     # must never see these as "your asks" or "agent's last words":

@@ -20,7 +20,7 @@ import sys
 import time
 from dataclasses import asdict
 
-from . import __version__, locate, transcript as T, state as S, brief as B
+from . import __version__, locate, transcript as T, state as S, brief as B, scope as SC
 
 
 def _repo_root() -> str:
@@ -78,7 +78,9 @@ def cmd_setup(args) -> int:
 
 def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
-    path = locate.resolve(cwd, getattr(args, "session", None))
+    latest = bool(getattr(args, "latest", False))
+    session = None if latest else getattr(args, "session", None)
+    path = locate.resolve(cwd, session, include_current=latest)
     if not path:
         cmd = getattr(args, "cmd", None) or "cockpit"
         sys.stderr.write(f"cc-copilot: no agent session in {cwd!r} "
@@ -109,7 +111,8 @@ def cmd_sessions(args) -> int:
         return 1
     print(f"sessions for {cwd}  ({len(refs)}){hnote}:")
     for r in refs:
-        print(f"  {r.session_id}  {r.hhmm}  {r.size / 1024:7.0f} KB")
+        title = f"  {r.title}" if r.title else ""
+        print(f"  {r.session_id}  {r.hhmm}  {r.size / 1024:7.0f} KB{title}")
     return 0
 
 
@@ -146,7 +149,13 @@ def cmd_brief(args) -> int:
     path, tr, st = _load(args)
     if args.path:
         sys.stderr.write(f"# transcript: {path}\n")
-    print(B.render(st))
+    try:
+        ev = SC.render_evidence(path, st, getattr(args, "scope", SC.SESSION),
+                                sessions=getattr(args, "scope_sessions", ""))
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    print(ev.text)
     if getattr(args, "narrate", False):
         from . import narrate as N
         be = getattr(args, "backend", None)
@@ -156,7 +165,7 @@ def cmd_brief(args) -> int:
         else:
             sys.stderr.write(f"# narrating via {N.backend_name(be)} …\n")
             try:
-                txt = N.narrate(st, model=getattr(args, "model", None), backend=be)
+                txt = N.narrate_brief(ev.text, model=getattr(args, "model", None), backend=be)
                 print("\n## 🗣 Narration  _(LLM, grounded in the cited facts above)_\n")
                 print(txt)
             except Exception as e:
@@ -165,16 +174,22 @@ def cmd_brief(args) -> int:
 
 
 def cmd_ask(args) -> int:
-    _, tr, st = _load(args)
+    path, tr, st = _load(args)
     from . import narrate as N
     be = getattr(args, "backend", None)
     if not N.available(be):
         sys.stderr.write(f"cc-copilot: backend unavailable ({N.backend_name(be)}). "
                          f"Run `cc-copilot backends` to see options.\n")
         return 2
-    sys.stderr.write(f"# {N.backend_name(be)} (grounded in the session state) …\n")
     try:
-        print(N.ask(st, args.question, model=getattr(args, "model", None), backend=be))
+        ev = SC.render_evidence(path, st, getattr(args, "scope", SC.SESSION),
+                                sessions=getattr(args, "scope_sessions", ""))
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    sys.stderr.write(f"# {N.backend_name(be)} (grounded in {ev.scope} evidence) …\n")
+    try:
+        print(N.ask_brief(ev.text, args.question, model=getattr(args, "model", None), backend=be))
     except Exception as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 1
@@ -254,12 +269,18 @@ def cmd_check(args) -> int:
     path, tr, st = _load(args)
     if args.path:
         sys.stderr.write(f"# transcript: {path}\n")
-    print(B.render_check(st))
+    sc = SC.normalize(getattr(args, "scope", SC.SESSION))
+    selectors = getattr(args, "scope_sessions", "")
+    try:
+        print(B.render_check(st) if sc == SC.SESSION
+              else SC.render_evidence(path, st, sc, sessions=selectors).text)
+        rc = SC.exit_code(path, st, sc, sessions=selectors)
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
     # exit code encodes the verdict, so it's scriptable in a hook/CI:
     #   0 clear/idle/awaiting/empty · 1 review · 2 intervene
-    from .assess import assess
-    v = assess(st).verdict
-    return {"intervene": 2, "review": 1}.get(v, 0)
+    return rc
 
 
 def cmd_chat(args) -> int:
@@ -277,14 +298,20 @@ def cmd_chat(args) -> int:
             # execve replaces this process; nothing below runs
 
     path = _resolve_or_die(args)
-    session = C.ChatSession(
-        path,
-        model=getattr(args, "model", None),
-        backend=getattr(args, "backend", None),
-        alerts=not getattr(args, "no_alerts", False),
-        poll=getattr(args, "poll", 5),
-        persist=getattr(args, "persist", None) is not False,  # None/True persist; False off
-    )
+    try:
+        session = C.ChatSession(
+            path,
+            model=getattr(args, "model", None),
+            backend=getattr(args, "backend", None),
+            alerts=not getattr(args, "no_alerts", False),
+            poll=getattr(args, "poll", 5),
+            persist=getattr(args, "persist", None) is not False,  # None/True persist; False off
+            scope=getattr(args, "scope", SC.SESSION),
+            scope_sessions=getattr(args, "scope_sessions", ""),
+        )
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
     if getattr(args, "tui", False):
         from . import tui
         tui.run(session, poll=getattr(args, "poll", 5),
@@ -394,8 +421,17 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--path", action="store_true",
                         help="also print the resolved transcript path to stderr")
 
+    def scope_arg(sp):
+        sp.add_argument("--scope", type=SC.normalize, default=SC.SESSION,
+                        help="grounding scope: session, multi-session, or project "
+                             "(aliases: multi, repo)")
+        sp.add_argument("--scope-sessions", default="",
+                        help="comma-separated (or quoted space-separated) session numbers, ids, "
+                             "prefixes, or paths for multi-session/project scope (default: all)")
+
     sp = sub.add_parser("brief", help="evidence-cited recap of a session")
     session_args(sp)
+    scope_arg(sp)
     sp.add_argument("--narrate", action="store_true",
                     help="append an LLM narration grounded in the cited facts")
     sp.add_argument("--model", help="model for --narrate (passed to the backend)")
@@ -418,6 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("check", help="is it safe to continue? (off-track/friction signals)")
     session_args(sp)
+    scope_arg(sp)
     sp.set_defaults(func=cmd_check)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
@@ -426,6 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--session", help="session id, prefix, or path (default: most recent)")
     sp.add_argument("--model", help="model passed to the LLM backend")
     sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
+    scope_arg(sp)
     sp.set_defaults(func=cmd_ask, path=False)
 
     def add_chat_args(sp):
@@ -440,6 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="don't save/restore this chat's history (in-memory only)")
         sp.add_argument("--poll", type=int, default=5,
                         help="alert poll interval in seconds (default 5)")
+        scope_arg(sp)
 
     sp = sub.add_parser("chat", aliases=["attach"],
                         help="interactive read-only chat pinned to a session's live timeline")
@@ -482,7 +521,5 @@ def cmd_config(args) -> int:
 def main(argv=None) -> int:
     from . import config as CFG
     args = build_parser().parse_args(argv)
-    if getattr(args, "latest", False):
-        args.session = None
     CFG.apply_defaults(args)   # config file fills gaps the flags/env left
     return args.func(args)

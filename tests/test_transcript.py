@@ -35,6 +35,13 @@ class TestTranscript(unittest.TestCase):
         self.assertEqual(tr.git_branch, "main")
         self.assertEqual(tr.session_id, "testsess")
 
+    def test_custom_title_captured(self):
+        tr = T.parse(write([
+            {"type": "custom-title", "customTitle": "test-session-A", "sessionId": "testsess"},
+            user("hi", 1),
+        ]))
+        self.assertEqual(tr.title, "test-session-A")
+
 
 if __name__ == "__main__":
     unittest.main()

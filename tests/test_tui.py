@@ -6,6 +6,8 @@ installed (see .github/workflows/ci.yml).
 """
 
 import os
+import json
+import types
 import unittest
 
 try:
@@ -97,6 +99,7 @@ class TestCockpitFocus(unittest.IsolatedAsyncioTestCase):
     async def test_panes_are_not_focusable(self):
         app = tui.Cockpit(self._session(), poll=999, alerts=False)
         async with app.run_test():
+            self.assertFalse(app.query_one("#status-header").can_focus)
             self.assertFalse(app.query_one("#chat").can_focus)
             self.assertFalse(app.query_one("#timeline").can_focus)
 
@@ -114,6 +117,84 @@ class TestCockpitFocus(unittest.IsolatedAsyncioTestCase):
             await pilot.click("#status")
             await pilot.pause()
             self.assertTrue(comp.has_focus)        # click on status bar → still composer
+
+
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
+    """The shared picker must be usable without a mouse."""
+
+    async def test_arrow_enter_selects_row(self):
+        from textual.widgets import OptionList, Static
+
+        chosen = []
+
+        class Harness(App):
+            def compose(self):
+                yield Static("root")
+
+        app = Harness()
+        async with app.run_test() as pilot:
+            picker = tui.Picker("pick", [("Alpha", "a"), ("Beta", "b"), ("Gamma", "g")])
+            await app.push_screen(picker, chosen.append)
+            await pilot.pause()
+            ol = picker.query_one("#picker-list", OptionList)
+            self.assertEqual(ol.highlighted, 0)
+
+            await pilot.press("down")
+            await pilot.pause()
+            self.assertEqual(ol.highlighted, 1)
+            await pilot.press("enter")
+            await pilot.pause()
+
+        self.assertEqual(chosen, ["b"])
+
+    async def test_filter_resets_highlight_and_enter_selects(self):
+        from textual.widgets import OptionList, Static
+
+        chosen = []
+
+        class Harness(App):
+            def compose(self):
+                yield Static("root")
+
+        app = Harness()
+        async with app.run_test() as pilot:
+            picker = tui.Picker("pick", [("Alpha", "a"), ("Beta", "b"), ("Gamma", "g")])
+            await app.push_screen(picker, chosen.append)
+            await pilot.pause()
+
+            await pilot.press("g", "a")
+            await pilot.pause()
+            ol = picker.query_one("#picker-list", OptionList)
+            self.assertEqual(ol.option_count, 1)
+            self.assertEqual(ol.highlighted, 0)
+            await pilot.press("enter")
+            await pilot.pause()
+
+        self.assertEqual(chosen, ["g"])
+
+    async def test_session_picker_label_includes_title(self):
+        ref = types.SimpleNamespace(
+            title="test-session-A", session_id="abcdef123456", size=4096,
+            path="/tmp/abcdef123456.jsonl")
+        label = tui._session_picker_label(ref, current_path=ref.path)
+        self.assertIn("test-session-A", label)
+        self.assertIn("abcdef12", label)
+        self.assertIn("(current)", label)
+
+    async def test_busy_indicator_rotates(self):
+        self.assertNotEqual(tui._busy_indicator(0), tui._busy_indicator(1))
+        self.assertEqual(tui._busy_indicator(0), tui._busy_indicator(len(tui._BUSY_FRAMES)))
+
+    async def test_timeline_delta_line_mentions_text_only_events(self):
+        from cccopilot import state as S, transcript as T
+        old = S.build(T.parse(write([user("task", 60)])))
+        new = S.build(T.parse(write([user("task", 60), asst("done", 1)])))
+
+        line = str(tui._timeline_delta_line(new, S.diff(old, new)))
+        self.assertIn("+1 events", line)
+        self.assertIn("awaiting-agent", line)
+        self.assertIn("idle", line)
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
@@ -143,7 +224,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
     def _session(self, sid):
         from cccopilot.chat import ChatSession
-        p = write([user("task", 100, sessionId=sid), asst("ok", 50), asst("done", 5)])
+        p = write([user("task", 100, sessionId=sid), asst("ok", 50), asst("done", 5)],
+                  dir=self.home)
         s = ChatSession(p, backend="codex", alerts=False)
         s.refresh()
         return s
@@ -159,6 +241,44 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             # restored dialogue painted on mount: 1 user Static + 1 assistant Markdown
             md = chat.query(Markdown)
             self.assertEqual(len(md), 1)
+
+    async def test_timeline_rebuild_shows_observed_activity(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
+        joined = "\n".join(rows)
+        self.assertIn("session activity", joined)
+        self.assertIn("agent", joined)
+        self.assertIn("done", joined)
+        self.assertNotIn("window-1", joined)
+
+    async def test_status_header_shows_session_mode(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            header = str(app.query_one("#status-header", Static).content)
+        self.assertIn("project", header)
+        self.assertIn("scope session", header)
+        self.assertIn("sess-A", header)
+        self.assertIn("activity current session", header)
+
+    async def test_auto_refresh_updates_activity_without_manual_refresh(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            with open(sess.path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(asst("fresh auto activity", 0)) + "\n")
+            app._tick_refresh()
+            await pilot.pause()
+            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
+        self.assertIn("fresh auto activity", "\n".join(rows))
 
     async def test_in_flight_answer_records_to_origin_after_switch(self):
         sess = self._session("sess-A")
@@ -200,6 +320,38 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(comp.text, "/model ")      # arg command keeps a space
             comp.text = "hello"; app._slash_update()
             self.assertFalse(app._slash_open)           # non-slash text hides it
+
+    async def test_scope_command_updates_status(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/scope project")
+            await pilot.pause()
+            self.assertEqual(app.session.scope, "project")
+            self.assertIn("scope project", str(app.query_one("#status", Static).content))
+            self.assertIn("scope project", str(app.query_one("#status-header", Static).content))
+            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
+            self.assertIn("project activity", "\n".join(rows))
+
+    async def test_scope_command_selects_session_subset(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        sid = os.path.basename(sess.path)[:-6]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta(f"/scope multi {sid}")
+            await pilot.pause()
+            self.assertEqual(app.session.scope, "multi-session")
+            self.assertEqual(app.session.scope_sessions, [sid])
+            self.assertIn("scope multi-session:1",
+                          str(app.query_one("#status", Static).content))
+            self.assertIn("scope multi-session:1",
+                          str(app.query_one("#status-header", Static).content))
+            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
+            self.assertIn("multi-session activity", "\n".join(rows))
 
     async def test_forget_deletes_saved_history(self):
         sess = self._session("sess-A")
@@ -246,6 +398,34 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(turns), 1)
         self.assertEqual(sess.store.load_history(),
                          [("user", "q-one"), ("assistant", "the answer [L2]")])
+
+    async def test_watch_baseline_resets_after_switch(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            first_state = app.session.st
+            app._reset_watch_baseline()
+            self.assertIs(app._watch_state, first_state)
+            b = write([user("task", 100, sessionId="sess-B"), asst("ok", 5)])
+            app.session.switch_path(b)
+            app._reset_watch_baseline()
+            await pilot.pause()
+        self.assertEqual(app._watch_path, b)
+        self.assertIs(app._watch_state, app.session.st)
+
+    async def test_busy_tick_advances_only_while_busy(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            start = app._busy_frame
+            app._tick_busy()
+            self.assertEqual(app._busy_frame, start)
+
+            app._busy = True
+            app._tick_busy()
+            self.assertEqual(app._busy_frame, (start + 1) % len(tui._BUSY_FRAMES))
 
 
 if __name__ == "__main__":

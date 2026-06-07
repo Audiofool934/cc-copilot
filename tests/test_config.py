@@ -61,6 +61,9 @@ class TestConfig(unittest.TestCase):
         open(self.p, "w").close()    # recreate so tearDown's unlink succeeds
         self.assertIsNone(a.model)
 
+    def test_template_default_matches_runtime_default(self):
+        self.assertIn('backend = "codex"', CFG.TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()

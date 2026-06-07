@@ -1,14 +1,14 @@
 """The persistent, parallel, read-only chat sidecar (`cc-copilot chat`).
 
 Pin to one *other* session and hold an ongoing QA conversation while the copilot
-shares window-1's LIVE timeline: every turn re-parses the (growing) JSONL, so an
-answer can never lag the agent. A background thread watches the file and pushes
-inline "it just stalled / went off-track" alerts so it feels parallel, not
-pull-only.
+shares the observed session's LIVE timeline: every turn re-parses the (growing)
+JSONL, so an answer can never lag the agent. A background thread watches the file
+and pushes inline "it just stalled / went off-track" alerts so it feels parallel,
+not pull-only.
 
-Read-only by construction: the only filesystem operation anywhere in the path is
-``open(path, 'r')``. There is no handle to window-1's process and no write verb
-to add — it cannot affect the agent it watches.
+Read-only with respect to the observed agent: the transcript is opened for
+reading only, and there is no handle to the observed agent's process. Separate
+copilot Q&A history may be persisted under cc-copilot's own state directory.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import sys
 import threading
 
 from . import (transcript as T, state as S, brief as B, assess as A,
-               narrate as N, locate as LOC, store as ST)
+               narrate as N, locate as LOC, store as ST, scope as SC)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -28,6 +28,7 @@ _HELP = """commands (all but questions are LLM-free):
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
   /refresh          re-read the session now
+  /scope [name]     show or set grounding scope: session, multi-session, project
   /session          which session is attached
   /sessions         list other sessions in this project
   /use <n|id>       switch to another session (restores its prior chat)
@@ -38,7 +39,7 @@ _HELP = """commands (all but questions are LLM-free):
   /rewind [n]       fork from an earlier message (list, or re-ask #n)
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
-anything else → a question answered grounded in the live session state."""
+anything else → a question answered grounded in the selected read-only scope."""
 
 
 def _dur(sec):
@@ -74,7 +75,7 @@ def _fmt_alert(d) -> str:
     """An alert only fires on a meaningful *transition*, to stay quiet."""
     bits = []
     if d.status_to != d.status_from and d.status_to in ("stalled", "awaiting-agent"):
-        bits.append(f"window-1 → {d.status_to.upper()}")
+        bits.append(f"observed session → {d.status_to.upper()}")
     if d.verdict_to == "intervene" and d.verdict_from != "intervene":
         bits.append("safety → INTERVENE")
     if d.new_failures:
@@ -103,10 +104,13 @@ def _fmt_conv_list(headers, scope="") -> str:
 
 
 class ChatSession:
-    def __init__(self, path, model=None, backend=None, alerts=True, poll=5, persist=True):
+    def __init__(self, path, model=None, backend=None, alerts=True, poll=5,
+                 persist=True, scope=SC.SESSION, scope_sessions=None):
         self.path = path
         self.model = model
         self.backend = backend
+        self.scope = SC.normalize(scope)
+        self.scope_sessions = []
         self.poll = max(2, poll)
         self.history = []          # [(role, text)] — restored from the store in _attach
         self.cwd = ""
@@ -122,6 +126,8 @@ class ChatSession:
         self._alert_state = None
         self._thread = None
         self._attach(path)         # load state + restore prior copilot dialogue
+        if scope_sessions:
+            self.set_scope_sessions(scope_sessions)
 
     # ---- live state ------------------------------------------------------
     def refresh(self) -> bool:
@@ -145,14 +151,24 @@ class ChatSession:
     def banner(self) -> str:
         st = self.st
         if st is None:
-            return "[∅ no live session — transcript gone (history-only)]"
-        return (f"[{_GLYPH.get(st.status, '?')} {st.status} · idle "
+            return f"[scope: {self.scope_label()} · ∅ no live session — transcript gone (history-only)]"
+        return (f"[scope: {self.scope_label()} · {_GLYPH.get(st.status, '?')} {st.status} · idle "
                 f"{_dur(st.idle_seconds)} · {st.tr.raw_lines} ev · "
                 f"safety: {A.assess(st).verdict}]")
 
+    def scope_label(self) -> str:
+        if self.scope in (SC.MULTI, SC.PROJECT) and self.scope_sessions:
+            return f"{self.scope}:{len(self.scope_sessions)}"
+        return self.scope
+
+    def evidence(self, st=None):
+        return SC.render_evidence(self.path, self.st if st is None else st,
+                                  self.scope, sessions=self.scope_sessions)
+
     def answer(self, q: str) -> str:
         self.refresh()
-        txt = N.chat(self.st, self.history, q, model=self.model, backend=self.backend)
+        ev = self.evidence()
+        txt = N.chat_brief(ev.text, self.history, q, model=self.model, backend=self.backend)
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
         # durable copilot history (best-effort; never breaks the answer)
@@ -165,18 +181,20 @@ class ChatSession:
         if c in ("/exit", "/quit"):
             return False
         self.refresh()
-        if self.st is None and c in ("/brief", "/check", "/diff"):
+        if self.st is None and c in ("/check", "/diff"):
             return "(no live session — transcript gone; history-only view)"
         if c == "/help":
             return _HELP
         if c == "/brief":
-            return B.render(self.st)
+            return self.evidence().text
         if c == "/check":
-            return B.render_check(self.st)
+            return B.render_check(self.st) if self.scope == SC.SESSION else self.evidence().text
         if c == "/refresh":
             return self.banner() + "  (refreshed)"
+        if c == "/scope" or c.startswith("/scope "):
+            return self._scope(cmd.strip()[6:].strip())
         if c == "/session":
-            return f"attached: {self.path}\n{self.banner()}"
+            return f"attached: {self.path}\nscope: {self.scope_label()}\n{self.banner()}"
         if c == "/sessions":
             return self._list_sessions()
         if c.startswith("/use"):
@@ -221,36 +239,68 @@ class ChatSession:
                     f"  {question}")
         return f"unknown command {cmd!r} — try /help"
 
+    def _scope(self, arg):
+        if not arg:
+            selected = ("selected sessions: " + ", ".join(s[:8] for s in self.scope_sessions)
+                        if self.scope_sessions else "selected sessions: all")
+            return ("scope: " + self.scope_label() + "\n"
+                    + selected + "\n"
+                    "available: session, multi-session, project\n"
+                    "usage: /scope <session|multi-session|project> [session-id|prefix ...]\n"
+                    "       /scope all   # clear the selected subset")
+        toks = arg.split()
+        if len(toks) == 1 and toks[0].lower() in ("all", "*", "clear", "reset"):
+            self.scope_sessions = []
+            return f"scope → {self.scope_label()}\n{self.banner()}"
+        try:
+            new_scope = SC.normalize(toks[0])
+            selectors = toks[1:]
+        except ValueError as e:
+            if self.scope in (SC.MULTI, SC.PROJECT):
+                new_scope = self.scope
+                selectors = toks
+            else:
+                return str(e)
+        self.scope = new_scope
+        if self.scope == SC.SESSION:
+            self.scope_sessions = []
+        elif not selectors or selectors in (["all"], ["*"]):
+            self.scope_sessions = []
+        else:
+            try:
+                self.set_scope_sessions(selectors)
+            except ValueError as e:
+                return str(e)
+        return f"scope → {self.scope_label()}\n{self.banner()}"
+
+    def set_scope_sessions(self, selectors) -> None:
+        refs = SC.resolve_session_refs(self.path, SC.parse_selectors(selectors))
+        self.scope_sessions = [r.session_id for r in refs]
+
     # ---- session switching (select among multiple sessions) --------------
     def _siblings(self):
         d = os.path.dirname(self.path)
-        refs = []
-        for n in os.listdir(d):
-            if n.endswith(".jsonl"):
-                p = os.path.join(d, n)
-                # hide cc-copilot's own narration sessions, but never hide the
-                # one we're currently attached to.
-                if p != self.path and LOC.is_own_session(p):
-                    continue
-                try:
-                    refs.append((os.path.getmtime(p), p))
-                except OSError:
-                    pass
-        refs.sort(reverse=True)
-        self._listing = [p for _, p in refs]
+        refs = LOC.refs_in_dir(d, include_own=True)
+        # hide cc-copilot's own narration sessions, but never hide the one we're
+        # currently attached to.
+        refs = [r for r in refs if not r.own or r.path == self.path]
+        self._session_refs = refs
+        self._listing = [r.path for r in refs]
         return self._listing
 
+    def sibling_refs(self):
+        """Public list of sibling sessions with title metadata."""
+        self._siblings()
+        return getattr(self, "_session_refs", [])
+
     def _list_sessions(self):
-        paths = self._siblings()
+        refs = self.sibling_refs()
         out = ["sessions in this project (newest first — `/use <n|id>`):"]
-        for i, p in enumerate(paths, 1):
+        for i, r in enumerate(refs, 1):
+            p = r.path
             cur = "*" if os.path.samefile(p, self.path) else " "
-            sid = os.path.basename(p)[:-6]
-            try:
-                kb = os.path.getsize(p) // 1024
-            except OSError:
-                kb = 0
-            out.append(f" {cur}{i:>2}. {sid[:8]}  {kb:>6} KB")
+            title = (r.title or "(untitled)")[:50]
+            out.append(f" {cur}{i:>2}. {title:<50}  {r.session_id[:8]}  {r.size // 1024:>6} KB")
         return "\n".join(out)
 
     def _switch(self, arg):

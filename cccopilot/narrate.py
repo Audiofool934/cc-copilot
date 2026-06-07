@@ -1,13 +1,14 @@
 """Leg ③ — the grounded narration / observer-chat layer.
 
 The whole point of cc-copilot is *not* being a second hallucinating agent. So
-the LLM here never sees the raw transcript — it sees the **deterministic,
-evidence-cited brief** produced by legs ①/② and is told to answer only from it,
-keeping the ``[L…]`` citations. It narrates grounded facts; it doesn't invent.
+the LLM here never sees raw transcripts or ambient repo access — it sees a
+**deterministic, evidence-cited brief** produced by legs ①/② (and, for project
+scope, read-only file facts) and is told to answer only from it, keeping the
+citations. It narrates grounded facts; it doesn't invent.
 
 The backend is pluggable (see :mod:`cccopilot.backends`): a local agent CLI
 (`claude`, `codex`, `gemini`, `llm`) or any OpenAI-compatible HTTP API
-(`deepseek`, `openai`, `openrouter`, `ollama`, …). Default is `claude`. Pick one
+(`deepseek`, `openai`, `openrouter`, `ollama`, …). Default is `codex`. Pick one
 with ``backend=...`` / ``--backend`` / ``CC_COPILOT_BACKEND``. If none is
 available, callers fall back to the deterministic brief.
 """
@@ -18,14 +19,14 @@ from .brief import render
 from .backends import resolve, Backend, BackendError
 
 _PREAMBLE = """You are cc-copilot's narration layer. Below is a DETERMINISTIC, \
-evidence-cited brief of a long-running coding agent's session — a read-only \
-sidecar reconstructed it from the session transcript, and every [L<n>] marks a \
-real transcript line.
+evidence-cited brief from a read-only sidecar. Citations may be session transcript \
+lines (`[L<n>]` or `[session:L<n>]`), project file lines (`[path:L<n>]`), or \
+deterministic collector facts (`[tree]`, `[git:*]`).
 
 STRICT RULES:
 - Answer ONLY from the brief below. Do NOT invent files, commands, errors, \
 statuses, or actions that aren't in it.
-- Keep the [L<n>] citation when you state a specific fact.
+- Keep the citation when you state a specific fact.
 - If the brief doesn't contain enough to answer, say so plainly — do not guess.
 - Be concise and concrete. Prose only; do not use any tools or read any files.\
 """
@@ -34,7 +35,7 @@ _NARRATE_TASK = (
     "Brief the returning human in 3–5 sentences: what did this agent do while "
     "they were away, does it look safe to let it keep running (use the Safety "
     "verdict), and the single most important thing to look at next? "
-    "Keep [L<n>] citations for specific claims."
+            "Keep citations for specific claims."
 )
 
 
@@ -64,25 +65,42 @@ def _prompt(brief_text: str, task: str) -> str:
 
 
 def run(state, task: str, model: str = None, backend=None, timeout: int = 180) -> str:
+    return run_brief(render(state), task, model=model, backend=backend, timeout=timeout)
+
+
+def run_brief(brief_text: str, task: str, model: str = None,
+              backend=None, timeout: int = 180) -> str:
     be = _be(backend)
     if not be.available():
         raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
                            f"Try `cc-copilot backends` to see your options.")
-    return be.complete(_prompt(render(state), task), model=model, timeout=timeout)
+    return be.complete(_prompt(brief_text, task), model=model, timeout=timeout)
 
 
 def narrate(state, model: str = None, backend=None) -> str:
     return run(state, _NARRATE_TASK, model=model, backend=backend)
 
 
+def narrate_brief(brief_text: str, model: str = None, backend=None) -> str:
+    return run_brief(brief_text, _NARRATE_TASK, model=model, backend=backend)
+
+
 def ask(state, question: str, model: str = None, backend=None) -> str:
+    return ask_brief(render(state), question, model=model, backend=backend)
+
+
+def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -> str:
     task = ('The returning human asks: "' + question.strip() + '"\n'
-            "Answer grounded in the brief, with [L<n>] citations. "
+            "Answer grounded in the brief, with citations. "
             "If the brief lacks the information, say so rather than guessing.")
-    return run(state, task, model=model, backend=backend)
+    return run_brief(brief_text, task, model=model, backend=backend)
 
 
 def chat(state, history, question: str, model: str = None, backend=None) -> str:
+    return chat_brief(render(state), history, question, model=model, backend=backend)
+
+
+def chat_brief(brief_text: str, history, question: str, model: str = None, backend=None) -> str:
     """Multi-turn sibling of :func:`ask` for the live chat sidecar.
 
     The CURRENT brief (re-read this turn, prepended by :func:`run`) is the only
@@ -100,6 +118,6 @@ def chat(state, history, question: str, model: str = None, backend=None) -> str:
                  "new facts):\n" + "\n".join(parts) + "\n\n")
     task = (convo + 'Current question from the returning human: "'
             + question.strip() + '"\n'
-            "Answer ONLY from the current brief above, keeping [L<n>] citations. "
+            "Answer ONLY from the current brief above, keeping citations. "
             "If it lacks the info, say so plainly.")
-    return run(state, task, model=model, backend=backend)
+    return run_brief(brief_text, task, model=model, backend=backend)

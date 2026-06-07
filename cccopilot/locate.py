@@ -38,6 +38,7 @@ class SessionRef:
     session_id: str
     mtime: float
     size: int
+    title: str = ""
     own: bool = False        # a cc-copilot narration call, not a real work session
 
     @property
@@ -61,6 +62,64 @@ def is_own_session(path: str) -> bool:
     return _OWN_SIG in head
 
 
+def _session_meta_name(session_id: str) -> str:
+    if not session_id:
+        return ""
+    d = os.path.expanduser("~/.claude/sessions")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return ""
+    best_name, best_updated = "", -1
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        p = os.path.join(d, name)
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                o = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(o, dict) or o.get("sessionId") != session_id:
+            continue
+        n = o.get("name")
+        if not isinstance(n, str) or not n.strip():
+            continue
+        updated = int(o.get("updatedAt", 0) or 0)
+        if updated >= best_updated:
+            best_name, best_updated = n.strip(), updated
+    return best_name
+
+
+def read_title(path: str, session_id: str = "") -> str:
+    """Latest Claude Code title recorded inside a transcript, if present.
+
+    Claude has used both ``type: ai-title``/``aiTitle`` and
+    ``type: custom-title``/``customTitle`` for session names. Renames append a
+    later title event, so latest wins. Active sessions can also expose the name
+    under ``~/.claude/sessions/*.json``; use that as a fallback.
+    """
+    title = ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                if o.get("sessionId") and not session_id:
+                    session_id = str(o.get("sessionId"))
+                if o.get("type") in ("ai-title", "custom-title"):
+                    t = o.get("aiTitle") or o.get("customTitle")
+                    if isinstance(t, str) and t.strip():
+                        title = t.strip()
+    except OSError:
+        pass
+    return title or _session_meta_name(session_id)
+
+
 def _refs_in(d: str, include_own: bool = False) -> list:
     refs = []
     for name in os.listdir(d):
@@ -73,10 +132,15 @@ def _refs_in(d: str, include_own: bool = False) -> list:
             continue
         refs.append(SessionRef(
             path=p, session_id=name[:-6], mtime=stt.st_mtime, size=stt.st_size,
-            own=is_own_session(p),
+            title=read_title(p, name[:-6]), own=is_own_session(p),
         ))
     refs.sort(key=lambda r: r.mtime, reverse=True)
     return refs if include_own else [r for r in refs if not r.own]
+
+
+def refs_in_dir(d: str, include_own: bool = False) -> list:
+    """Return session refs from an already-known project transcript directory."""
+    return _refs_in(d, include_own) if os.path.isdir(d) else []
 
 
 def list_sessions(cwd: str, include_own: bool = False) -> list:
@@ -142,13 +206,15 @@ def ago(mtime: float) -> str:
     return f"{int(s // 86400)}d"
 
 
-def resolve(cwd: str, session: Optional[str] = None) -> Optional[str]:
+def resolve(cwd: str, session: Optional[str] = None,
+            include_current: bool = False) -> Optional[str]:
     """Resolve a transcript path.
 
     - ``session`` may be a full path, a session id, or a prefix.
-    - Otherwise return the most recently modified session for ``cwd`` —
-      excluding the *current* session if we can detect it, so ``brief`` from
-      inside a live session reports on the agent you actually want to watch.
+    - Otherwise return the most recently modified session for ``cwd``. By
+      default this excludes the *current* session if we can detect it, so
+      ``brief`` from inside a live session reports on the agent you actually
+      want to watch. ``include_current=True`` is the explicit "latest" path.
     """
     if session:
         if os.path.isfile(session):
@@ -161,7 +227,7 @@ def resolve(cwd: str, session: Optional[str] = None) -> Optional[str]:
     sessions = list_sessions(cwd)
     if not sessions:
         return None
-    self_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    self_id = "" if include_current else os.environ.get("CLAUDE_SESSION_ID", "")
     for ref in sessions:
         if self_id and ref.session_id == self_id:
             continue

@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import tempfile
+import types
 import unittest
 
 from cccopilot import locate as L
@@ -12,6 +14,12 @@ def _jsonl(obj):
     with open(p, "w") as f:
         f.write(json.dumps(obj) + "\n")
     return p
+
+
+def _jsonl_lines(path, objs):
+    with open(path, "w", encoding="utf-8") as f:
+        for obj in objs:
+            f.write(json.dumps(obj) + "\n")
 
 
 class TestLocate(unittest.TestCase):
@@ -43,11 +51,73 @@ class TestLocate(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_read_title_latest_wins_across_title_formats(self):
+        p = _jsonl({"type": "ai-title", "aiTitle": "old title"})
+        try:
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "custom-title",
+                                    "customTitle": "test-session-A"}) + "\n")
+            self.assertEqual(L.read_title(p), "test-session-A")
+        finally:
+            os.unlink(p)
+
     def test_ago_formatting(self):
         import time
         self.assertTrue(L.ago(time.time() - 30).endswith("m"))
         self.assertTrue(L.ago(time.time() - 7200).endswith("h"))
         self.assertTrue(L.ago(time.time() - 200000).endswith("d"))
+
+    def test_latest_includes_current_session(self):
+        from cccopilot import cli
+
+        root = tempfile.mkdtemp()
+        old_root = L.projects_root
+        old_self = os.environ.get("CLAUDE_SESSION_ID")
+        cwd = "/tmp/cc-copilot-latest-test"
+        d = os.path.join(root, L.encode_cwd(cwd))
+        os.makedirs(d)
+        current = os.path.join(d, "newest.jsonl")
+        other = os.path.join(d, "older.jsonl")
+        try:
+            L.projects_root = lambda: root
+            for p in (other, current):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write("{}\n")
+            os.utime(other, (1000, 1000))
+            os.utime(current, (2000, 2000))
+            os.environ["CLAUDE_SESSION_ID"] = "newest"
+
+            self.assertEqual(L.resolve(cwd), other)
+            self.assertEqual(L.resolve(cwd, include_current=True), current)
+            args = types.SimpleNamespace(cwd=cwd, session=None, latest=True, cmd="brief")
+            self.assertEqual(cli._resolve_or_die(args), current)
+        finally:
+            L.projects_root = old_root
+            if old_self is None:
+                os.environ.pop("CLAUDE_SESSION_ID", None)
+            else:
+                os.environ["CLAUDE_SESSION_ID"] = old_self
+            shutil.rmtree(root)
+
+    def test_session_refs_include_titles(self):
+        root = tempfile.mkdtemp()
+        old_root = L.projects_root
+        cwd = "/tmp/cc-copilot-title-test"
+        d = os.path.join(root, L.encode_cwd(cwd))
+        os.makedirs(d)
+        path = os.path.join(d, "sess-title.jsonl")
+        try:
+            L.projects_root = lambda: root
+            _jsonl_lines(path, [
+                {"type": "user", "cwd": cwd, "message": {"role": "user", "content": "hi"}},
+                {"type": "custom-title", "customTitle": "test-session-A"},
+            ])
+            refs = L.list_sessions(cwd)
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0].title, "test-session-A")
+        finally:
+            L.projects_root = old_root
+            shutil.rmtree(root)
 
 
 if __name__ == "__main__":

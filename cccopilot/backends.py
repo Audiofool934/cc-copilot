@@ -12,8 +12,8 @@ call an LLM, and they don't care which one. Two backend shapes, both zero-dep:
   auth via an API-key env var.
 
 Selection precedence (see :func:`resolve`):
-  explicit name  >  CC_COPILOT_LLM_CMD (custom CLI)  >  CC_COPILOT_API_BASE
-  (custom OpenAI-compatible)  >  CC_COPILOT_BACKEND  >  default `claude`.
+  explicit name  >  CC_COPILOT_BACKEND  >  CC_COPILOT_LLM_CMD (custom CLI)
+  >  CC_COPILOT_API_BASE (custom OpenAI-compatible)  >  default `codex`.
 """
 
 from __future__ import annotations

@@ -21,6 +21,18 @@ def _tx(sid, cwd="/test/proj"):
                   asst("ok", 50), asst("done", 5)])
 
 
+def _tx_in_dir(dir_, sid, title="", cwd="/test/proj"):
+    p = os.path.join(dir_, sid + ".jsonl")
+    events = [user("task", 100, sessionId=sid, cwd=cwd),
+              asst("ok", 50), asst("done", 5)]
+    if title:
+        events.append({"type": "custom-title", "customTitle": title})
+    with open(p, "w", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+    return p
+
+
 class _StateHome(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix="cchist-")
@@ -30,10 +42,13 @@ class _StateHome(unittest.TestCase):
         os.environ["CC_COPILOT_HISTORY"] = "1"          # force persistence on
         os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.home, "none.toml")
         self._realchat = N.chat
+        self._realchat_brief = N.chat_brief
         N.chat = lambda st, history, q, model=None, backend=None: f"A:{q}"
+        N.chat_brief = lambda brief, history, q, model=None, backend=None: f"A:{q}"
 
     def tearDown(self):
         N.chat = self._realchat
+        N.chat_brief = self._realchat_brief
         for k, v in self._env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -72,6 +87,15 @@ class TestRestore(_StateHome):
         s._listing = [a, b]                             # control /use's session list
         msg = s._switch(os.path.basename(a)[:-6])       # switch back to A by id
         self.assertIn("restored 2 prior turns", msg)
+
+    def test_session_list_shows_renamed_titles(self):
+        d = tempfile.mkdtemp(prefix="ccsess-")
+        a = _tx_in_dir(d, "sess-A", title="test-session-A")
+        _tx_in_dir(d, "sess-B", title="test-session-B")
+        s = C.ChatSession(a, alerts=False)
+        out = s.meta("/sessions")
+        self.assertIn("test-session-A", out)
+        self.assertIn("test-session-B", out)
 
     def test_single_append_site(self):
         a = _tx("sess-A")

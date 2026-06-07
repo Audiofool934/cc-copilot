@@ -41,8 +41,8 @@ def result(tid, content="ok", is_error=False, ago=0):
                                      "content": content, "is_error": is_error}]}}
 
 
-def write(events):
-    fd, p = tempfile.mkstemp(suffix=".jsonl")
+def write(events, dir=None):
+    fd, p = tempfile.mkstemp(suffix=".jsonl", dir=dir)
     os.close(fd)
     with open(p, "w") as f:
         for i, e in enumerate(events):

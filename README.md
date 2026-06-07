@@ -7,9 +7,9 @@ what to look at, without scrolling the transcript.
 
 ![cc-copilot cockpit](docs/cockpit.png)
 
-*The cockpit (`cc-copilot cockpit`): a live agent-timeline above your chat, a
-safety verdict pill, and answers grounded in evidence — every `[L…]` is a real
-transcript line.*
+*The cockpit (`cc-copilot cockpit`): a scope-aware status header, scoped activity
+above your chat, a safety verdict pill, and answers grounded in evidence — every
+`[L…]` is a real transcript line.*
 
 ```
 $ cc-copilot brief
@@ -80,7 +80,7 @@ This is enforced, not aspirational — see [Verification](#verification).
 
 ## Install / run
 
-No dependencies, Python 3.8+. Nothing to install:
+No dependencies, Python 3.9+. Nothing to install:
 
 ```bash
 git clone <this repo> && cd cc-copilot
@@ -93,13 +93,17 @@ Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
 
 ```bash
 cc-copilot cockpit                  # ⭐ full-screen TUI cockpit (needs cc-copilot[tui])
+cc-copilot cockpit --scope project  # scope: session | multi-session | project
 cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
 cc-copilot history                  # saved copilot conversations (--all = every project)
 cc-copilot brief                    # one-shot recap (defaults to most recent session)
+cc-copilot brief --scope multi      # aggregate every work session in this project
+cc-copilot brief --scope multi --scope-sessions a1b2c3d4,b5c53c29
 cc-copilot check                    # just the "is it safe to continue?" verdict
 cc-copilot ask "did it drift?"      # one-shot grounded Q&A over the session state
+cc-copilot ask --scope repo "what does the project look like?"
 cc-copilot brief --narrate          # recap + an LLM narration of the cited facts
 cc-copilot brief --latest           # …explicitly the newest
 cc-copilot brief <session-id|path>  # a specific session
@@ -176,7 +180,7 @@ And inside a chat you can hop between them live:
 
 ```
 you> /sessions           # list the project's sessions, numbered
-you> /use 2              # switch to #2 (clears chat context for the new session)
+you> /use 2              # switch to #2 (restores that session's copilot chat)
 you> /use b5c53c29       # …or by id / prefix
 ```
 
@@ -184,13 +188,39 @@ Pick a session for any one-shot command with a positional id/prefix/path
 (`cc-copilot brief <id>`), or `--session`. The deterministic core means `status`
 needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 
+## Grounding scopes
+
+Every conversational surface now has an explicit read range:
+
+| scope | source | citations |
+|---|---|---|
+| `session` | one observed transcript (default) | `[L123]` |
+| `multi-session` / `multi` | all work-session transcripts for the cwd | `[b5c53c29:L123]` |
+| `project` / `repo` | multi-session evidence + deterministic read-only workspace facts | `[b5c53c29:L123]`, `[path.py:L45]`, `[tree]`, `[git:status]` |
+
+Scope expands the **evidence model**, not backend permissions. Even in `project`
+scope the LLM receives only a rendered, cited brief; it does not get tools, repo
+handles, or ambient filesystem access. The project collector reads locally and
+deterministically: git status, a bounded file index, and text excerpts with
+`path:line` citations, skipping common generated/secret paths.
+
+For `multi-session` and `project` scopes you can narrow the transcript set:
+
+```bash
+cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
+cc-copilot cockpit --scope project --scope-sessions 1,3
+```
+
+In the REPL/TUI, `/scope multi a1b2c3d4 b5c53c29` selects a subset, `/scope all`
+clears it back to every work session, and `Ctrl+O` opens a picker.
+
 ## Cockpit TUI — `cc-copilot cockpit`
 
 A full-screen cockpit (Textual) — the Python analog of Codex's `ratatui` loop and
-Claude Code's Ink UI: a **reactive header** (status · safety verdict · backend:model
-· idle), a **scrolling log** that interleaves window-1's live timeline with your
-chat, a **background watcher** that pushes stall/off-track alerts as the agent
-works, and **off-thread backend turns** so it never freezes. Default backend is
+Claude Code's Ink UI: a **scope-aware status header** (project · scope · attached
+session), a **scoped activity strip** above your chat, a **background watcher**
+that pushes stall/off-track alerts as the agent works, and **off-thread backend
+turns** so it never freezes. Default backend is
 **codex** (ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus
 the composer, which takes full multilingual input (CJK / emoji); `Shift+Enter`
 (or `Ctrl+J`) inserts a newline, `Enter` sends.
@@ -202,7 +232,7 @@ cc-copilot cockpit            # just run it — first launch auto-installs the T
 # (= cc-copilot chat --tui)
 ```
 
-In-cockpit: `Enter` send · `/help` · `/brief` `/check` `/diff` (LLM-free) ·
+In-cockpit: `Enter` send · `/help` · `/scope` (Ctrl+O) · `/brief` `/check` `/diff` (LLM-free) ·
 `/sessions` `/use <n|id>` · `/history` (Ctrl+H) · `/model <name>` · `Ctrl+R` refresh ·
 `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
 — the faithfulness guarantee holds in the TUI exactly as in the CLI.
@@ -239,19 +269,25 @@ you> what was it doing, and did it hit trouble?
 cc > It's wiring the SSH-reconnect backoff. Hit a 3-command fail-streak
      on the migration [L244 L248 L250] but recovered; tests green [L312].
 
-🔔 window-1 → STALLED · 1 new error(s), e.g. Bash [L1871]
+🔔 observed session → STALLED · 1 new error(s), e.g. Bash [L1871]
 you> is it safe to let it keep going?
 …
 ```
 
 - **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
-  lag window-1; a status banner shows it moving.
+  lag the observed session; cockpit header/activity surfaces also refresh on the
+  poll interval.
+- **Explicit scope** — `/scope session|multi|project` changes what evidence
+  questions are grounded in while keeping the backend read-only. In the cockpit,
+  the header and activity strip change shape for single-session, selected
+  multi-session, and project views.
 - **Multi-turn** — it remembers the conversation; follow-ups resolve against both
   the prior answers and the just-refreshed state.
 - **Push alerts** — a background thread pings you inline when the agent stalls /
   goes off-track / errors (`--no-alerts` to silence; `--poll N` to tune).
-- **Read-only by construction** — the only file op is `open(path,'r')`; verified
-  byte-identical before/after. It cannot touch the agent it watches.
+- **Read-only observer of the agent** — it opens the observed transcript for
+  reading only; your separate copilot Q&A is persisted under cc-copilot's state
+  dir unless disabled. It cannot touch the agent it watches.
 - **LLM-free escape hatches** — `/brief`, `/check`, `/diff`, `/refresh`,
   `/session`, `/history` work without a backend, and let you verify any prose
   answer against cited evidence in the same window.
@@ -295,8 +331,8 @@ export CC_COPILOT_BACKEND=codex           # set a default
 
 | backend | how it authenticates | notes |
 |---|---|---|
-| `claude` *(default)* | your Claude Code login | `claude -p`; no API key |
-| `codex` | your `codex login` (ChatGPT **OAuth**) | `codex exec`; agentic CLI |
+| `codex` *(default)* | your `codex login` (ChatGPT **OAuth**) | `codex exec`; agentic CLI |
+| `claude` | your Claude Code login | `claude -p`; no API key |
 | `gemini` / `llm` | the CLI's own config | if installed on PATH |
 | `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible HTTP |
 | `openai` | `OPENAI_API_KEY` | |
@@ -344,6 +380,7 @@ state.py        fold records into a deterministic working-state model — plan,
                 changed files (failed edits excluded), commands, errors, status —
                 each fact carrying its evidence line(s)
 brief.py        render the evidence-cited recap
+scope.py        render session / multi-session / project evidence scopes
 locate.py       map cwd ⇄ ~/.claude/projects session files
 cli.py          sessions / brief / state / watch
 ```
@@ -404,7 +441,7 @@ Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 git clone <repo> && cd cc-copilot
 ./cc-copilot brief --cwd ~/some-project      # runs on stdlib alone
 
-python3 -m unittest discover -s tests        # 43 tests, no deps
+python3 -m unittest discover -s tests        # stdlib-only core tests
 cc-copilot setup                             # adds the optional TUI (.venv + textual)
 ```
 

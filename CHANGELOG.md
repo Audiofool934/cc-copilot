@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.0 — 2026-06-07
+
+**Grounding scopes**
+- Added explicit read ranges for conversational surfaces: `session` (default),
+  `multi-session` / `multi`, and `project` / `repo`.
+- `brief`, `check`, `ask`, `chat`, and `cockpit` accept `--scope`; the REPL and
+  cockpit also support `/scope`, and the cockpit exposes a `Ctrl+O` scope picker.
+- Multi-session/project scopes can be narrowed to a specific subset with
+  `--scope-sessions a1b2c3d4,b5c53c29`, `/scope multi a1b2c3d4 b5c53c29`, or
+  the cockpit picker; `/scope all` clears the subset.
+- Multi-session scope renders all work-session transcripts for the cwd as a
+  deterministic evidence brief, neediest-first, with session-qualified citations
+  like `[b5c53c29:L244]`.
+- Project scope adds deterministic read-only workspace facts: git status, a
+  bounded file index, and text excerpts with `[path:Ln]`, `[tree]`, and
+  `[git:*]` citations. The backend still receives only a rendered brief: no
+  tools, no ambient repo access, no writes.
+
+**Cockpit scope surfaces**
+- The TUI now has a dedicated status header that changes by scope: single
+  session shows the attached title/id/status, multi-session shows selected/all
+  session health, and project scope adds git/project status.
+- The activity strip now retitles and repopulates by scope (`session activity`,
+  `multi-session activity`, `project activity`) instead of always implying a
+  single observed session.
+- Scoped cockpit surfaces refresh on the poll interval, so the header/activity
+  view stays current without relying on manual `Ctrl+R` refresh.
+
 ## 0.3.0 — 2026-06-07
 
 **Rewind** (Codex-style, conversation-only)
