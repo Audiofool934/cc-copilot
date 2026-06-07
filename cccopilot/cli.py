@@ -304,7 +304,7 @@ def cmd_chat(args) -> int:
             model=getattr(args, "model", None),
             backend=getattr(args, "backend", None),
             alerts=not getattr(args, "no_alerts", False),
-            poll=getattr(args, "poll", 5),
+            poll=getattr(args, "poll", 2),
             persist=getattr(args, "persist", None) is not False,  # None/True persist; False off
             scope=getattr(args, "scope", SC.SESSION),
             scope_sessions=getattr(args, "scope_sessions", ""),
@@ -314,7 +314,7 @@ def cmd_chat(args) -> int:
         return 2
     if getattr(args, "tui", False):
         from . import tui
-        tui.run(session, poll=getattr(args, "poll", 5),
+        tui.run(session, poll=getattr(args, "poll", 2),
                 alerts=not getattr(args, "no_alerts", False))
         return 0
     session.loop()
@@ -476,8 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="disable the background stall/off-track alert thread")
         sp.add_argument("--no-persist", dest="persist", action="store_false", default=None,
                         help="don't save/restore this chat's history (in-memory only)")
-        sp.add_argument("--poll", type=int, default=5,
-                        help="alert poll interval in seconds (default 5)")
+        sp.add_argument("--poll", type=int, default=2,
+                        help="alert/header poll interval in seconds (default 2)")
         scope_arg(sp)
 
     sp = sub.add_parser("chat", aliases=["attach"],

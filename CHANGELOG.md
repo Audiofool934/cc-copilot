@@ -27,6 +27,8 @@
   single observed session.
 - Scoped cockpit surfaces refresh on the poll interval, so the header/activity
   view stays current without relying on manual `Ctrl+R` refresh.
+- The chat/cockpit poll default is now 2 seconds, with `--poll N` still available
+  for slower polling on very large session sets.
 
 ## 0.3.0 — 2026-06-07
 

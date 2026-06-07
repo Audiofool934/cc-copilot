@@ -104,14 +104,14 @@ def _fmt_conv_list(headers, scope="") -> str:
 
 
 class ChatSession:
-    def __init__(self, path, model=None, backend=None, alerts=True, poll=5,
+    def __init__(self, path, model=None, backend=None, alerts=True, poll=2,
                  persist=True, scope=SC.SESSION, scope_sessions=None):
         self.path = path
         self.model = model
         self.backend = backend
         self.scope = SC.normalize(scope)
         self.scope_sessions = []
-        self.poll = max(2, poll)
+        self.poll = max(1, poll)
         self.history = []          # [(role, text)] — restored from the store in _attach
         self.cwd = ""
         self.st = None

@@ -284,7 +284,7 @@ you> is it safe to let it keep going?
 - **Multi-turn** — it remembers the conversation; follow-ups resolve against both
   the prior answers and the just-refreshed state.
 - **Push alerts** — a background thread pings you inline when the agent stalls /
-  goes off-track / errors (`--no-alerts` to silence; `--poll N` to tune).
+  goes off-track / errors (`--no-alerts` to silence; `--poll N` to tune; default 2s).
 - **Read-only observer of the agent** — it opens the observed transcript for
   reading only; your separate copilot Q&A is persisted under cc-copilot's state
   dir unless disabled. It cannot touch the agent it watches.

@@ -645,12 +645,12 @@ class Cockpit(App):
         Binding("ctrl+h", "history", "history"),
     ]
 
-    def __init__(self, session, poll=5, alerts=True):
+    def __init__(self, session, poll=2, alerts=True):
         super().__init__()
         self.session = session
         self.backend = session.backend
         self.model = session.model
-        self.poll = max(2, poll)
+        self.poll = max(1, poll)
         self.alerts = alerts
         self._busy = False
         self._busy_frame = 0
@@ -1342,5 +1342,5 @@ def _check_text(st):
     return render_check(st)
 
 
-def run(session, poll=5, alerts=True):
+def run(session, poll=2, alerts=True):
     Cockpit(session, poll=poll, alerts=alerts).run()

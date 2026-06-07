@@ -125,6 +125,7 @@ class TestScopeCli(unittest.TestCase):
         from cccopilot import cli
         args = cli.build_parser().parse_args(["chat", "--scope", "multi"])
         self.assertEqual(args.scope, SC.MULTI)
+        self.assertEqual(args.poll, 2)
         args = cli.build_parser().parse_args(["brief", "--scope", "repo"])
         self.assertEqual(args.scope, SC.PROJECT)
         args = cli.build_parser().parse_args(
