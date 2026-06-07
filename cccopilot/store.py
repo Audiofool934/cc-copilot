@@ -298,6 +298,16 @@ class Store:
             return []
         return out
 
+    def delete(self) -> bool:
+        """Remove this conversation's saved files (best-effort). conv_id is
+        sanitized, so this can only ever touch conversations/<conv_id>/."""
+        import shutil
+        try:
+            shutil.rmtree(self.dir)
+            return True
+        except OSError:
+            return False
+
     def header(self) -> "ConvHeader | None":
         d = _read_json(self.meta_path)
         if d is None:

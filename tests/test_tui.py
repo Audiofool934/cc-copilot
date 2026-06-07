@@ -179,6 +179,42 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.session.store.load_history(), [])   # B uncontaminated
         self.assertEqual(app.session.history, [])                # B in-memory clean
 
+    async def test_slash_autocomplete(self):
+        from textual.widgets import OptionList
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            ol = app.query_one("#slash", OptionList)
+            comp.text = "/br"
+            app._slash_update()
+            self.assertTrue(app._slash_open)
+            self.assertTrue(ol.display)
+            self.assertEqual([ol.get_option_at_index(i).id for i in range(ol.option_count)],
+                             ["/brief"])
+            app._slash_complete()                       # Tab completes
+            self.assertEqual(comp.text, "/brief")
+            self.assertFalse(app._slash_open)
+            comp.text = "/mod"; app._slash_update(); app._slash_complete()
+            self.assertEqual(comp.text, "/model ")      # arg command keeps a space
+            comp.text = "hello"; app._slash_update()
+            self.assertFalse(app._slash_open)           # non-slash text hides it
+
+    async def test_forget_deletes_saved_history(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._answer_done("q", "a [L1]", True, app.session.st, app.session.store)
+            await pilot.pause()
+            self.assertTrue(os.path.isfile(sess.store.turns_path))
+            app.action_forget()
+            await pilot.pause()
+        self.assertFalse(os.path.exists(sess.store.turns_path))
+        self.assertEqual(sess.history, [])
+        self.assertEqual(sess.store.load_history(), [])
+
     async def test_answer_done_records_once(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)

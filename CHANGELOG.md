@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+**Cockpit fixes from real-world testing**
+- **Multi-character CJK / IME input** no longer garbles. The Kitty keyboard
+  protocol's "associated text" feature encoded pinyin-committed text as
+  colon-separated codepoints that Textual mis-parsed, leaking raw escapes like
+  `[49;;29616:22312u`. Kitty is now disabled by default so IME input arrives as
+  plain UTF-8 (re-enable with `TEXTUAL_DISABLE_KITTY_KEY=0`; newline is then
+  `Ctrl+J`, since `Shift+Enter` needs Kitty disambiguation).
+- **`/` command autocomplete**: typing `/` lists matching commands above the
+  composer (↑/↓ to move, Tab to complete, Esc to dismiss).
+- **Clear vs forget, disambiguated**: `Ctrl+L` ("clear view") only tidies the
+  screen and keeps saved history; new **`/forget`** deletes *this* conversation's
+  saved history. The Sessions picker (`Ctrl+S` — "observe a live agent session")
+  and History picker (`Ctrl+H` — "reopen a saved copilot conversation") are
+  relabeled so their distinct roles are obvious.
+
 ## 0.2.0 — 2026-06-07
 
 **Persistent copilot history** — your Q&A with the copilot now survives.
