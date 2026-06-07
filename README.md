@@ -80,20 +80,55 @@ This is enforced, not aspirational — see [Verification](#verification).
 
 ## Install / run
 
-No dependencies, Python 3.9+. Nothing to install:
+Requirements: Python 3.9+. For Claude Code projects, cc-copilot reads existing
+transcripts from `~/.claude/projects/...`; it never writes there.
+
+Clone and run directly:
 
 ```bash
-git clone <this repo> && cd cc-copilot
+git clone https://github.com/Audiofool934/cc-copilot.git
+cd cc-copilot
+
+./cc-copilot sessions         # see sessions for the current project
 ./cc-copilot brief            # recap the most recent session for $PWD
+./cc-copilot cockpit          # full-screen TUI; auto-installs Textual if needed
 ```
 
-Or put it on your PATH: `ln -s "$PWD/cc-copilot" ~/bin/cc-copilot`.
+Or put the script on your PATH:
+
+```bash
+mkdir -p ~/bin
+ln -s "$PWD/cc-copilot" ~/bin/cc-copilot
+```
+
+Package install from GitHub also works:
+
+```bash
+python3 -m pip install --user "git+https://github.com/Audiofool934/cc-copilot.git"
+python3 -m pip install --user "cc-copilot[tui] @ git+https://github.com/Audiofool934/cc-copilot.git"
+```
+
+First-time cockpit/model setup:
+
+```bash
+./cc-copilot setup            # installs the optional Textual cockpit extra
+./cc-copilot config --init    # creates ~/.cc-copilot.toml
+./cc-copilot backends         # shows available LLM backends
+```
+
+Use `cc-copilot ...` instead of `./cc-copilot ...` after adding the script to
+your PATH or installing the package.
+
+The deterministic commands (`brief`, `check`, `observe`, `status`, `sessions`)
+need no model. The conversational commands (`ask`, `chat`, `cockpit` Q&A,
+`brief --narrate`) use the backend configured in `~/.cc-copilot.toml`,
+environment variables, or explicit `--backend` / `--model` flags.
 
 ## Usage
 
 ```bash
-cc-copilot cockpit                  # ⭐ full-screen TUI cockpit (needs cc-copilot[tui])
-cc-copilot cockpit --scope multi    # evidence: one session | selected/all sessions
+cc-copilot cockpit                  # ⭐ full-screen TUI; auto-installs Textual if needed
+                                    # use /sessions inside it to select one/many sessions
 cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
 cc-copilot status                   # fleet overview: ALL sessions, neediest first
 cc-copilot sessions                 # list this project's sessions, newest first
@@ -201,11 +236,25 @@ cc-copilot status — /Users/you/cmux  (10 of 14 sessions)
  ⚪ idle       idle        1h ago   240ev  77aa88bb  refactor done
 ```
 
-And inside a chat you can hop between them live:
+Inside the cockpit, `/sessions` opens the compact evidence picker:
+
+```
+you> /sessions
+    [x] reconnect-agent        · b5c53c29 · 91 KB
+    [ ] test-runner            · a1b2c3d4 · 101 KB
+    [x] reviewer               · 77aa88bb · 44 KB
+```
+
+One checked row means single-session evidence; multiple checked rows mean
+multi-session evidence. This changes what the current Cockpit Session reads; it
+does **not** swap to another Cockpit Session.
+
+In the plain REPL, use `/sessions` to list and `/use` to change the single
+evidence session:
 
 ```
 you> /sessions           # list the project's sessions, numbered
-you> /use 2              # switch to #2 (restores that session's copilot chat)
+you> /use 2              # switch to #2 as evidence; current chat is kept
 you> /use b5c53c29       # …or by id / prefix
 ```
 
@@ -216,10 +265,10 @@ needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
 ## Cockpit Sessions
 
 The cockpit's resumable unit is a **Cockpit Session**, not an agent transcript.
-It stores your Q&A, backend/model, current evidence range, selected evidence
-sessions, and project cwd. Changing evidence sessions no longer swaps to another
-chat history; it changes what this cockpit reads. `/resume` resumes an entire
-Cockpit Session. `/history` remains a backward-compatible alias.
+It stores your Q&A, backend/model, selected evidence sessions, and project cwd.
+Changing evidence sessions no longer swaps to another chat history; it changes
+what this cockpit reads. `/resume` resumes an entire Cockpit Session.
+`/history` remains a backward-compatible alias.
 
 ```bash
 cc-copilot resume          # list this project's cockpit sessions
@@ -247,7 +296,7 @@ For `multi-session` and `project` scopes you can narrow the transcript set:
 
 ```bash
 cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
-cc-copilot cockpit --scope project --scope-sessions 1,3
+cc-copilot observe --scope project --scope-sessions 1,3
 ```
 
 In the REPL, `/scope multi a1b2c3d4 b5c53c29` selects a subset and `/scope all`
@@ -258,24 +307,26 @@ picker can select one or many evidence sessions, while project context stays on.
 
 A full-screen cockpit (Textual) — the Python analog of Codex's `ratatui` loop and
 Claude Code's Ink UI: an **evidence-aware status header** (project · evidence
-range · Cockpit Session), an **activity strip** above your chat, a **background watcher**
-that pushes stall/off-track alerts as the agent works, and **off-thread backend
-turns** so it never freezes. Default backend is
-**codex** (ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus
-the composer, which takes full multilingual input (CJK / emoji); `Shift+Enter`
-(or `Ctrl+J`) inserts a newline, `Enter` sends.
+sessions · Cockpit Session), an **activity strip** above your chat, a
+**background watcher** that pushes stall/off-track alerts as the agent works, and
+**off-thread backend turns** so it never freezes. Default backend is **codex**
+(ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus the
+composer, which takes full multilingual input (CJK / emoji); `Shift+Enter` (or
+`Ctrl+J`) inserts a newline, `Enter` sends.
 
 ```bash
 cc-copilot cockpit            # just run it — first launch auto-installs the TUI
                               #   extra into a local .venv, then opens the cockpit
-# (explicit / CI:  cc-copilot setup   ·   or   pip install 'cc-copilot[tui]')
+# (explicit / CI:  cc-copilot setup   ·   or install the [tui] extra from GitHub)
 # (= cc-copilot chat --tui)
 ```
 
-In-cockpit: `Enter` send · `/help` · `/observe` `/brief` `/check` `/diff` (LLM-free) ·
-`/sessions` `/use <n|id>` · `/resume` · `/new` · `/model <name>` · `Ctrl+R` refresh ·
-`Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved verbatim in the log
-— the faithfulness guarantee holds in the TUI exactly as in the CLI.
+In-cockpit: `Enter` send · `/` suggestions (`Enter` accepts, `Tab` completes) ·
+`/help` · `/observe` `/brief` `/check` `/diff` (LLM-free) · `/sessions`
+checkbox evidence picker · `/resume` · `/new` · `/model <name>` · `Ctrl+R`
+refresh · `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are preserved
+verbatim in the log — the faithfulness guarantee holds in the TUI exactly as in
+the CLI.
 
 **Your Cockpit Sessions persist.** Each cockpit is saved locally with its Q&A and
 evidence selection, so changing evidence sessions does not wipe or swap the chat.
@@ -399,12 +450,21 @@ cc-copilot config            # show the path + effective backend
 
 ```toml
 # ~/.cc-copilot.toml
-backend = "codex"               # default backend
-model   = "deepseek-reasoner"   # default model (optional)
+backend = "codex"               # default backend; uses your `codex login`
+# model = "..."                 # optional; omit to use the backend default
+
+[history]
+enabled = true
+```
+
+Example API-backed config:
+
+```toml
+backend = "deepseek"
+model = "deepseek-reasoner"
 
 [env]                           # exported as env vars (real env still wins)
 DEEPSEEK_API_KEY = "sk-…"
-CC_COPILOT_API_BASE = "http://localhost:11434"
 ```
 
 Precedence everywhere: **explicit `--backend`/`--model` flag > real env var >
@@ -482,7 +542,8 @@ Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 ## Development
 
 ```bash
-git clone <repo> && cd cc-copilot
+git clone https://github.com/Audiofool934/cc-copilot.git
+cd cc-copilot
 ./cc-copilot brief --cwd ~/some-project      # runs on stdlib alone
 
 python3 -m unittest discover -s tests        # stdlib-only core tests
