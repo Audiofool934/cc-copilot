@@ -77,7 +77,11 @@ class CliBackend(Backend):
             argv += list(self.model_args(model))
         argv += [prompt]
         try:
+            # pin UTF-8 (don't trust the locale): the prompt and the model's
+            # reply routinely carry CJK / emoji / accented text, and a C/POSIX
+            # locale would otherwise decode stdout as ASCII and mangle or crash.
             p = subprocess.run(argv, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace",
                                timeout=timeout, cwd=self.cwd)
         except FileNotFoundError:
             raise BackendError(self.reason())
@@ -145,7 +149,8 @@ class OpenAICompatBackend(Backend):
         try:
             return data["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError, TypeError):
-            raise BackendError(f"{self.name} unexpected response: {json.dumps(data)[:200]}")
+            raise BackendError(f"{self.name} unexpected response: "
+                               f"{json.dumps(data, ensure_ascii=False)[:200]}")
 
     def describe(self) -> str:
         k = f", key ${self.key_env}" if self.needs_key else ", no key"
