@@ -78,7 +78,7 @@ _HELP_TEXT = (
     "type `/` for command suggestions (Tab completes; also the palette, Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /diff                   changes since last turn\n"
-    "  /sessions               choose agent evidence              (Ctrl+S)\n"
+    "  /sessions               choose agent evidence\n"
     "  /resume                 resume a cockpit session           (Ctrl+H)\n"
     "  /new                    start a new cockpit session\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
@@ -674,7 +674,6 @@ class Cockpit(App):
         Binding("ctrl+c", "quit", "quit"),
         Binding("ctrl+r", "refresh_now", "refresh"),
         Binding("ctrl+l", "clear_chat", "clear view"),
-        Binding("ctrl+s", "sessions", "sessions"),
         Binding("ctrl+o", "scope", "scope"),
         Binding("ctrl+t", "model", "model"),
         Binding("ctrl+h", "history", "history"),

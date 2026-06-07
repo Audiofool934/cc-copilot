@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Cockpit keyboard cleanup**
+- Deprecated `Ctrl+S` for evidence-session selection. Use `/sessions` or the
+  command palette instead.
+
 ## 0.6.0 — 2026-06-07
 
 **Cockpit Sessions**

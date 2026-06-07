@@ -220,6 +220,11 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("awaiting-agent", line)
         self.assertIn("idle", line)
 
+    async def test_ctrl_s_is_not_advertised_or_bound(self):
+        keys = {binding.key for binding in tui.Cockpit.BINDINGS}
+        self.assertNotIn("ctrl+s", keys)
+        self.assertNotIn("Ctrl+S", tui._HELP_TEXT)
+
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
