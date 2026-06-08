@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.9.3 — 2026-06-08
+
+**Readable selection highlight.** The cursor row in the `/sessions` and other
+pickers was nearly invisible — the default highlight derives from the theme's
+near-identical dark shades, and is dimmer still when the list isn't focused (the
+filter has focus). The highlighted option now uses a distinct, theme-derived
+band (`$secondary` blue tint) + bold, applied regardless of focus, so it's
+obvious which row the cursor is on in every theme. Hover gets a lighter band too.
+
 ## 0.9.2 — 2026-06-08
 
 **Clearer multi-session picker.** The `/sessions` checkbox picker was confusing:

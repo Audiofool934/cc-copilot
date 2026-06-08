@@ -208,6 +208,13 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(chosen, [["b"]])
 
+    async def test_picker_highlight_has_visible_selection_band(self):
+        # the cursor row must use a distinct, theme-derived band (not the near-
+        # invisible default) and stay visible when the list isn't focused
+        css = tui.Cockpit.CSS
+        self.assertIn("option-list--option-highlighted", css)
+        self.assertIn("$secondary", css)
+
     async def test_session_picker_label_includes_title(self):
         ref = types.SimpleNamespace(
             title="test-session-A", session_id="abcdef123456", size=4096,

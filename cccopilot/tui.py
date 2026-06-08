@@ -845,6 +845,19 @@ class Cockpit(App):
     #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
     #picker-list { height: auto; max-height: 20; }
     #picker-hint { margin-top: 1; color: $text-muted; }
+
+    /* The default highlight bar is near-invisible against the dark surface, and
+       dimmer still when the list isn't focused (the filter has focus). Force a
+       clearly-distinct primary-tinted band + bold, regardless of focus, so the
+       cursor row is obvious in every theme. */
+    OptionList > .option-list--option-highlighted,
+    OptionList:focus > .option-list--option-highlighted {
+        background: $secondary 45%;
+        text-style: bold;
+    }
+    OptionList > .option-list--option-hover {
+        background: $primary 20%;
+    }
     """
 
     BINDINGS = [
