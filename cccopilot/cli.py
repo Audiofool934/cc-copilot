@@ -20,7 +20,7 @@ import sys
 import time
 from dataclasses import asdict
 
-from . import (__version__, locate, transcript as T, state as S, brief as B,
+from . import (__version__, locate, sources as SRC, state as S, brief as B,
                scope as SC, observe as O, context as EC)
 
 
@@ -102,12 +102,12 @@ def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
     latest = bool(getattr(args, "latest", False))
     session = None if latest else getattr(args, "session", None)
-    path = locate.resolve(cwd, session, include_current=latest)
+    path = SRC.resolve(cwd, session, include_current=latest)
     if not path:
         cmd = getattr(args, "cmd", None) or "cockpit"
         sys.stderr.write(f"cc-copilot: no agent session in {cwd!r} "
                          f"(it watches another project's agent, not this dir).\n")
-        projs = locate.projects_with_sessions()
+        projs = SRC.projects_with_sessions()
         if projs:
             sys.stderr.write("  recent sessions are in:\n")
             for p, n, mt in projs[:6]:
@@ -123,7 +123,7 @@ def _resolve_or_die(args) -> str:
 
 def cmd_sessions(args) -> int:
     cwd = args.cwd or os.getcwd()
-    all_refs = locate.list_sessions(cwd, include_own=True)
+    all_refs = SRC.list_sessions(cwd, include_own=True)
     refs = [r for r in all_refs if r.own] if getattr(args, "helpers", False) \
         else [r for r in all_refs if not r.own]
     hidden = len([r for r in all_refs if r.own]) if not getattr(args, "helpers", False) else 0
@@ -132,9 +132,11 @@ def cmd_sessions(args) -> int:
         print(f"(no work sessions for {cwd}){hnote}\n  dir: {locate.project_dir_for(cwd)}")
         return 1
     print(f"sessions for {cwd}  ({len(refs)}){hnote}:")
+    multi_agent = len({r.agent for r in refs}) > 1
     for r in refs:
         title = f"  {r.title}" if r.title else ""
-        print(f"  {r.session_id}  {r.hhmm}  {r.size / 1024:7.0f} KB{title}")
+        tag = f"{r.agent:<6} " if multi_agent else ""
+        print(f"  {tag}{r.session_id}  {r.hhmm}  {r.size / 1024:7.0f} KB{title}")
     return 0
 
 
@@ -162,7 +164,7 @@ def cmd_history(args) -> int:
 
 def _load(args):
     path = _resolve_or_die(args)
-    tr = T.parse(path)
+    tr = SRC.parse(path)
     st = S.build(tr)
     return path, tr, st
 
@@ -254,7 +256,7 @@ def cmd_status(args) -> int:
     from .assess import assess
     from .chat import _GLYPH, _dur
     cwd = args.cwd or os.getcwd()
-    all_refs = locate.list_sessions(cwd, include_own=True)
+    all_refs = SRC.list_sessions(cwd, include_own=True)
     refs = [r for r in all_refs if not r.own]
     hidden = len(all_refs) - len(refs)
     if not refs:
@@ -264,7 +266,7 @@ def cmd_status(args) -> int:
     chosen = refs if getattr(args, "all", False) else refs[:args.limit]
     rows = []
     for r in chosen:
-        tr = T.parse(r.path)
+        tr = SRC.parse(r.path)
         st = S.build(tr)
         a = assess(st)
         sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
@@ -279,12 +281,14 @@ def cmd_status(args) -> int:
                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
     hnote = f", {hidden} helper hidden" if hidden else ""
     print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions{hnote})")
+    multi_agent = len({r.agent for r, *_ in rows}) > 1
     for r, st, a, head in rows:
         g = _GLYPH.get(st.status, "?")
         idle = _dur(st.idle_seconds)
         clip = " ".join((head or "").split())[:56]
+        tag = f"{r.agent:<6} " if multi_agent else ""
         print(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev  "
-              f"{r.session_id[:8]}  {clip}")
+              f"{tag}{r.session_id[:8]}  {clip}")
     return 0
 
 
@@ -408,7 +412,7 @@ def cmd_watch(args) -> int:
                 size = -1
             if size != last_size:
                 last_size = size
-                tr = T.parse(path)
+                tr = SRC.parse(path)
                 st = S.build(tr)
                 os.system("clear" if os.name != "nt" else "cls")
                 print(B.render(st))
@@ -427,6 +431,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(sp):
         sp.add_argument("--cwd", help="project dir to resolve sessions for (default: $PWD)")
+        sp.add_argument("--agent", action="append", metavar="NAME",
+                        help="restrict to an agent's sessions (claude/codex; repeatable). "
+                             "Default: every agent with sessions on this machine.")
 
     sp = sub.add_parser("sessions", help="list sessions for this project")
     common(sp)

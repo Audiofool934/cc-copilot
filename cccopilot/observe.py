@@ -12,7 +12,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-from . import assess as A, locate as LOC, scope as SC, state as S, transcript as T
+from . import assess as A, locate as LOC, scope as SC, state as S, sources as SRC
 from .brief import _dur, _oneline
 
 
@@ -39,7 +39,7 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     """Build a ranked, deterministic attention model for a scope."""
     sc = SC.normalize(scope)
     if st is None and path and os.path.isfile(path):
-        st = S.build(T.parse(path))
+        st = S.build(SRC.parse(path))
     root = _project_root(path, st)
 
     if sc == SC.SESSION:
@@ -54,7 +54,7 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     for ref in refs:
         try:
             cur = (st if st is not None and os.path.abspath(ref.path) == here
-                   else S.build(T.parse(ref.path)))
+                   else S.build(SRC.parse(ref.path)))
             items.append(_item(ref, cur))
         except Exception:
             continue
@@ -308,7 +308,7 @@ def _source(report: ObservationReport, sessions) -> str:
 
 def _project_root(path: str, st: Optional[S.State]) -> str:
     tr = getattr(st, "tr", None)
-    cwd = (getattr(tr, "cwd", "") if tr is not None else "") or LOC.read_cwd(path or "")
+    cwd = (getattr(tr, "cwd", "") if tr is not None else "") or SRC.read_cwd(path or "")
     return os.path.abspath(cwd or os.getcwd())
 
 

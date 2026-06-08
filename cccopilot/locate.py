@@ -49,6 +49,8 @@ class SessionRef:
     size: int
     title: str = ""
     own: bool = False        # a cc-copilot narration call, not a real work session
+    agent: str = "claude"    # which agent wrote this transcript (claude | codex | …)
+    model: str = ""          # model/provider, when the transcript records it
 
     @property
     def hhmm(self) -> str:

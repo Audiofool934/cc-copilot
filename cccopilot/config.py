@@ -49,6 +49,13 @@ backend = "codex"
 [history]
 enabled = true
 # dir = "~/.local/state/cc-copilot"   # or set $CC_COPILOT_STATE_DIR
+
+# Which coding agents to observe. Default: every agent whose storage exists on
+# this machine (Claude Code under ~/.claude, Codex under ~/.codex). One cockpit
+# can watch sessions from several agents at once, grouped by project. Restrict
+# the set here, or per-invocation with --agent / $CC_COPILOT_AGENTS.
+# [agents]
+# enabled = ["claude", "codex"]
 '''
 
 
@@ -128,6 +135,11 @@ def apply_defaults(args) -> None:
     # persist: fill the chat/cockpit toggle from [history].enabled when unset.
     if hasattr(args, "persist") and getattr(args, "persist", None) is None:
         args.persist = history_enabled()
+    # agent filter: surface --agent as CC_COPILOT_AGENTS so the sources
+    # dispatcher scopes discovery (mirrors how --backend is surfaced).
+    agent = getattr(args, "agent", None)
+    if agent:
+        os.environ["CC_COPILOT_AGENTS"] = ",".join(agent)
 
 
 def history_enabled() -> bool:
@@ -143,6 +155,25 @@ def history_enabled() -> bool:
     if isinstance(h, dict) and "enabled" in h:
         return bool(h["enabled"])
     return True
+
+
+def agents_enabled():
+    """Agent sources to observe, or ``None`` for 'all available'.
+
+    Reads ``[agents] enabled`` from the config. Accepts a TOML array
+    (``["claude", "codex"]``) or, under the no-tomllib fallback parser, a
+    comma/space string. ``$CC_COPILOT_AGENTS`` is handled in the sources
+    dispatcher and takes precedence over this.
+    """
+    a = load().get("agents")
+    if isinstance(a, dict) and a.get("enabled") is not None:
+        v = a["enabled"]
+        if isinstance(v, (list, tuple)):
+            names = [str(x).strip().lower() for x in v if str(x).strip()]
+        else:
+            names = [p.strip().lower() for p in str(v).replace(",", " ").split() if p.strip()]
+        return names or None
+    return None
 
 
 def init_file() -> str:

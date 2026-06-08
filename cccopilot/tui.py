@@ -44,7 +44,7 @@ except ImportError:
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
         "(or: pip install 'cc-copilot[tui]')")
 
-from . import (transcript as T, state as S, assess as A, narrate as N,
+from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
                observe as O, context as EC)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
@@ -181,7 +181,8 @@ _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 def _session_picker_label(ref, current_path: str = "") -> str:
     title = ref.title or "(untitled)"
     cur = " (current)" if current_path and os.path.abspath(ref.path) == os.path.abspath(current_path) else ""
-    return f"{title[:44]:<44} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}"
+    agent = f"{getattr(ref, 'agent', 'claude'):<6}"
+    return f"{agent} · {title[:40]:<40} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}"
 
 
 def _session_selection_ids(session, refs: list) -> list:
@@ -189,8 +190,9 @@ def _session_selection_ids(session, refs: list) -> list:
     if getattr(session, "scope", SC.SESSION) in (SC.MULTI, SC.PROJECT):
         selected = [sid for sid in getattr(session, "scope_sessions", []) if sid in ids]
         return selected or [r.session_id for r in refs]
-    current = os.path.basename(getattr(session, "path", "") or "")[:-6]
-    return [current] if current in ids else []
+    here = os.path.abspath(getattr(session, "path", "") or "")
+    current = next((r.session_id for r in refs if os.path.abspath(r.path) == here), "")
+    return [current] if current else []
 
 
 def _apply_session_selection(session, refs: list, selected_ids: list) -> str:
@@ -294,6 +296,11 @@ def _sid(ref=None, st=None, path: str = "") -> str:
     return (sid[:8] or "session")
 
 
+def _sub_title(session) -> str:
+    """Title-bar subtitle: which agent + the session id prefix."""
+    return f"{_agent_of(session)} {_sid(st=getattr(session, 'st', None), path=getattr(session, 'path', '') or '')}"
+
+
 def _session_title(st=None, ref=None) -> str:
     tr = getattr(st, "tr", None)
     title = getattr(tr, "title", "") if tr is not None else ""
@@ -308,7 +315,7 @@ def _project_cwd(session) -> str:
     st = getattr(session, "st", None)
     tr = getattr(st, "tr", None)
     cwd = (getattr(tr, "cwd", "") if tr is not None else "")
-    cwd = cwd or getattr(session, "cwd", "") or LOC.read_cwd(getattr(session, "path", "") or "")
+    cwd = cwd or getattr(session, "cwd", "") or SRC.read_cwd(getattr(session, "path", "") or "")
     return os.path.abspath(cwd or os.getcwd())
 
 
@@ -365,7 +372,7 @@ def _scope_snapshot(session) -> dict:
     for ref in refs:
         try:
             st = (session.st if os.path.abspath(ref.path) == here and session.st is not None
-                  else S.build(T.parse(ref.path)))
+                  else S.build(SRC.parse(ref.path)))
             a = A.assess(st)
         except Exception:
             continue
@@ -395,6 +402,28 @@ def _health_bits(items: list) -> list:
         if n:
             bits.append(f"{n} {verdict}")
     return bits or ["no activity"]
+
+
+def _agent_of(session) -> str:
+    """Which agent wrote the session the cockpit is currently watching."""
+    path = getattr(session, "path", "") or ""
+    if not path:
+        return "claude"
+    try:
+        return SRC.source_for_path(path).name
+    except Exception:
+        return "claude"
+
+
+def _agent_mix(items: list) -> str:
+    """Compact agent breakdown across a multi-session selection, or '' if one."""
+    counts = {}
+    for ref, _st, _a in items:
+        ag = getattr(ref, "agent", "claude")
+        counts[ag] = counts.get(ag, 0) + 1
+    if len(counts) <= 1:
+        return ""
+    return " · ".join(f"{n} {ag}" for ag, n in sorted(counts.items(), key=lambda x: -x[1]))
 
 
 def _selection_label(session, snap: dict) -> str:
@@ -834,7 +863,7 @@ class Cockpit(App):
         self._sync_rich_palette()
         self.session.refresh()
         self.title = "cc-copilot cockpit"
-        self.sub_title = os.path.basename(self.session.path)[:8]
+        self.sub_title = _sub_title(self.session)
         self._chat(self._role(Text(f"cockpit {self.session.store.conv_id[:12]} · "
                                    f"backend {N.backend_name(self.backend).split(' (')[0]}",
                                    "dim"), "role-event"))
@@ -1060,7 +1089,7 @@ class Cockpit(App):
             status = st.status if st is not None else "missing"
             verdict = a.verdict if a is not None else "empty"
             t.append("evidence ", style=_PAL["muted"])
-            t.append("one agent session", style=_PAL["accent"])
+            t.append(f"{_agent_of(self.session)} session", style=_PAL["accent"])
             t.append(f" · {title} · {sid}", style=_PAL["text"])
             t.append(f" · {status}", style="bold")
             t.append(f" · {verdict}", style=_VERDICT_HEX.get(verdict, _PAL["muted"]))
@@ -1080,6 +1109,9 @@ class Cockpit(App):
             t.append(f" · {snap['error']}", style=_PAL["warning"])
         else:
             t.append(f" · {health}", style=_PAL["muted"])
+        mix = _agent_mix(snap.get("items", []))
+        if mix:
+            t.append(f" · {mix}", style=_PAL["accent"])
         t.append("\n")
 
         t.append(f"cockpit {self.session.store.conv_id[:12]} · project context always on",
@@ -1096,6 +1128,17 @@ class Cockpit(App):
         self._update_header()
         self._update_status()
 
+    def _evidence_label(self) -> str:
+        """What the cockpit is watching, named by agent for a single session.
+
+        Distinguishes the watched agent from the copilot *backend* shown beside
+        it — both can now be 'codex'. Cheap (no sibling parse); the header
+        carries the multi-session agent mix.
+        """
+        if getattr(self.session, "scope", SC.SESSION) == SC.SESSION:
+            return f"{_agent_of(self.session)} session"
+        return self.session.scope_label()
+
     def _update_status(self):
         status = self._status()
         if status is None:
@@ -1107,8 +1150,9 @@ class Cockpit(App):
             t.append(" transcript gone ", style=f"bold {_PAL['bg']} on {_PAL['warning']}")
             t.append("  ")
             be = N.backend_name(self.backend).split(" (")[0]
-            t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-            t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
+            t.append("copilot " + be + (":" + self.model if self.model else ""),
+                     style=_PAL["secondary"])
+            t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
             status.update(t)
             return
         a = A.assess(st)
@@ -1118,8 +1162,9 @@ class Cockpit(App):
                  style=f"bold {_PAL['bg']} on {_VERDICT_HEX.get(a.verdict, _PAL['muted'])}")
         t.append("  ")
         be = N.backend_name(self.backend).split(" (")[0]
-        t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-        t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
+        t.append("copilot " + be + (":" + self.model if self.model else ""),
+                 style=_PAL["secondary"])
+        t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
@@ -1237,7 +1282,7 @@ class Cockpit(App):
                 continue
             self._watch_size = size
             try:
-                st = S.build(T.parse(path))
+                st = S.build(SRC.parse(path))
             except Exception:
                 continue
             d = S.diff(self._watch_state, st)
@@ -1406,7 +1451,7 @@ class Cockpit(App):
             self.notify(str(e), severity="warning")
             return
         self._reset_watch_baseline()
-        self.sub_title = (os.path.basename(self.session.path or "")[:-6] or "cockpit")[:8]
+        self.sub_title = _sub_title(self.session)
         self._refresh_scope_view()
         self.notify(msg, severity="information")
 
