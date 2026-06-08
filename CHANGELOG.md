@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.2 — 2026-06-08
+
+**Scrollable activity history.** The cockpit's activity timeline seeded only the
+last 5 events and snapped back to the bottom on every update, so there was almost
+nothing to scroll and reviewing was impossible. Now it:
+- **seeds ~150 recent events** so there's real history to scroll back through
+  (scroll with the mouse wheel — the panel shows a scrollbar when it overflows);
+- **tail-follows** — only auto-scrolls to the newest line when you're already at
+  the bottom, so scrolling up to read isn't yanked back down by the next event;
+- **clamps** a persisted timeline height to fit the current terminal (a tall
+  height saved on a big screen won't crowd out the chat on a small one).
+
 ## 0.10.1 — 2026-06-08
 
 **Timeline resize keys are now macOS-safe.** 0.10.0 used `Ctrl+↑/↓`, which macOS

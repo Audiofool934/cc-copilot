@@ -423,6 +423,54 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["CC_COPILOT_STATE_DIR"] = old
 
+    async def test_timeline_seeds_history_and_tail_follows(self):
+        import json
+        import tempfile
+        from textual.containers import VerticalScroll
+        from cccopilot.chat import ChatSession
+        d = tempfile.mkdtemp(prefix="ccbig-")
+        p = os.path.join(d, "big.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "sessionId": "big", "cwd": "/x",
+                                "message": {"role": "user", "content": "go"}}) + "\n")
+            for i in range(60):
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                        "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+                f.write(json.dumps({"type": "user", "message": {"role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": f"t{i}",
+                                     "content": "ok"}]}}) + "\n")
+        sess = ChatSession(p, alerts=False, persist=False)
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            tl = app.query_one("#timeline", VerticalScroll)
+            self.assertGreater(len(tl.query(".timeline-row")), 30)  # real history, not ~5
+            self.assertGreater(tl.max_scroll_y, 0)                  # scrollable
+            tl.scroll_to(y=1, animate=False)
+            await pilot.pause()
+            app._timeline(tui.Text("late event"))                  # tail-follow
+            await pilot.pause()
+            self.assertLessEqual(tl.scroll_offset.y, 3)            # not yanked to bottom
+
+    async def test_timeline_height_clamped_to_small_screen(self):
+        import tempfile
+        from cccopilot import prefs as PREFS
+        old = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="ccclamp-")
+        os.environ.pop("CC_COPILOT_TIMELINE_HEIGHT", None)
+        try:
+            PREFS.set("timeline_height", 24)                       # bigger than the screen
+            app = tui.Cockpit(self._session("sess-A"), poll=999, alerts=False)
+            async with app.run_test(size=(80, 20)) as pilot:
+                await pilot.pause()
+                self.assertLessEqual(app._timeline_height, 10)     # clamped to leave room
+        finally:
+            if old is None:
+                os.environ.pop("CC_COPILOT_STATE_DIR", None)
+            else:
+                os.environ["CC_COPILOT_STATE_DIR"] = old
+
     async def test_auto_refresh_updates_activity_without_manual_refresh(self):
         from textual.widgets import Static
         sess = self._session("sess-A")

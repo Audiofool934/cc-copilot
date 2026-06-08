@@ -277,6 +277,11 @@ def _activity_line(record):
     return None
 
 
+# How many recent activity events the timeline seeds on (re)build, so there's
+# real history to scroll back through — not just the last handful.
+_TIMELINE_EVENTS = 150
+
+
 def _recent_activity_lines(st, limit: int = 5) -> list:
     if st is None:
         return []
@@ -968,7 +973,15 @@ class Cockpit(App):
 
     # ---- resizable activity timeline (the chat fills the remaining space) ----
     def _apply_timeline_height(self, n: int) -> None:
-        n = max(self.TIMELINE_MIN, min(self.TIMELINE_MAX, int(n)))
+        # never let the timeline eat the screen — leave room for the header,
+        # status, composer, footer, and a minimal chat (matters on short terminals
+        # and keeps a persisted height sane after moving to a smaller window).
+        try:
+            room = self.size.height - 10
+        except Exception:
+            room = self.TIMELINE_MAX
+        hi = max(self.TIMELINE_MIN, min(self.TIMELINE_MAX, room))
+        n = max(self.TIMELINE_MIN, min(hi, int(n)))
         self._timeline_height = n
         try:
             self.query_one("#timeline").styles.height = n
@@ -1100,8 +1113,13 @@ class Cockpit(App):
 
     def _timeline(self, renderable, cls="role-event"):
         tl = self.query_one("#timeline", VerticalScroll)
+        # tail-follow: only auto-scroll to the newest line when you're already at
+        # the bottom, so scrolling up to review history isn't yanked back down by
+        # the next event.
+        at_bottom = tl.scroll_offset.y >= tl.max_scroll_y - 1
         tl.mount(Static(renderable, classes=(cls + " timeline-row").strip()))
-        tl.scroll_end(animate=False)
+        if at_bottom:
+            tl.scroll_end(animate=False)
 
     def _rebuild_timeline(self):
         tl = self.query_one("#timeline", VerticalScroll)
@@ -1120,7 +1138,7 @@ class Cockpit(App):
                            "role-alert" if level in ("alarm", "warn") else "role-event")
         if self.session.scope == SC.SESSION:
             self._timeline(_timeline_status_line(self.session.st))
-            for line in _recent_activity_lines(self.session.st):
+            for line in _recent_activity_lines(self.session.st, limit=_TIMELINE_EVENTS):
                 self._timeline(line)
             return
         if self.session.scope == SC.PROJECT:
