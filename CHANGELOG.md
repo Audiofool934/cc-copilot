@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-06-08
+
+**Resizable activity timeline.** The cockpit's agent-activity strip was fixed at
+6 rows. Resize the timeline/chat split live with **Ctrl+↑ / Ctrl+↓** (the chat
+pane fills the rest), and the height is **remembered across launches** — stored
+in `ui.json` under the state home, or pin a default with
+`CC_COPILOT_TIMELINE_HEIGHT`. Bounds 3–24 rows. Shown in the footer and `/help`.
+
 ## 0.9.5 — 2026-06-08
 
 **Your live session sorts to the top of `/sessions`.** The picker was ordered by

@@ -46,7 +46,7 @@ except ImportError:
 
 from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
-               observe as O, context as EC)
+               observe as O, context as EC, prefs as PREFS)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -157,7 +157,7 @@ _HELP_TEXT = (
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+C quit")
+    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+↑/↓ resize timeline · Ctrl+C quit")
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
@@ -865,7 +865,15 @@ class Cockpit(App):
         Binding("ctrl+r", "refresh_now", "refresh"),
         Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+t", "model", "model"),
+        # resize the activity timeline (the chat fills the rest); persisted.
+        # priority so it works while the composer is focused.
+        Binding("ctrl+up", "grow_timeline", "taller", priority=True),
+        Binding("ctrl+down", "shrink_timeline", "shorter", priority=True),
     ]
+
+    TIMELINE_MIN = 3
+    TIMELINE_MAX = 24
+    TIMELINE_DEFAULT = 6
 
     def __init__(self, session, poll=2, alerts=True):
         super().__init__()
@@ -919,6 +927,7 @@ class Cockpit(App):
                                    "dim"), "role-event"))
         self._rebuild_chat(clear=False)        # repaint any restored prior dialogue
         self._rebuild_timeline()
+        self._apply_timeline_height(PREFS.get_int("timeline_height", self.TIMELINE_DEFAULT))
         self._update_header()
         self._announce_since()                 # "N new since last look" on re-entry
         if not N.available(self.backend):
@@ -952,6 +961,23 @@ class Cockpit(App):
             self._chat(self._role(
                 Text(f"⟳ {sv.new_events} new since you last looked — /since to review",
                      style=_PAL["accent"]), "role-event"))
+
+    # ---- resizable activity timeline (the chat fills the remaining space) ----
+    def _apply_timeline_height(self, n: int) -> None:
+        n = max(self.TIMELINE_MIN, min(self.TIMELINE_MAX, int(n)))
+        self._timeline_height = n
+        try:
+            self.query_one("#timeline").styles.height = n
+        except Exception:
+            pass
+
+    def action_grow_timeline(self) -> None:
+        self._apply_timeline_height(getattr(self, "_timeline_height", self.TIMELINE_DEFAULT) + 1)
+        PREFS.set("timeline_height", self._timeline_height)
+
+    def action_shrink_timeline(self) -> None:
+        self._apply_timeline_height(getattr(self, "_timeline_height", self.TIMELINE_DEFAULT) - 1)
+        PREFS.set("timeline_height", self._timeline_height)
 
     # ---- focus: a click anywhere (or re-entering the app) lands on the
     #      composer, so the user never has to aim at the box, and IME /
