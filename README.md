@@ -22,6 +22,8 @@ Inside Cockpit:
 ```text
 /sessions   choose one or more agent sessions
 /observe    attention queue and next human decision
+/since      what changed since you last looked (or 30m / 2h)
+/handoff    shareable Markdown handoff (brief + what changed)
 /brief      deterministic recap with citations
 /check      safety / off-track verdict
 /diff       changes since last turn
@@ -115,6 +117,10 @@ cc-copilot status                  # fleet board, neediest first
 cc-copilot observe                 # attention queue
 cc-copilot brief                   # deterministic recap
 cc-copilot check                   # safety verdict
+cc-copilot since                   # what changed since you last looked
+cc-copilot since 30m               # …or within a time window
+cc-copilot handoff --out h.md      # shareable Markdown handoff
+cc-copilot watch --notify          # desktop alert when the agent needs you
 cc-copilot ask "what changed?"     # one-shot grounded Q&A
 cc-copilot chat                    # plain terminal chat mode
 cc-copilot resume                  # resumable Cockpit Sessions
@@ -165,6 +171,27 @@ It gives you:
 Keyboard is primary; mouse works too. Click anywhere to return focus to the
 composer. `Enter` sends, `Ctrl+J` inserts a newline, `/` opens command
 suggestions, and `Ctrl+P` opens the command palette.
+
+## While You Were Away
+
+The hardest part of supervising long-running agents is *re-entry*: you stepped
+away, the agent kept working, and now you have to reconstruct what happened.
+
+- **`since`** answers "what changed since I last looked" — a deterministic,
+  cited diff of new asks, agent messages, commands, failures, changed files, and
+  any status/safety transition. cc-copilot remembers where you last looked (a
+  small marker under `$CC_COPILOT_STATE_DIR`, never under `~/.claude`/`~/.codex`);
+  the cockpit stamps it when you leave and greets you with "⟳ N new since you last
+  looked" when you return. Or scope by time: `since 30m`, `since 2h`.
+- **`handoff`** turns the current state into a shareable Markdown document — the
+  brief plus an optional "while you were away" section — to paste into a ticket
+  or hand to a teammate. Every line keeps its `[L…]` citation.
+- **`watch --notify`** pings you (desktop notification, terminal-bell fallback)
+  only when a session *crosses into* needing you — a fresh intervene verdict, a
+  slide into stalled, or a new failure — so you can step away without missing the
+  moment it actually needs a human.
+
+All three are LLM-free and work across Claude Code and Codex sessions.
 
 ## Evidence Context
 
@@ -308,6 +335,10 @@ transcript.py   the normalized record model Claude Code parses into
 state.py        fold records into deterministic session state
 assess.py       classify stalls, failures, retry loops, and safety signals
 brief.py        render deterministic cited recaps
+since.py        "what changed since you last looked" (cited diff)
+lastlook.py     remember where the human last looked (per session)
+handoff.py      a shareable Markdown handoff artifact
+notify.py       conservative away-alerts (desktop / terminal)
 observe.py      rank attention and next human decision
 scope.py        collect session, multi-session, and project evidence
 context.py      retrieve raw evidence for model-backed answers

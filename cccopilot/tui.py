@@ -146,6 +146,8 @@ _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
+    "  /since [30m]            what changed since you last looked\n"
+    "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /sessions               choose evidence sessions\n"
     "  /resume                 resume a cockpit session\n"
@@ -159,6 +161,8 @@ _HELP_TEXT = (
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
+    ("/since", "what changed since you last looked (or 30m / 2h)", True),
+    ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
@@ -870,6 +874,7 @@ class Cockpit(App):
         self._rebuild_chat(clear=False)        # repaint any restored prior dialogue
         self._rebuild_timeline()
         self._update_header()
+        self._announce_since()                 # "N new since last look" on re-entry
         if not N.available(self.backend):
             self.notify("backend unavailable — /model to switch", severity="warning")
         self._update_status()
@@ -885,6 +890,22 @@ class Cockpit(App):
     def on_unmount(self):
         self._busy = False
         self._watch_stop.set()
+        # stamp last-look so the next launch's /since shows what happened while away
+        try:
+            self.session.mark_lastlook()
+        except Exception:
+            pass
+
+    def _announce_since(self) -> None:
+        """On re-entry, surface how much changed since the human last looked."""
+        try:
+            sv = self.session.since_summary()
+        except Exception:
+            sv = None
+        if sv is not None and sv.has_changes:
+            self._chat(self._role(
+                Text(f"⟳ {sv.new_events} new since you last looked — /since to review",
+                     style=_PAL["accent"]), "role-event"))
 
     # ---- focus: a click anywhere (or re-entering the app) lands on the
     #      composer, so the user never has to aim at the box, and IME /
@@ -1368,6 +1389,22 @@ class Cockpit(App):
             self.notify(str(out).splitlines()[0])
             self._reset_watch_baseline()
             self._refresh_scope_view(); return
+        if low == "/since" or low.startswith("/since "):
+            if self._no_live():
+                return
+            arg = cmd.strip()[6:].strip()
+            self._collapsible((f"/since {arg}").strip(), self.session._since(arg))
+            return
+        if low == "/handoff" or low.startswith("/handoff "):
+            if self._no_live():
+                return
+            arg = cmd.strip()[8:].strip()
+            out = self.session._handoff(arg)
+            if arg:                              # wrote to a file → just confirm
+                self.notify(str(out).splitlines()[0], severity="information")
+            else:
+                self._collapsible("/handoff", out)
+            return
         self.notify(f"unknown command {cmd!r}", severity="warning")
 
     def _collapsible(self, title, body):

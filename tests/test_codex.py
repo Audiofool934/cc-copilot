@@ -146,6 +146,26 @@ class TestCodexHelpers(unittest.TestCase):
         self.assertEqual(CX._session_id_from_name(p),
                          "019ea15e-7785-7a62-af8e-3c14292faf39")
 
+    def test_clean_output_strips_wrapper(self):
+        out = ("Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 0\n"
+               "Original token count: 5\nOutput:\nhello world")
+        self.assertEqual(CX._clean_output(out), "hello world")
+        # custom_tool wrapper + a "Total output lines" metadata line
+        out2 = "Exit code: 0\nOutput:\nTotal output lines: 3\nreal body"
+        self.assertEqual(CX._clean_output(out2), "real body")
+        # no recognizable wrapper → unchanged
+        self.assertEqual(CX._clean_output("just text"), "just text")
+        # a recognized wrapper whose body is only metadata → empty, not the wrapper
+        self.assertEqual(
+            CX._clean_output("Process exited with code 1\nOutput:\nTotal output lines: 0"),
+            "")
+
+    def test_cleaned_result_text_in_state(self):
+        tr, _ = _state([U.exec_call("echo hi", "c1", ago=20),
+                        U.exec_out("c1", exit_code=0, body="hi there", ago=19)])
+        results = [r for r in tr.records if r.kind == "tool_result"]
+        self.assertEqual(results[0].text, "hi there")   # wrapper stripped
+
 
 class TestCodexDiscovery(unittest.TestCase):
     def test_head_meta_reads_cwd_past_huge_session_meta(self):

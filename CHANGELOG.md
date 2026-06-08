@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-06-08
+
+**"While you were away" — the re-entry layer.** Built on the normalized model, so
+it works for Claude Code and Codex sessions alike.
+
+- **`since`** — a deterministic, evidence-cited "what changed since you last
+  looked": your unanswered asks, the agent's new messages, commands run,
+  failures, files changed, and any status/safety transition — every line citing
+  a `[L<n>]`. `cc-copilot since` (since your last look) or `cc-copilot since 30m`
+  / `2h` / `1d` for a time window; REPL/cockpit `/since`. A small per-session
+  last-look marker is stored under `$CC_COPILOT_STATE_DIR` (never `~/.claude` or
+  `~/.codex`); the cockpit stamps it on exit and greets you with "⟳ N new since
+  you last looked" on return. `--peek` shows without advancing the marker.
+- **`handoff`** — a shareable Markdown artifact bundling the brief + an optional
+  "while you were away" section + metadata, citations preserved.
+  `cc-copilot handoff [--out FILE]`; REPL/cockpit `/handoff [file]`.
+- **`watch --notify`** — conservative away-alerts: a desktop notification
+  (macOS/Linux, terminal-bell fallback) only on the *transition into* needing
+  you — a fresh `intervene` verdict, a slide into `stalled`, or a new failure —
+  never steady-state noise.
+- Codex tool output is de-wrapped for display (the `Chunk ID` / `Wall time` /
+  `Process exited` / `Output:` envelope) so briefs and `since` read clean; the
+  pass/fail status is still parsed from the full wrapper.
+- 36 new tests (since / lastlook / handoff / notify / CLI + codex output). Full
+  suite green under a clean-runner and `LC_ALL=C`.
+
 ## 0.8.0 — 2026-06-08
 
 **Cross-model agent adapters** — cc-copilot is no longer Claude-only.
