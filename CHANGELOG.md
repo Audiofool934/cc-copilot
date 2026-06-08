@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.2 — 2026-06-08
+
+**Clearer multi-session picker.** The `/sessions` checkbox picker was confusing:
+with no on-screen hint, pressing Enter (the natural "select") confirmed and closed
+it, so the `[ ]` / `[x]` boxes seemed to "disappear" and multi-select felt broken.
+- Added a live **"(N selected)"** count in the title and a persistent key hint:
+  *Space / click toggle · Enter confirm · Esc cancel · type to filter*.
+- Toggled rows now render a **bold green `[x]`** and bold label that stay legible
+  under the highlight bar (the mark no longer washes out when a row is selected).
+- Toggling via space **or** click both update the count immediately.
+
 ## 0.9.1 — 2026-06-08
 
 **Observe your own current session.**
