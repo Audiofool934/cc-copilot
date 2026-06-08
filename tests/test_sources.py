@@ -38,43 +38,48 @@ class TestRegistryAndRouting(unittest.TestCase):
 
 
 class TestEnabledSources(unittest.TestCase):
-    def _restore_env(self, key, val):
-        if val is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = val
+    """``enabled_sources`` gating. Both agents are made *available* via temp
+    homes so the test exercises the env/arg filter rather than incidentally
+    depending on whether ~/.claude or ~/.codex exist on the CI runner."""
+
+    def setUp(self):
+        import tempfile
+        self._saved = {k: os.environ.get(k)
+                       for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CC_COPILOT_AGENTS")}
+        claude_home = tempfile.mkdtemp(prefix="claude-home-")
+        os.makedirs(os.path.join(claude_home, "projects"))   # → ClaudeSource.available()
+        codex_home = tempfile.mkdtemp(prefix="codex-home-")
+        os.makedirs(os.path.join(codex_home, "sessions"))    # → CodexSource.available()
+        os.environ["CLAUDE_CONFIG_DIR"] = claude_home
+        os.environ["CODEX_HOME"] = codex_home
+        os.environ.pop("CC_COPILOT_AGENTS", None)
+        CX._HEAD_CACHE.clear()
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     def test_env_filter_restricts_agents(self):
-        old = os.environ.get("CC_COPILOT_AGENTS")
         os.environ["CC_COPILOT_AGENTS"] = "claude"
-        try:
-            names = [s.name for s in SRC.enabled_sources()]
-        finally:
-            self._restore_env("CC_COPILOT_AGENTS", old)
-        self.assertEqual(names, ["claude"])
+        self.assertEqual([s.name for s in SRC.enabled_sources()], ["claude"])
 
     def test_explicit_agents_arg_overrides_env(self):
-        old = os.environ.get("CC_COPILOT_AGENTS")
         os.environ["CC_COPILOT_AGENTS"] = "claude"
-        try:
-            names = [s.name for s in SRC.enabled_sources(agents=["codex"])]
-        finally:
-            self._restore_env("CC_COPILOT_AGENTS", old)
-        self.assertEqual(names, ["codex"])
+        self.assertEqual([s.name for s in SRC.enabled_sources(agents=["codex"])], ["codex"])
+
+    def test_both_available_by_default(self):
+        self.assertEqual({s.name for s in SRC.enabled_sources()}, {"claude", "codex"})
 
     def test_unavailable_source_is_skipped(self):
-        # point CODEX_HOME at an empty dir so Codex reports unavailable
-        import tempfile
-        old_home = os.environ.get("CODEX_HOME")
-        old_agents = os.environ.get("CC_COPILOT_AGENTS")
-        os.environ["CODEX_HOME"] = tempfile.mkdtemp(prefix="empty-codex-")
-        os.environ.pop("CC_COPILOT_AGENTS", None)
-        try:
-            names = [s.name for s in SRC.enabled_sources()]
-            self.assertNotIn("codex", names)
-        finally:
-            self._restore_env("CODEX_HOME", old_home)
-            self._restore_env("CC_COPILOT_AGENTS", old_agents)
+        # remove Codex's sessions dir so it reports unavailable; Claude stays
+        import shutil
+        shutil.rmtree(os.path.join(os.environ["CODEX_HOME"], "sessions"))
+        names = [s.name for s in SRC.enabled_sources()]
+        self.assertIn("claude", names)
+        self.assertNotIn("codex", names)
 
 
 class TestUnionDiscovery(unittest.TestCase):
