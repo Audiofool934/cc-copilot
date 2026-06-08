@@ -157,7 +157,7 @@ _HELP_TEXT = (
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+↑/↓ resize timeline · Ctrl+C quit")
+    "keys: Ctrl+R refresh · Ctrl+L clear view · Shift+↑/↓ resize timeline · Ctrl+C quit")
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
@@ -866,9 +866,13 @@ class Cockpit(App):
         Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+t", "model", "model"),
         # resize the activity timeline (the chat fills the rest); persisted.
-        # priority so it works while the composer is focused.
-        Binding("ctrl+up", "grow_timeline", "taller", priority=True),
-        Binding("ctrl+down", "shrink_timeline", "shorter", priority=True),
+        # priority so it works while the composer is focused. Shift+arrows are
+        # the primary keys — macOS grabs Ctrl+Up/Down for Mission Control, so
+        # those stay as a hidden alias for platforms where they get through.
+        Binding("shift+up", "grow_timeline", "taller", priority=True),
+        Binding("shift+down", "shrink_timeline", "shorter", priority=True),
+        Binding("ctrl+up", "grow_timeline", "taller", priority=True, show=False),
+        Binding("ctrl+down", "shrink_timeline", "shorter", priority=True, show=False),
     ]
 
     TIMELINE_MIN = 3

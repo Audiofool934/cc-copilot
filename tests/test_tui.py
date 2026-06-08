@@ -388,12 +388,15 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await pilot.pause()
                 h0 = app._timeline_height
-                await pilot.press("ctrl+up")
+                await pilot.press("shift+up")          # primary (macOS-safe) key
                 await pilot.pause()
                 self.assertEqual(app._timeline_height, h0 + 1)
                 self.assertEqual(PREFS.get_int("timeline_height", -1), h0 + 1)
+                await pilot.press("ctrl+up")           # alias still grows
+                await pilot.pause()
+                self.assertEqual(app._timeline_height, h0 + 2)
                 for _ in range(20):
-                    await pilot.press("ctrl+down")     # clamp at the minimum
+                    await pilot.press("shift+down")    # clamp at the minimum
                 await pilot.pause()
                 self.assertEqual(app._timeline_height, tui.Cockpit.TIMELINE_MIN)
         finally:
