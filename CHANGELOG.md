@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.9.5 — 2026-06-08
+
+**Your live session sorts to the top of `/sessions`.** The picker was ordered by
+pure recency (mtime, newest first), and the cross-project live session was
+appended to the *bottom* — so the session you most often want was buried. The
+cockpit/REPL `/sessions` picker now lists your own current (live) session first,
+then everything else newest-first (still agent-agnostic — Claude and Codex
+interleaved by recency). The status board and the evidence path are unchanged.
+
 ## 0.9.4 — 2026-06-08
 
 **Your custom session name wins over the auto-title.** A session you renamed

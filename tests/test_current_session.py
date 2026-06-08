@@ -97,6 +97,29 @@ class TestSurfacing(_SessionEnv):
         SC._mark_current_session(refs, here="/p/a.jsonl", inject=True)   # no env set
         self.assertFalse(any(r.live for r in refs))
 
+    def test_picker_puts_live_session_first(self):
+        import json
+        home = tempfile.mkdtemp(prefix="cclive-")
+        cwd = "/proj/work"
+        d = os.path.join(home, "projects", LOC.encode_cwd(cwd))
+        os.makedirs(d)
+        anchor = os.path.join(d, "anchor.jsonl")
+        live = os.path.join(d, "livesess.jsonl")
+        for p, sid in [(anchor, "anchor"), (live, "livesess")]:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "sessionId": sid, "cwd": cwd,
+                                    "message": {"role": "user", "content": "hi"}}) + "\n")
+        os.utime(anchor, (3000, 3000))   # anchor is NEWER by mtime…
+        os.utime(live, (1000, 1000))     # …yet the live session must still sort first
+        os.environ["CLAUDE_CONFIG_DIR"] = home
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "livesess"
+        refs = SC._candidate_refs(anchor, inject_current=True)
+        self.assertTrue(refs[0].live)
+        self.assertEqual(refs[0].session_id, "livesess")
+        # evidence path is NOT reordered (only the picker pins live to the top)
+        ev = SC._candidate_refs(anchor, inject_current=False)
+        self.assertFalse(getattr(ev[0], "live", False))
+
     def test_current_session_path_prefers_newest_duplicate(self):
         import os.path as _p
         sid = "77777777-0000-0000-0000-000000000000"
