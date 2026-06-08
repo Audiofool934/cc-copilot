@@ -272,8 +272,13 @@ def resolve_session_refs(path: str, selectors=None) -> list:
     return out
 
 
-def _candidate_refs(path: str) -> list:
+def _candidate_refs(path: str, inject_current: bool = False) -> list:
     """All work sessions for the anchor's project, across in-scope agents.
+
+    ``inject_current`` is for *pickers* only: it adds the human's live session
+    even when it belongs to another project, so ``/sessions`` can offer "observe
+    my current session". Evidence callers (multi-session / project briefs) leave
+    it False so a foreign session never pollutes a project-scoped view.
 
     The anchor agent's own sessions are discovered the way that agent groups a
     project — Claude Code co-locates them in one directory (robust even outside
@@ -313,18 +318,17 @@ def _candidate_refs(path: str) -> list:
             continue
         seen.add(k)
         deduped.append(r)
-    _mark_current_session(deduped, here)
+    _mark_current_session(deduped, here, inject=inject_current)
     return deduped
 
 
-def _mark_current_session(refs: list, here: str) -> None:
-    """Ensure the human's *own* live session is always selectable from a picker.
+def _mark_current_session(refs: list, here: str, inject: bool = False) -> None:
+    """Tag the human's own live session ``live`` if it's already a candidate.
 
-    cc-copilot supervises *another* agent by default, but the session you're
-    sitting in may be in a different project than the one being watched — so it
-    would never appear in the project-scoped candidate list. Tag it ``live`` if
-    present, and inject it (cross-project) if not, so ``/sessions`` can always
-    offer "observe my current session".
+    When ``inject`` is set (pickers only), also add it when it belongs to another
+    project, so ``/sessions`` can always offer "observe my current session" — but
+    evidence callers never inject, so a foreign project can't leak into a
+    project-scoped brief/observe/context view.
     """
     cur_id = LOC.current_session_id()
     if not cur_id:
@@ -333,6 +337,8 @@ def _mark_current_session(refs: list, here: str) -> None:
         if r.session_id == cur_id or r.session_id.startswith(cur_id):
             r.live = True
             return
+    if not inject:
+        return
     cur_path = LOC.current_session_path()
     if not cur_path or os.path.abspath(cur_path) == here:
         return

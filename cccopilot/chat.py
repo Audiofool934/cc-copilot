@@ -400,8 +400,9 @@ class ChatSession:
     def _siblings(self):
         # Agent-aware project discovery: Claude Code co-located siblings plus any
         # Codex sessions for the same project cwd. Own narration sessions are
-        # hidden (the anchor is always kept).
-        refs = SC._candidate_refs(self.path)
+        # hidden (the anchor is always kept). This is the picker path, so inject
+        # the human's live session even if it's in another project.
+        refs = SC._candidate_refs(self.path, inject_current=True)
         self._session_refs = refs
         self._listing = [r.path for r in refs]
         return self._listing
@@ -444,15 +445,26 @@ class ChatSession:
         return (f"evidence session → {os.path.basename(target)[:-6][:8]} "
                 f"(cockpit chat kept)\n{self.banner()}")
 
-    def _switch_here(self):
-        """Switch to observing the session cc-copilot is running inside of."""
+    def switch_to_here(self):
+        """Point at the live session as a *single* session (resetting any wider
+        scope, whose selectors belong to the old anchor's project). Returns the
+        path, or None if there's no detectable current session."""
         p = LOC.current_session_path()
         if not p:
+            return None
+        self.scope = SC.SESSION
+        self.scope_sessions = []
+        self.switch_path(p)        # persists path + the reset scope
+        return p
+
+    def _switch_here(self):
+        """Switch to observing the session cc-copilot is running inside of."""
+        if not LOC.current_session_path():
             return ("no current session detected — run cc-copilot inside a live "
                     "Claude Code session (CLAUDE_CODE_SESSION_ID).")
-        if os.path.abspath(p) == os.path.abspath(self.path):
+        if os.path.abspath(LOC.current_session_path()) == os.path.abspath(self.path):
             return "already observing your live session"
-        self.switch_path(p)
+        p = self.switch_to_here()
         return (f"now observing your live session → "
                 f"{os.path.basename(p)[:-6][:8]}\n{self.banner()}")
 

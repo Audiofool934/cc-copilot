@@ -1349,12 +1349,10 @@ class Cockpit(App):
         if low in ("/sessions", "/session"):
             self.action_sessions(); return
         if low == "/here":
-            p = LOC.current_session_path()
-            if not p:
+            if not self.session.switch_to_here():
                 self.notify("no current session detected (CLAUDE_CODE_SESSION_ID unset)",
                             severity="warning")
                 return
-            self.session.switch_path(p)
             self._reset_watch_baseline()
             self._refresh_scope_view()
             self.notify("now observing your live session", severity="information")

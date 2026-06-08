@@ -248,11 +248,19 @@ def current_session_path() -> Optional[str]:
         buckets = os.listdir(root)
     except OSError:
         return None
+    matches = []
     for b in buckets:
         p = os.path.join(root, b, sid + ".jsonl")
-        if os.path.isfile(p):
-            return p
-    return None
+        try:
+            if os.path.isfile(p):
+                matches.append((os.path.getmtime(p), p))
+        except OSError:
+            continue
+    if not matches:
+        return None
+    # if a stale copy/symlink duplicates the id, prefer the most recently written
+    # (the live session is being appended to right now)
+    return max(matches)[1]
 
 
 def resolve(cwd: str, session: Optional[str] = None,

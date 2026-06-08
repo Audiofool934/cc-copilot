@@ -65,26 +65,79 @@ class TestSurfacing(_SessionEnv):
         self.assertTrue([r for r in refs if r.session_id == "bbb"][0].live)
         self.assertFalse([r for r in refs if r.session_id == "aaa"][0].live)
 
-    def test_inject_cross_project_live_session(self):
+    def test_inject_cross_project_live_session_for_picker(self):
         sid = "99999999-0000-0000-0000-000000000000"
         self._home_with_session(sid, cwd="/proj/elsewhere")
         os.environ["CLAUDE_CODE_SESSION_ID"] = sid
         refs = [LOC.SessionRef("/other/x.jsonl", "xxx", 1, 1, agent="claude")]
-        SC._mark_current_session(refs, here="/other/x.jsonl")
+        SC._mark_current_session(refs, here="/other/x.jsonl", inject=True)
         live = [r for r in refs if r.live]
         self.assertEqual(len(live), 1)
         self.assertEqual(live[0].session_id, sid)   # the cross-project current session
 
+    def test_evidence_does_not_inject_cross_project_live(self):
+        # without inject (evidence path), a foreign-project session never leaks in
+        sid = "88888888-0000-0000-0000-000000000000"
+        self._home_with_session(sid, cwd="/proj/elsewhere")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        refs = [LOC.SessionRef("/other/x.jsonl", "xxx", 1, 1, agent="claude")]
+        SC._mark_current_session(refs, here="/other/x.jsonl", inject=False)
+        self.assertEqual(len(refs), 1)
+        self.assertFalse(any(r.live for r in refs))
+
     def test_no_injection_without_current(self):
         refs = [LOC.SessionRef("/p/a.jsonl", "aaa", 1, 1)]
-        SC._mark_current_session(refs, here="/p/a.jsonl")   # no env set
+        SC._mark_current_session(refs, here="/p/a.jsonl", inject=True)   # no env set
         self.assertFalse(any(r.live for r in refs))
+
+    def test_current_session_path_prefers_newest_duplicate(self):
+        import os.path as _p
+        sid = "77777777-0000-0000-0000-000000000000"
+        home = tempfile.mkdtemp(prefix="cccur-dup-")
+        older = os.path.join(home, "projects", LOC.encode_cwd("/proj/old"))
+        newer = os.path.join(home, "projects", LOC.encode_cwd("/proj/new"))
+        os.makedirs(older); os.makedirs(newer)
+        po = os.path.join(older, sid + ".jsonl"); pn = os.path.join(newer, sid + ".jsonl")
+        for p in (po, pn):
+            open(p, "w").write("{}\n")
+        os.utime(po, (1000, 1000)); os.utime(pn, (2000, 2000))
+        os.environ["CLAUDE_CONFIG_DIR"] = home
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        self.assertEqual(LOC.current_session_path(), pn)   # most recently written
 
     def test_picker_label_marks_live(self):
         from cccopilot import tui
         ref = types.SimpleNamespace(title="my work", session_id="abc12345",
                                     size=1024, path="/p/x.jsonl", agent="claude", live=True)
         self.assertIn("live session", tui._session_picker_label(ref))
+
+
+class TestSwitchHereScope(_SessionEnv):
+    def test_switch_to_here_resets_scope(self):
+        import json
+        from cccopilot import chat as C
+        from tests.util import user, asst, write
+        sid = "33333333-0000-0000-0000-000000000000"
+        home = tempfile.mkdtemp(prefix="cchere-")
+        d = os.path.join(home, "projects", LOC.encode_cwd("/proj/live"))
+        os.makedirs(d)
+        live = os.path.join(d, sid + ".jsonl")
+        with open(live, "w", encoding="utf-8") as f:
+            for e in [user("live work", 30, sessionId=sid, cwd="/proj/live"),
+                      asst("ok", 5)]:
+                f.write(json.dumps(e) + "\n")
+        os.environ["CLAUDE_CONFIG_DIR"] = home
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+
+        other = write([user("other", 60), asst("done", 5)])
+        s = C.ChatSession(other, alerts=False, persist=False)
+        s.scope = SC.MULTI                 # a wider scope with stale, foreign selectors
+        s.scope_sessions = ["stale-from-old-project"]
+
+        p = s.switch_to_here()
+        self.assertEqual(os.path.abspath(p), os.path.abspath(live))
+        self.assertEqual(s.scope, SC.SESSION)      # reset to single session
+        self.assertEqual(s.scope_sessions, [])     # stale selectors cleared
 
 
 class TestHereFlag(_SessionEnv):
