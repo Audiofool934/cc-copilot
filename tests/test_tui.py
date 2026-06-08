@@ -207,6 +207,22 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("abcdef12", label)
         self.assertIn("(current)", label)
 
+    async def test_agent_indicator_helpers(self):
+        codex = types.SimpleNamespace(
+            path="/x/rollout-2026-06-07T10-00-00-019ea15e7785aaaa.jsonl", st=None)
+        claude = types.SimpleNamespace(path="/some/plain/abc.jsonl", st=None)
+        self.assertEqual(tui._agent_of(codex), "codex")
+        self.assertEqual(tui._agent_of(claude), "claude")  # default for unowned paths
+        self.assertTrue(tui._sub_title(codex).startswith("codex "))
+        mix = [(types.SimpleNamespace(agent="codex"), None, None),
+               (types.SimpleNamespace(agent="claude"), None, None),
+               (types.SimpleNamespace(agent="codex"), None, None)]
+        label = tui._agent_mix(mix)
+        self.assertIn("2 codex", label)
+        self.assertIn("1 claude", label)
+        # one agent → no mix noise
+        self.assertEqual(tui._agent_mix([(types.SimpleNamespace(agent="codex"), None, None)]), "")
+
     async def test_session_picker_label_shows_agent(self):
         ref = types.SimpleNamespace(
             title="codex work", session_id="019ea15e7785", size=2048,
@@ -339,7 +355,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             header = str(app.query_one("#status-header", Static).content)
         self.assertIn("project", header)
-        self.assertIn("evidence one agent session", header)
+        # single-session header now names the agent it's watching
+        self.assertIn("evidence claude session", header)
         self.assertIn("sess-A", header)
         self.assertIn("activity current session", header)
 
@@ -436,7 +453,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._meta("/scope project")
             await pilot.pause()
             self.assertEqual(app.session.scope, "project")
-            self.assertIn("evidence project", str(app.query_one("#status", Static).content))
+            self.assertIn("watching project", str(app.query_one("#status", Static).content))
             self.assertIn("evidence project", str(app.query_one("#status-header", Static).content))
             rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
             self.assertIn("project activity", "\n".join(rows))
@@ -452,7 +469,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.session.scope, "multi-session")
             self.assertEqual(app.session.scope_sessions, [sid])
-            self.assertIn("evidence multi-session:1",
+            self.assertIn("watching multi-session:1",
                           str(app.query_one("#status", Static).content))
             self.assertIn("evidence multi-session:1",
                           str(app.query_one("#status-header", Static).content))

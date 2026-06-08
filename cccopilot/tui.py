@@ -296,6 +296,11 @@ def _sid(ref=None, st=None, path: str = "") -> str:
     return (sid[:8] or "session")
 
 
+def _sub_title(session) -> str:
+    """Title-bar subtitle: which agent + the session id prefix."""
+    return f"{_agent_of(session)} {_sid(st=getattr(session, 'st', None), path=getattr(session, 'path', '') or '')}"
+
+
 def _session_title(st=None, ref=None) -> str:
     tr = getattr(st, "tr", None)
     title = getattr(tr, "title", "") if tr is not None else ""
@@ -397,6 +402,28 @@ def _health_bits(items: list) -> list:
         if n:
             bits.append(f"{n} {verdict}")
     return bits or ["no activity"]
+
+
+def _agent_of(session) -> str:
+    """Which agent wrote the session the cockpit is currently watching."""
+    path = getattr(session, "path", "") or ""
+    if not path:
+        return "claude"
+    try:
+        return SRC.source_for_path(path).name
+    except Exception:
+        return "claude"
+
+
+def _agent_mix(items: list) -> str:
+    """Compact agent breakdown across a multi-session selection, or '' if one."""
+    counts = {}
+    for ref, _st, _a in items:
+        ag = getattr(ref, "agent", "claude")
+        counts[ag] = counts.get(ag, 0) + 1
+    if len(counts) <= 1:
+        return ""
+    return " · ".join(f"{n} {ag}" for ag, n in sorted(counts.items(), key=lambda x: -x[1]))
 
 
 def _selection_label(session, snap: dict) -> str:
@@ -836,7 +863,7 @@ class Cockpit(App):
         self._sync_rich_palette()
         self.session.refresh()
         self.title = "cc-copilot cockpit"
-        self.sub_title = os.path.basename(self.session.path)[:8]
+        self.sub_title = _sub_title(self.session)
         self._chat(self._role(Text(f"cockpit {self.session.store.conv_id[:12]} · "
                                    f"backend {N.backend_name(self.backend).split(' (')[0]}",
                                    "dim"), "role-event"))
@@ -1062,7 +1089,7 @@ class Cockpit(App):
             status = st.status if st is not None else "missing"
             verdict = a.verdict if a is not None else "empty"
             t.append("evidence ", style=_PAL["muted"])
-            t.append("one agent session", style=_PAL["accent"])
+            t.append(f"{_agent_of(self.session)} session", style=_PAL["accent"])
             t.append(f" · {title} · {sid}", style=_PAL["text"])
             t.append(f" · {status}", style="bold")
             t.append(f" · {verdict}", style=_VERDICT_HEX.get(verdict, _PAL["muted"]))
@@ -1082,6 +1109,9 @@ class Cockpit(App):
             t.append(f" · {snap['error']}", style=_PAL["warning"])
         else:
             t.append(f" · {health}", style=_PAL["muted"])
+        mix = _agent_mix(snap.get("items", []))
+        if mix:
+            t.append(f" · {mix}", style=_PAL["accent"])
         t.append("\n")
 
         t.append(f"cockpit {self.session.store.conv_id[:12]} · project context always on",
@@ -1098,6 +1128,17 @@ class Cockpit(App):
         self._update_header()
         self._update_status()
 
+    def _evidence_label(self) -> str:
+        """What the cockpit is watching, named by agent for a single session.
+
+        Distinguishes the watched agent from the copilot *backend* shown beside
+        it — both can now be 'codex'. Cheap (no sibling parse); the header
+        carries the multi-session agent mix.
+        """
+        if getattr(self.session, "scope", SC.SESSION) == SC.SESSION:
+            return f"{_agent_of(self.session)} session"
+        return self.session.scope_label()
+
     def _update_status(self):
         status = self._status()
         if status is None:
@@ -1109,8 +1150,9 @@ class Cockpit(App):
             t.append(" transcript gone ", style=f"bold {_PAL['bg']} on {_PAL['warning']}")
             t.append("  ")
             be = N.backend_name(self.backend).split(" (")[0]
-            t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-            t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
+            t.append("copilot " + be + (":" + self.model if self.model else ""),
+                     style=_PAL["secondary"])
+            t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
             status.update(t)
             return
         a = A.assess(st)
@@ -1120,8 +1162,9 @@ class Cockpit(App):
                  style=f"bold {_PAL['bg']} on {_VERDICT_HEX.get(a.verdict, _PAL['muted'])}")
         t.append("  ")
         be = N.backend_name(self.backend).split(" (")[0]
-        t.append(be + (":" + self.model if self.model else ""), style=_PAL["secondary"])
-        t.append(f"   evidence {self.session.scope_label()}", style=_PAL["accent"])
+        t.append("copilot " + be + (":" + self.model if self.model else ""),
+                 style=_PAL["secondary"])
+        t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
@@ -1408,7 +1451,7 @@ class Cockpit(App):
             self.notify(str(e), severity="warning")
             return
         self._reset_watch_baseline()
-        self.sub_title = (os.path.basename(self.session.path or "")[:-6] or "cockpit")[:8]
+        self.sub_title = _sub_title(self.session)
         self._refresh_scope_view()
         self.notify(msg, severity="information")
 
