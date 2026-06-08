@@ -85,6 +85,15 @@ class TestCodexParse(unittest.TestCase):
         st = S.build(tr)
         self.assertEqual(st.files, {})  # a failed edit changed nothing
 
+    def test_empty_patch_pairs_call_and_result(self):
+        # an apply_patch with no parseable file ops must still pair its result
+        # by the bare call_id — no dangling pending tool, failure recorded
+        tr, _ = _state([U.patch_call([], "p1", ago=20),
+                        U.patch_out("p1", exit_code=1, ago=19)])
+        st = S.build(tr)
+        self.assertEqual(len(st.failures), 1)
+        self.assertIsNone(st.pending_tool)
+
     def test_update_plan_maps_to_todos(self):
         tr, _ = _state([
             U.update_plan([("step one", "completed"), ("step two", "in_progress")]),
@@ -116,6 +125,9 @@ class TestCodexHelpers(unittest.TestCase):
         self.assertTrue(CX._exit_failed("Process exited with code 1"))
         self.assertTrue(CX._exit_failed("Exit code: 127\nfoo"))
         self.assertFalse(CX._exit_failed("no code here"))
+        # a body that merely echoes the phrase must not be read as a failure
+        self.assertFalse(CX._exit_failed(
+            "Process exited with code 0\nOutput:\nbuild exited with code 1"))
 
     def test_patch_files(self):
         patch = ("*** Begin Patch\n*** Add File: x.py\n+a\n"

@@ -56,7 +56,12 @@ _UUID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$"
 )
-_EXIT_RE = re.compile(r"(?:exited with code|Exit code:)\s*(-?\d+)")
+# Codex tool outputs report the real status on a header line:
+#   function_call_output:     "Process exited with code N"
+#   custom_tool_call_output:  "Exit code: N"
+# Anchor to those markers so a command whose stdout merely echoes
+# "exited with code 1" isn't misread as a failure.
+_EXIT_RE = re.compile(r"(?:Process exited with code|Exit code:)\s*(-?\d+)")
 
 # Codex shell tools → cc-copilot's canonical command tool.
 _SHELL_TOOLS = {"exec_command", "shell", "exec", "run_command", "local_shell"}
@@ -341,9 +346,11 @@ class CodexSource(AgentSource):
         if pt == "custom_tool_call" and name == "apply_patch":
             files = _patch_files(payload.get("input") or "")
             if not files:
+                # no parseable file ops — a single generic call that pairs with
+                # its output by the bare call_id (do NOT register patch arity,
+                # or the output would be emitted under call_id#0 and never pair)
                 tr.records.append(Record(line, "tool_call", ts, raw_ts,
                                          tool_id=call_id, tool_name="Edit", tool_input={}))
-                patch_arity[call_id] = 1
                 return
             for idx, (tool, fpath) in enumerate(files):
                 tr.records.append(Record(
