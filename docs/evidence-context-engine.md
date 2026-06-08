@@ -253,9 +253,11 @@ record.
 ### v0.7.3: Project Context Budgeting
 
 - Make project facts tiered: git summary, changed files, key docs, relevant
-  excerpts, broader file index.
+  excerpts, broader file index. **Implemented for the model-facing evidence
+  context.**
 - Retrieve project snippets relevant to the question instead of always sending
-  the same project packet.
+  the same project packet. **Implemented with lexical relevance and cited
+  `[path:L…]` excerpt lines.**
 
 ### v0.8: Streaming And Exact Usage
 

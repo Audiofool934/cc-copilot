@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -22,6 +23,9 @@ RECENT_TAIL_RECORDS = 14
 KEYWORD_MATCH_RECORDS = 18
 LINE_WINDOW_RADIUS = 1
 PER_RECORD_CHARS = 24000
+PROJECT_CONTEXT_CHARS = 36000
+PROJECT_EXCERPT_LINES = 80
+PROJECT_INDEX_FILES = 120
 
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "did",
@@ -137,7 +141,7 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
 
     selected = _select_records(sources, question, history, terms)
     raw_text = _render_raw_records(selected)
-    project_text = _render_project_context(path, st, sc, project_context)
+    project_text = _render_project_context(path, st, sc, project_context, terms)
     index_text = _render_summary_index(path, st, sc, selectors)
     memory = _render_memory(memory_text)
     chat_text = _render_chat_history(history, max_chars=chat_history_budget_chars(max_tokens))
@@ -463,14 +467,207 @@ def _turn_block(n: int, turn: list) -> str:
     return "\n".join(rows).rstrip()
 
 
-def _render_project_context(path: str, st, scope: str, enabled: bool) -> str:
+def _render_project_context(path: str, st, scope: str, enabled: bool, terms: list) -> str:
     if not enabled:
         return ""
     try:
         root = SC._project_root(path, st)
-        return "## Read-only Project Facts\n" + SC.render_project_facts(root)
+        return _render_budgeted_project_context(root, st, terms)
     except Exception:
         return ""
+
+
+def _render_budgeted_project_context(root: str, st, terms: list,
+                                     max_chars: int = PROJECT_CONTEXT_CHARS) -> str:
+    root = os.path.abspath(root or os.getcwd())
+    files = SC._text_files(root, max_files=PROJECT_INDEX_FILES)
+    by_rel = {rel: p for rel, p in files}
+    changed = _changed_project_paths(st, by_rel)
+    key_docs = _key_docs(by_rel)
+    relevant = _relevant_project_files(files, terms)
+
+    rows = ["## Read-only Project Facts",
+            "# cc-copilot project facts — budgeted evidence",
+            f"root `{root}`",
+            ""]
+    used = sum(len(r) for r in rows)
+
+    def add_block(block: list) -> bool:
+        nonlocal used
+        for row in block:
+            cost = len(row) + 1
+            if used + cost > max_chars:
+                rows.append("- project context budget exhausted before lower-priority tiers  [tree]")
+                used = max_chars
+                return False
+            rows.append(row)
+            used += cost
+        return True
+
+    if not add_block(_project_git_facts(root)):
+        return "\n".join(rows).rstrip()
+    if changed and not add_block(_project_path_section("Changed files from session evidence",
+                                                       changed, tag="session")):
+        return "\n".join(rows).rstrip()
+
+    excerpt_plan = []
+    excerpt_plan.extend((rel, "changed file") for rel in changed)
+    excerpt_plan.extend((rel, "key doc") for rel in key_docs if rel not in changed)
+    excerpt_plan.extend((rel, "question match") for rel in relevant
+                        if rel not in changed and rel not in key_docs)
+
+    seen = set()
+    if excerpt_plan:
+        if not add_block(["## Project file excerpts"]):
+            return "\n".join(rows).rstrip()
+        for rel, reason in excerpt_plan[:16]:
+            if rel in seen:
+                continue
+            seen.add(rel)
+            excerpt = _project_excerpt(by_rel[rel], rel, terms,
+                                       reason=reason,
+                                       max_lines=PROJECT_EXCERPT_LINES)
+            if excerpt and not add_block(excerpt):
+                return "\n".join(rows).rstrip()
+    elif not add_block(["## Project file excerpts",
+                        "- (no changed/key/relevant text file excerpts selected)"]):
+        return "\n".join(rows).rstrip()
+
+    index = ["## Broader project file index",
+             f"- {len(files)} text file(s) selected for read-only evidence  [tree]"]
+    for rel, _p in files[:60]:
+        index.append(f"- `{rel}`  [tree]")
+    if len(files) > 60:
+        index.append(f"- ...and {len(files) - 60} more  [tree]")
+    add_block(index)
+    return "\n".join(rows).rstrip()
+
+
+def _project_git_facts(root: str) -> list:
+    rows = ["## Git summary"]
+    top = _git(root, "rev-parse", "--show-toplevel")
+    branch = _git(root, "branch", "--show-current")
+    status = _git(root, "status", "--short")
+    if top:
+        rows.append(f"- repository root `{top.splitlines()[0]}`  [git:root]")
+    if branch:
+        rows.append(f"- branch `{branch.splitlines()[0] or '(detached)'}`  [git:branch]")
+    if status:
+        changed = status.splitlines()
+        rows.append(f"- working tree has {len(changed)} changed path(s)  [git:status]")
+        for line in changed[:20]:
+            rows.append(f"  - `{line}`  [git:status]")
+        if len(changed) > 20:
+            rows.append(f"  - ...and {len(changed) - 20} more  [git:status]")
+    else:
+        rows.append("- working tree clean or git unavailable  [git:status]")
+    rows.append("")
+    return rows
+
+
+def _git(root: str, *args: str) -> str:
+    try:
+        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def _changed_project_paths(st, by_rel: dict) -> list:
+    out = []
+    for fc in getattr(st, "changed_files", []) or []:
+        rel = _normalize_project_rel(fc.path)
+        if rel in by_rel and rel not in out:
+            out.append(rel)
+    return out[:20]
+
+
+def _normalize_project_rel(path: str) -> str:
+    path = (path or "").strip()
+    if not path:
+        return ""
+    return path.replace("\\", "/").lstrip("./")
+
+
+def _key_docs(by_rel: dict) -> list:
+    names = (
+        "README.md", "AGENTS.md", "CLAUDE.md", "CHANGELOG.md", "pyproject.toml",
+        "package.json", "Cargo.toml", "go.mod", "requirements.txt",
+    )
+    lower = {rel.lower(): rel for rel in by_rel}
+    out = []
+    for name in names:
+        rel = lower.get(name.lower())
+        if rel:
+            out.append(rel)
+    for rel in sorted(by_rel):
+        low = rel.lower()
+        base = os.path.basename(low)
+        if low.startswith("docs/") and base in ("overview.md", "architecture.md", "readme.md"):
+            out.append(rel)
+    return out[:12]
+
+
+def _relevant_project_files(files: list, terms: list) -> list:
+    if not terms:
+        return []
+    scored = []
+    for rel, path in files:
+        score = _match_score(rel, terms) * 4
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if i > 400:
+                        break
+                    score += _match_score(line, terms)
+        except OSError:
+            continue
+        if score:
+            scored.append((score, rel))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [rel for _score, rel in scored[:16]]
+
+
+def _project_path_section(title: str, paths: list, tag: str) -> list:
+    rows = [f"## {title}"]
+    rows.extend(f"- `{rel}`  [{tag}]" for rel in paths)
+    rows.append("")
+    return rows
+
+
+def _project_excerpt(path: str, rel: str, terms: list, reason: str, max_lines: int) -> list:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = [(i, line.rstrip("\n")) for i, line in enumerate(fh, 1)]
+    except OSError:
+        return []
+    if not lines:
+        return []
+    selected = []
+    if terms:
+        hits = [n for n, text in lines if _match_score(text, terms)]
+        for hit in hits[:12]:
+            for n in range(max(1, hit - 2), min(len(lines), hit + 2) + 1):
+                if n not in selected:
+                    selected.append(n)
+                if len(selected) >= max_lines:
+                    break
+            if len(selected) >= max_lines:
+                break
+    if not selected:
+        selected = [n for n, _text in lines[:max_lines]]
+    by_line = dict(lines)
+    rows = [f"### `{rel}` — {reason}"]
+    for n in selected[:max_lines]:
+        rows.append(f"- [{rel}:L{n}] {_clip_project_line(by_line.get(n, ''))}")
+    rows.append("")
+    return rows
+
+
+def _clip_project_line(text: str, limit: int = 180) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _render_summary_index(path: str, st, scope: str, selectors: list) -> str:

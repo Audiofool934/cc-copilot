@@ -16,6 +16,9 @@
 - Added budget-triggered durable cockpit memory: older Q&A compacts into a
   deterministic `memory.json` sidecar while the complete raw `turns.jsonl` log
   remains intact.
+- Made model-facing project context tiered and question-aware: git summary,
+  changed/key files, relevant excerpts, and broader file index now fit a bounded
+  project budget instead of always sending the same project packet.
 
 **Cockpit answer quality**
 - Reframed LLM-backed `ask`, `chat`, and narration prompts around cited

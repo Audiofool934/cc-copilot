@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 
 from cccopilot import context as EC, state as S, transcript as T
@@ -84,6 +86,28 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("## Durable Cockpit Memory", ctx.text)
         self.assertIn("keep project read-only", ctx.text)
         self.assertGreater(ctx.stats.memory_tokens, 0)
+
+    def test_project_context_retrieves_question_relevant_file_excerpt(self):
+        cwd = tempfile.mkdtemp(prefix="ccctx-project-")
+        os.makedirs(os.path.join(cwd, "src"))
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Demo Project\n\nOperator notes.\n")
+        with open(os.path.join(cwd, "src", "metrics.txt"), "w", encoding="utf-8") as f:
+            f.write("overnight funnel\nkeeper yield: 73.2%\nkeeper count: 91\n")
+        with open(os.path.join(cwd, "src", "unrelated.txt"), "w", encoding="utf-8") as f:
+            f.write("unrelated implementation detail that should not become an excerpt\n")
+        p = write([user("inspect project", 60, sessionId="testsess", cwd=cwd),
+                   asst("done", 5)])
+        st = S.build(T.parse(p))
+
+        ctx = EC.build(p, st, "session", question="keeper yield 是多少",
+                       project_context=True)
+
+        self.assertIn("## Git summary", ctx.text)
+        self.assertIn("## Project file excerpts", ctx.text)
+        self.assertIn("[src/metrics.txt:L2] keeper yield: 73.2%", ctx.text)
+        self.assertIn("`src/metrics.txt`  [tree]", ctx.text)
+        self.assertNotIn("unrelated implementation detail", ctx.text)
 
 
 if __name__ == "__main__":
