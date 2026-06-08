@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.10.1 — 2026-06-08
+
+**Timeline resize keys are now macOS-safe.** 0.10.0 used `Ctrl+↑/↓`, which macOS
+grabs for Mission Control (and `Ctrl+[` is literally Escape, so a `[`/`]` pair
+can't be bound). The primary resize keys are now **`Shift+↑` / `Shift+↓`**;
+`Ctrl+↑/↓` stay as a hidden alias for platforms where they get through.
+
 ## 0.10.0 — 2026-06-08
 
 **Resizable activity timeline.** The cockpit's agent-activity strip was fixed at
