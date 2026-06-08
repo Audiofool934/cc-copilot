@@ -319,6 +319,11 @@ def _candidate_refs(path: str, inject_current: bool = False) -> list:
         seen.add(k)
         deduped.append(r)
     _mark_current_session(deduped, here, inject=inject_current)
+    if inject_current:
+        # picker view: surface the human's own live session at the top, then the
+        # rest newest-first (it's the one you most often want, and was otherwise
+        # buried — even at the bottom when injected cross-project).
+        deduped.sort(key=lambda r: (not getattr(r, "live", False), -r.mtime))
     return deduped
 
 
