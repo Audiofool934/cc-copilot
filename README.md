@@ -561,14 +561,13 @@ The differentiated product is the full stack:
   *grounded in cited evidence context*
 
 The stack the [landscape](#landscape) said was the open gap is now built end to
-end. The next product direction is the
-[evidence context engine](docs/evidence-context-engine.md): cockpit Q&A now
-starts from question-aware raw transcript retrieval, with context HUD,
-compaction, and project-evidence budgeting next. After that: hook-driven push
-("it stalled 10 min ago" — `check`'s exit code already supports this), a live
-`watch` + narrate loop, and other agents (Codex, Gemini CLI) behind the same
-`State` model (only the `transcript.py` parser is Claude-Code-specific;
-`state`/`assess`/`brief`/`narrate` are agent-agnostic).
+end. The [evidence context engine](docs/evidence-context-engine.md) is the v0.7
+chat foundation: question-aware raw transcript retrieval, context HUD, durable
+cockpit memory compaction, and budgeted project evidence. Next product
+directions: hook-driven push ("it stalled 10 min ago" — `check`'s exit code
+already supports this), a live `watch` + narrate loop, and other agents (Codex,
+Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
+Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 
 Rust migration is documented as a deferred architecture decision in
 [docs/rust-migration.md](docs/rust-migration.md). Current guidance: keep

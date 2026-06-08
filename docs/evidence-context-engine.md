@@ -1,6 +1,6 @@
 # Evidence Context Engine
 
-Status: accepted for v0.7
+Status: shipped in v0.7
 Date: 2026-06-08
 
 ## Core Principle
@@ -237,8 +237,7 @@ record.
 - Show input/context estimates while answering. **Implemented with local input
   estimates and post-answer output estimates.**
 - Split estimates by raw transcript, project facts, cockpit chat, memory, and
-  summary index. **Implemented; memory remains `0` until v0.7.2 durable memory
-  lands.**
+  summary index. **Implemented.**
 
 ### v0.7.2: Budget-Aware Chat Memory
 
@@ -273,7 +272,7 @@ record.
 - Every specific claim should be traceable to primary evidence.
 - When coverage is incomplete, the UI should say so honestly.
 
-## v0.7.0 Acceptance Criteria
+## v0.7 Acceptance Criteria
 
 - A question about a detail buried inside an earlier full assistant message can
   retrieve that full message when keywords match.

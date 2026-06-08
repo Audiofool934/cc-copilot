@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-06-08
+
 **Evidence context engine**
 - Added the first v0.7 evidence-expansion path for model-backed `ask`, `chat`,
   and cockpit answers: raw transcript records are retrieved by recent tail,
