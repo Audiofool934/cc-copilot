@@ -40,7 +40,7 @@ class TestSinceHandoffCli(unittest.TestCase):
 
     def test_since_first_time_records_position(self):
         p = self._session()
-        rc, out = self._run(["since", p])
+        rc, out = self._run(["since", "--session", p])
         self.assertEqual(rc, 0)
         self.assertIn("recorded your current position", out)
 
@@ -49,7 +49,7 @@ class TestSinceHandoffCli(unittest.TestCase):
         tr = SRC.parse(p)
         key = LL.key_for(tr.session_id or "", p)
         LL.mark(key, 1, "", "")                      # last look was before the command
-        rc, out = self._run(["since", p])
+        rc, out = self._run(["since", "--session", p])
         self.assertEqual(rc, 0)
         self.assertIn("since last look", out)
         self.assertIn("make build", out)             # the command after the marker
@@ -60,19 +60,35 @@ class TestSinceHandoffCli(unittest.TestCase):
         tr = SRC.parse(p)
         key = LL.key_for(tr.session_id or "", p)
         LL.mark(key, 1, "", "")
-        self._run(["since", p, "--peek"])
+        self._run(["since", "--session", p, "--peek"])
         self.assertEqual(LL.get(key)["line"], 1)     # unchanged with --peek
 
     def test_since_duration(self):
         p = self._session()
-        rc, out = self._run(["since", p, "2h"])
+        rc, out = self._run(["since", "2h", "--session", p])
         self.assertEqual(rc, 0)
         self.assertIn("since 2h", out)
 
     def test_since_bad_duration(self):
         p = self._session()
-        rc, _ = self._run(["since", p, "soon"])
+        rc, _ = self._run(["since", "soon", "--session", p])
         self.assertEqual(rc, 2)
+
+    def test_since_30m_is_a_window_not_a_session(self):
+        # `cc-copilot since 30m` must read as a time window, not session "30m"
+        args = cli.build_parser().parse_args(["since", "30m"])
+        self.assertEqual(args.when, "30m")
+        self.assertIsNone(args.session)
+
+    def test_since_opt_out_message(self):
+        os.environ["CC_COPILOT_HISTORY"] = "0"
+        try:
+            p = self._session()
+            rc, out = self._run(["since", "--session", p])
+            self.assertEqual(rc, 0)
+            self.assertIn("last-look tracking is off", out)
+        finally:
+            os.environ.pop("CC_COPILOT_HISTORY", None)
 
     def test_handoff_to_file(self):
         p = self._session()

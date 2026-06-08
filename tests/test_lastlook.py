@@ -62,6 +62,22 @@ class TestLastLook(unittest.TestCase):
         LL.mark("z", 7)                  # overwrites the corruption
         self.assertEqual(LL.get("z")["line"], 7)
 
+    def test_corrupt_marker_value_sanitized(self):
+        # a valid-JSON but wrong-typed line must not crash int(...) in callers
+        import json
+        from cccopilot import store as ST
+        os.makedirs(ST.state_home(), exist_ok=True)
+        with open(os.path.join(ST.state_home(), "lastlook.json"), "w") as f:
+            json.dump({"s": {"line": "bad", "ts": 5}}, f)
+        m = LL.get("s")
+        self.assertEqual(m["line"], 0)             # coerced, not a crash
+        self.assertIsInstance(m["line"], int)
+        self.assertIsInstance(m["ts"], str)
+
+    def test_mark_then_get_is_atomic_typed(self):
+        LL.mark("q", "12")          # caller passes a str line
+        self.assertEqual(LL.get("q")["line"], 12)
+
 
 if __name__ == "__main__":
     unittest.main()

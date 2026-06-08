@@ -359,6 +359,9 @@ class ChatSession:
         line, ts = self._cur_line()
         key = self._lastlook_key()
         if when in ("", "last-look", "lastlook", "last"):
+            if not LL.enabled():
+                return ("last-look tracking is off (persistence disabled). "
+                        "Try `/since 30m` for a time window.")
             mark = LL.get(key)
             if mark is None:
                 LL.mark(key, line, ts, _now_iso())

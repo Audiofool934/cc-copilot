@@ -451,6 +451,11 @@ def cmd_since(args) -> int:
     when = (getattr(args, "when", None) or "last-look").strip().lower()
 
     if when in ("last-look", "lastlook", "last"):
+        if not LL.enabled():
+            print("last-look tracking is off (persistence disabled via "
+                  "CC_COPILOT_HISTORY=0 or [history] enabled=false).\n"
+                  "Use a time window instead, e.g. `cc-copilot since 30m`.")
+            return 0
         mark = LL.get(key)
         if mark is None:
             LL.mark(key, cur_line, cur_ts, _now_iso())
@@ -636,9 +641,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("since",
                         help="what changed since you last looked (or in the last 30m/2h/…)")
-    session_args(sp)
+    common(sp)
+    # `when` is the positional so `cc-copilot since 30m` works; pick the session
+    # with --session/--latest (a second optional positional would be ambiguous).
     sp.add_argument("when", nargs="?", default="last-look",
                     help="'last-look' (default) or a duration like 30m / 2h / 1d")
+    sp.add_argument("--session", help="session id, id-prefix, or transcript path "
+                                      "(default: most recent, excluding the current)")
+    sp.add_argument("--latest", action="store_true",
+                    help="explicitly target the most recent session")
+    sp.add_argument("--path", action="store_true",
+                    help="also print the resolved transcript path to stderr")
     sp.add_argument("--peek", action="store_true",
                     help="don't advance the last-look marker after showing")
     sp.set_defaults(func=cmd_since)

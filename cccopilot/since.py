@@ -57,6 +57,41 @@ def cutoff_line_for_seconds(tr: Transcript, seconds: float) -> int:
     return cutoff
 
 
+def _changed_since(tr: Transcript, st: S.State, cutoff: int):
+    """Files whose mutation landed after ``cutoff`` — counting an edit whose
+    *result* arrived after the cutoff even if its call was before it.
+
+    state.diff misses that case: a mutation pending at the cutoff is credited in
+    both the old prefix (no result yet) and the new state, so the totals match
+    and the file is dropped. Derive directly from records instead.
+    """
+    from .state import _input_path
+    from .transcript import MUTATING_TOOLS
+    call_by_id = {r.tool_id: r for r in tr.records if r.kind == "tool_call" and r.tool_id}
+    result_by_id = {r.tool_id: r for r in tr.records
+                    if r.kind == "tool_result" and r.tool_id}
+    paths = set()
+    for r in tr.records:
+        if r.line <= cutoff:
+            continue
+        if r.kind == "tool_call" and r.tool_name in MUTATING_TOOLS:
+            res = result_by_id.get(r.tool_id)
+            if res is not None and res.is_error:       # a failed edit changed nothing
+                continue
+            p = _input_path(r.tool_input)
+            if p:
+                paths.add(p)
+        elif r.kind == "tool_result" and not r.is_error:
+            call = call_by_id.get(r.tool_id)
+            if call is not None and call.tool_name in MUTATING_TOOLS:
+                p = _input_path(call.tool_input)
+                if p:
+                    paths.add(p)
+    changed = [st.files[p] for p in paths if p in st.files]
+    changed.sort(key=lambda c: -c.last_line)
+    return changed
+
+
 def _state_upto(tr: Transcript, cutoff_line: int) -> S.State:
     """A State reconstructed from only the records at or before ``cutoff_line``."""
     old_tr = Transcript(
@@ -89,12 +124,15 @@ def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
     new_humans = [r for r in new_recs if r.kind == "human" and not r.housekeeping
                   and r.text.strip()]
     new_agent = [r for r in new_recs if r.kind == "agent_text" and r.text.strip()]
-    new_cmds = [c for c in st.commands if c.line > cutoff]
+    # a command counts as "new" if it STARTED or COMPLETED after the cutoff — a
+    # command running when you left and finishing while away is new activity.
+    new_cmds = [c for c in st.commands
+                if c.line > cutoff or (c.result_line and c.result_line > cutoff)]
 
     old = _state_upto(tr, cutoff)
     d = S.diff(old, st)
-    new_fail = d.new_failures
-    new_chg = d.new_changed
+    new_fail = d.new_failures               # failures key off the result line — correct
+    new_chg = _changed_since(tr, st, cutoff)
 
     n = (len(new_humans) + len(new_agent) + len(new_cmds)
          + len(new_fail) + len(new_chg))

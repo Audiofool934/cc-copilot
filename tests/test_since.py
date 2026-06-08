@@ -65,6 +65,27 @@ class TestSinceByLine(unittest.TestCase):
         self.assertIn("second ask", v.text)
         self.assertNotIn("first ask", v.text)
 
+    def test_command_completed_after_cutoff_is_new(self):
+        # call before the cutoff, result after — it finished while you were away
+        tr, st = _tr_st([
+            user("go", 300),
+            tool("Bash", {"command": "long-build"}, "t1", 200),  # line 2 (<= cutoff)
+            result("t1", "ok", ago=20),                          # line 3 (> cutoff)
+        ])
+        v = SI.build(tr, st, since_line=2)
+        self.assertTrue(v.has_changes)            # not a false "Nothing new"
+        self.assertIn("long-build", v.text)
+
+    def test_edit_completed_after_cutoff_is_new(self):
+        tr, st = _tr_st([
+            user("edit", 300),
+            tool("Edit", {"file_path": "a.py"}, "t1", 200),      # line 2 (<= cutoff)
+            result("t1", "ok", ago=20),                          # line 3 (> cutoff)
+        ])
+        v = SI.build(tr, st, since_line=2)
+        self.assertTrue(v.has_changes)
+        self.assertIn("a.py", v.text)
+
     def test_changed_files_surface(self):
         tr, st = _tr_st([
             user("edit it", 200),

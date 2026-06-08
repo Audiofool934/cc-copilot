@@ -40,6 +40,9 @@ def key_for(session_id: str = "", path: str = "") -> str:
 
 
 def _read() -> dict:
+    """The whole marker map. Reads are lock-free and safe: writers swap the file
+    atomically (os.replace), so a reader always sees a complete old or new file,
+    never a half-truncated one."""
     try:
         with open(_path(), "r", encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
@@ -49,12 +52,57 @@ def _read() -> dict:
         return {}
 
 
+def _sanitize(v) -> Optional[dict]:
+    """Coerce a stored marker into a well-typed ``{line:int, ts, looked_at}``.
+
+    A hand-edited or partially-written value (``{"line": "bad"}``) must never
+    crash a caller's ``int(...)`` — fall back to line 0 (show everything)."""
+    if not isinstance(v, dict):
+        return None
+    try:
+        line = int(v.get("line", 0) or 0)
+    except (TypeError, ValueError):
+        line = 0
+    return {"line": line, "ts": str(v.get("ts", "") or ""),
+            "looked_at": str(v.get("looked_at", "") or "")}
+
+
 def get(key: str) -> Optional[dict]:
     """The stored marker ``{line, ts, looked_at}`` for ``key``, or None."""
     if not key or not enabled():
         return None
-    v = _read().get(key)
-    return v if isinstance(v, dict) else None
+    return _sanitize(_read().get(key))
+
+
+def _update(mutate) -> None:
+    """Serialize writers on a sidecar lock, apply ``mutate(data)``, then publish
+    atomically with a temp file + os.replace (torn-read-proof). Best-effort."""
+    if not enabled():
+        return
+    try:
+        home = ST.state_home()
+        os.makedirs(home, 0o700, exist_ok=True)
+        p = _path()
+        lock_path = p + ".lock"
+        lf = open(lock_path, "w")
+        try:
+            with ST._locked(lf):
+                data = _read()                       # current, under the writer lock
+                if not isinstance(data, dict):
+                    data = {}
+                mutate(data)
+                tmp = f"{p}.tmp-{os.getpid()}"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, p)                   # atomic publish
+                ST._chmod(p, 0o600)
+                ST._fsync_dir(home)
+        finally:
+            lf.close()
+    except OSError:
+        pass
 
 
 def mark(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
@@ -66,55 +114,15 @@ def mark(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
     if not key or not enabled():
         return
     try:
-        home = ST.state_home()
-        os.makedirs(home, 0o700, exist_ok=True)
-        p = _path()
-        fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "r+", encoding="utf-8", errors="replace") as fh:
-            with ST._locked(fh):
-                fh.seek(0)
-                raw = fh.read()
-                try:
-                    data = json.loads(raw) if raw.strip() else {}
-                    if not isinstance(data, dict):
-                        data = {}
-                except json.JSONDecodeError:
-                    data = {}
-                data[key] = {"line": int(line), "ts": ts or "", "looked_at": looked_at or ""}
-                fh.seek(0)
-                fh.truncate()
-                json.dump(data, fh, ensure_ascii=False)
-                fh.flush()
-                os.fsync(fh.fileno())
-                ST._fsync_dir(home)
-        ST._chmod(p, 0o600)
-    except OSError:
-        pass
+        n = int(line)
+    except (TypeError, ValueError):
+        n = 0
+    _update(lambda data: data.__setitem__(
+        key, {"line": n, "ts": ts or "", "looked_at": looked_at or ""}))
 
 
 def forget(key: str) -> None:
     """Drop the marker for ``key`` (best-effort)."""
     if not key or not enabled():
         return
-    try:
-        p = _path()
-        if not os.path.exists(p):
-            return
-        fd = os.open(p, os.O_RDWR, 0o600)
-        with os.fdopen(fd, "r+", encoding="utf-8", errors="replace") as fh:
-            with ST._locked(fh):
-                fh.seek(0)
-                raw = fh.read()
-                try:
-                    data = json.loads(raw) if raw.strip() else {}
-                except json.JSONDecodeError:
-                    data = {}
-                if isinstance(data, dict) and key in data:
-                    del data[key]
-                    fh.seek(0)
-                    fh.truncate()
-                    json.dump(data, fh, ensure_ascii=False)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-    except OSError:
-        pass
+    _update(lambda data: data.pop(key, None))
