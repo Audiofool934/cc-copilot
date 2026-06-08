@@ -147,5 +147,41 @@ class TestLocate(unittest.TestCase):
             shutil.rmtree(root)
 
 
+class TestTitlePrecedence(unittest.TestCase):
+    """A name the human set (custom-title) must beat the auto-generated ai-title,
+    even when Claude Code re-emits the ai-title *after* the rename."""
+
+    def _write(self, events):
+        d = tempfile.mkdtemp(prefix="cctitle-")
+        p = os.path.join(d, "s.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+        return p
+
+    def test_custom_title_beats_later_ai_title(self):
+        from cccopilot import transcript as T
+        p = self._write([
+            {"type": "custom-title", "customTitle": "dev", "sessionId": "s"},
+            {"type": "ai-title", "aiTitle": "Auto Title Generated Later", "sessionId": "s"},
+        ])
+        self.assertEqual(L.read_title(p, "s"), "dev")
+        self.assertEqual(T.parse(p).title, "dev")
+
+    def test_ai_title_used_when_no_custom(self):
+        from cccopilot import transcript as T
+        p = self._write([{"type": "ai-title", "aiTitle": "Just The Auto Title", "sessionId": "s"}])
+        self.assertEqual(L.read_title(p, "s"), "Just The Auto Title")
+        self.assertEqual(T.parse(p).title, "Just The Auto Title")
+
+    def test_latest_custom_title_wins(self):
+        p = self._write([
+            {"type": "custom-title", "customTitle": "first", "sessionId": "s"},
+            {"type": "ai-title", "aiTitle": "auto", "sessionId": "s"},
+            {"type": "custom-title", "customTitle": "renamed", "sessionId": "s"},
+        ])
+        self.assertEqual(L.read_title(p, "s"), "renamed")
+
+
 if __name__ == "__main__":
     unittest.main()

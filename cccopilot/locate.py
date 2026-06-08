@@ -115,7 +115,7 @@ def read_title(path: str, session_id: str = "") -> str:
     under ``${CLAUDE_CONFIG_DIR:-~/.claude}/sessions/*.json``; use that as a
     fallback.
     """
-    title = ""
+    custom = ai = ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -127,13 +127,20 @@ def read_title(path: str, session_id: str = "") -> str:
                     continue
                 if o.get("sessionId") and not session_id:
                     session_id = str(o.get("sessionId"))
-                if o.get("type") in ("ai-title", "custom-title"):
-                    t = o.get("aiTitle") or o.get("customTitle")
+                typ = o.get("type")
+                if typ == "custom-title":
+                    t = o.get("customTitle")
                     if isinstance(t, str) and t.strip():
-                        title = t.strip()
+                        custom = t.strip()        # a name the human set; latest wins
+                elif typ == "ai-title":
+                    t = o.get("aiTitle")
+                    if isinstance(t, str) and t.strip():
+                        ai = t.strip()            # auto-generated; regenerated as it grows
     except OSError:
         pass
-    return title or _session_meta_name(session_id)
+    # the human's own name always wins over the auto-generated title (Claude Code
+    # keeps re-titling, so the ai-title can land *after* a custom rename).
+    return custom or _session_meta_name(session_id) or ai
 
 
 def _refs_in(d: str, include_own: bool = False) -> list:
