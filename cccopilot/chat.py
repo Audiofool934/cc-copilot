@@ -19,7 +19,7 @@ import threading
 
 from . import (transcript as T, state as S, brief as B, assess as A,
                narrate as N, locate as LOC, store as ST, scope as SC,
-               observe as O)
+               observe as O, context as EC)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -172,10 +172,16 @@ class ChatSession:
                                   self.scope, sessions=self.scope_sessions,
                                   project_context=True)
 
+    def answer_context(self, q: str, history=None, st=None):
+        return EC.build(self.path, self.st if st is None else st, self.scope,
+                        sessions=self.scope_sessions, question=q,
+                        history=self.history if history is None else history,
+                        project_context=True)
+
     def answer(self, q: str) -> str:
         self.refresh()
-        ev = self.evidence()
-        txt = N.chat_brief(ev.text, self.history, q, model=self.model, backend=self.backend)
+        ctx = self.answer_context(q, history=self.history)
+        txt = N.chat_brief(ctx.text, [], q, model=self.model, backend=self.backend)
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
         # durable copilot history (best-effort; never breaks the answer)

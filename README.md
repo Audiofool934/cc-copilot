@@ -405,16 +405,20 @@ you> is it safe to let it keep going?
   `/session`, `/resume` work without a backend, and let you verify any prose
   answer against cited evidence in the same window.
 
-Grounding is identical to `ask`: the chat LLM sees only cited evidence context,
-and prior turns are replayed as *already-grounded* answers — never as new facts
-— so a long conversation can't launder an un-cited claim into a later reply.
+Grounding is identical to `ask`: the chat LLM sees a cited evidence context
+assembled from raw transcript records, read-only project facts, cockpit chat,
+and a summary index. Prior turns are replayed as continuity — never as new
+observed agent facts — so a long conversation can't launder an un-cited claim
+into a later reply.
 
 ## Observer chat — leg ④ (`cc-copilot ask`, `brief --narrate`)
 
 The conversational layer — *grounded* so it can't become a second hallucinating
-agent. The LLM never sees the raw transcript; it sees **deterministic,
-evidence-cited context** from legs ①/②, keeps `[L…]` citations for observed
-facts, and can synthesize or recommend from that evidence:
+agent. The LLM gets no tools and no ambient repo access; for `ask`/`chat` it
+receives a bounded **evidence context** assembled from cited raw transcript
+records, tool calls/results, read-only project facts, cockpit chat, and a
+summary index. It keeps `[L…]` citations for observed facts and can synthesize
+or recommend from that evidence:
 
 ```bash
 cc-copilot ask "did it go off-track, and is it safe to continue?"
@@ -422,10 +426,10 @@ cc-copilot ask "draft a one-line next instruction"
 cc-copilot brief --narrate          # recap + a 3–5 sentence grounded narration
 ```
 
-Because it's pinned to the cited facts, it answers with citations and **declines
-to guess** — e.g. it won't suggest "commit" when the brief shows no git state.
-The narration is the one non-deterministic layer and is labelled as such; legs
-①/② remain the deterministic ground truth beneath it.
+Because it's pinned to cited evidence, it answers with citations and **declines
+to guess** — e.g. it won't suggest "commit" when the available evidence shows
+no git state. The narration is the one non-deterministic layer and is labelled
+as such; legs ①/② remain the deterministic ground truth beneath it.
 
 The model is pluggable — see **Models / backends** below.
 
@@ -458,10 +462,10 @@ Two escape hatches for anything else (both zero-dep):
 - **Any CLI** — `CC_COPILOT_LLM_CMD` (e.g. `"llm -m gpt-4o"`); the prompt is
   appended as the final argument.
 
-Grounding is identical across all of them: every backend receives only cited
-evidence context with the no-invention preamble. If the selected backend is
-unavailable, `--narrate` degrades to the plain (LLM-free) brief and `ask`/`chat`
-say so.
+Grounding is identical across all of them: every backend receives only the
+bounded cited evidence context with the no-invention preamble. If the selected
+backend is unavailable, `--narrate` degrades to the plain (LLM-free) brief and
+`ask`/`chat` say so.
 
 ### Set defaults once — `~/.cc-copilot.toml`
 
@@ -553,16 +557,17 @@ The differentiated product is the full stack:
 - **③ attention cockpit** — ✅ "where should I look, and what is the smallest
   next human decision?" (`observe`, plus the cockpit attention line)
 - **④ observer chat** — ✅ ask it "did it drift?", "draft the next instruction"
-  (`ask` / `--narrate`) — an LLM layer *grounded in the cited state*
+  (`ask` / cockpit; `--narrate` for the displayed recap) — an LLM layer
+  *grounded in cited evidence context*
 
 The stack the [landscape](#landscape) said was the open gap is now built end to
 end. The next product direction is the
-[evidence context engine](docs/evidence-context-engine.md): move cockpit Q&A
-from "brief-only grounding" toward retrieval over complete observable session
-history while preserving citations. After that: hook-driven push ("it stalled
-10 min ago" — `check`'s exit code already supports this), a live `watch` +
-narrate loop, and other agents (Codex, Gemini CLI) behind the same `State`
-model (only the `transcript.py` parser is Claude-Code-specific;
+[evidence context engine](docs/evidence-context-engine.md): cockpit Q&A now
+starts from question-aware raw transcript retrieval, with context HUD,
+compaction, and project-evidence budgeting next. After that: hook-driven push
+("it stalled 10 min ago" — `check`'s exit code already supports this), a live
+`watch` + narrate loop, and other agents (Codex, Gemini CLI) behind the same
+`State` model (only the `transcript.py` parser is Claude-Code-specific;
 `state`/`assess`/`brief`/`narrate` are agent-agnostic).
 
 Rust migration is documented as a deferred architecture decision in

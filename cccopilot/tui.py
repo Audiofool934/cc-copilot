@@ -1160,20 +1160,20 @@ class Cockpit(App):
             self.notify("no backend — /model to switch", severity="error")
             return
         self.session.refresh()
-        ev = self.session.evidence()
+        ctx = self.session.answer_context(text, history=list(self.session.history))
         self._busy = True
         self._busy_frame = 0
         self._update_status()
         # Capture the originating conversation (store + state). If the user
         # switches sessions before the backend returns, the answer is recorded
         # against the session it was ASKED in — not whatever is current now.
-        self._answer(text, ev.text, self.session.st, list(self.session.history),
+        self._answer(text, ctx.text, self.session.st, list(self.session.history),
                      self.session.store)
 
     @work(thread=True)
     def _answer(self, text, brief_text, st, history, store):
         try:
-            ans = N.chat_brief(brief_text, history, text, model=self.model, backend=self.backend)
+            ans = N.chat_brief(brief_text, [], text, model=self.model, backend=self.backend)
             ok = True
         except Exception as e:
             ans, ok = f"# error: {e}", False

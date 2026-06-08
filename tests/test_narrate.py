@@ -41,6 +41,20 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertNotIn("current brief", prompt.lower())
         self.assertNotIn("=== BRIEF", prompt)
 
+    def test_chat_history_uses_budget_instead_of_fixed_turn_count(self):
+        backend = CaptureBackend()
+        history = []
+        for i in range(10):
+            history.append(("user", f"question {i}"))
+            history.append(("assistant", f"answer {i} [sess:L1]"))
+
+        N.chat_brief("# cc-copilot evidence context\nbody [sess:L1]",
+                     history, "continue", backend=backend)
+
+        prompt = backend.prompts[0]
+        self.assertIn("question 0", prompt)
+        self.assertIn("answer 9", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

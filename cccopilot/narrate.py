@@ -18,6 +18,8 @@ from __future__ import annotations
 from .brief import render
 from .backends import resolve, Backend, BackendError
 
+_HISTORY_CHARS = 16000
+
 _PREAMBLE = """You are cc-copilot, a read-only cockpit agent for supervising \
 coding agents. Below is an EVIDENCE CONTEXT PACK assembled from observable \
 session history and bounded read-only project facts. Citations may be session \
@@ -120,6 +122,30 @@ def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -
     return run_brief(brief_text, task, model=model, backend=backend)
 
 
+def _history_by_budget(history, max_chars: int = _HISTORY_CHARS) -> str:
+    if not history:
+        return ""
+    parts = []
+    used = 0
+    omitted = 0
+    entries = list(history)
+    for idx in range(len(entries) - 1, -1, -1):
+        role, text = entries[idx]
+        block = ("User: " if role == "user" else "You: ") + str(text or "")
+        if not parts and len(block) > max_chars:
+            block = block[-max_chars:].lstrip()
+        cost = len(block) + 1
+        if parts and used + cost > max_chars:
+            omitted = idx + 1
+            break
+        parts.append(block)
+        used += cost
+    parts.reverse()
+    note = (f"{omitted} older message(s) omitted by chat-history budget.\n"
+            if omitted else "")
+    return note + "\n".join(parts)
+
+
 def chat(state, history, question: str, model: str = None, backend=None) -> str:
     return chat_brief(render(state), history, question, model=model, backend=backend)
 
@@ -135,12 +161,10 @@ def chat_brief(brief_text: str, history, question: str, model: str = None, backe
     """
     convo = ""
     if history:
-        parts = []
-        for role, text in history[-8:]:
-            parts.append(("User: " if role == "user" else "You: ") + text)
         convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
                  "continuity, but the current evidence context above is the "
-                 "source of new observed facts):\n" + "\n".join(parts) + "\n\n")
+                 "source of new observed facts):\n"
+                 + _history_by_budget(history) + "\n\n")
     task = (convo + 'Current question from the returning human: "'
             + question.strip() + '"\n'
             "Answer as cc-copilot. Use the current evidence context for "

@@ -1,239 +1,278 @@
 # Evidence Context Engine
 
-Status: proposed for v0.7  
+Status: accepted for v0.7
 Date: 2026-06-08
 
-## Problem
+## Core Principle
 
-The cockpit agent currently answers from a rendered evidence brief. That is
-faithful and easy to verify, but it can feel cramped:
+cc-copilot should not treat summaries or briefs as the Copilot's source of
+truth. The source of truth is primary observable context:
 
-- The agent may over-reference "the brief" instead of behaving like an operator.
-- Questions that need earlier session detail may be under-answered.
-- The LLM has limited room for synthesis because the prompt says the brief is
-  the only ground truth.
-- The user experience can feel like talking to a summary, not to a copilot that
-  can inspect the session.
+```text
+raw agent transcript
+raw tool calls/results
+raw assistant messages
+read-only project facts
+git/file evidence
+full cockpit conversation log
+```
 
-The deeper issue is not that cc-copilot lacks access to Claude Code session
-history. It already reads the observable JSONL transcript. The issue is that
-chat currently compresses that observable history into one rendered brief before
-the LLM sees it.
+Summaries remain useful, but only as navigation aids, indexes, and UI surfaces.
+They should never be the only context used for an answer when raw evidence is
+available.
 
-## Principle
+The product shift is:
 
-cc-copilot should ground answers in the complete observable context, not merely
-in a small pre-rendered brief.
+> cc-copilot is not a chatbot over a brief. It is a read-only evidence engine
+> with a conversational layer on top.
 
-The cockpit agent should feel like:
+## Mission Fit
 
-> I can inspect the whole observable session history, and I will cite exactly
-> what I rely on.
+The core problem is human bandwidth. In long-running automation, agents can
+produce more output than a human can comfortably inspect in real time.
+cc-copilot should help the human understand the workflow as it unfolds by
+retrieving the exact evidence that matters, explaining it plainly, and showing
+what coverage the answer actually had.
 
-Not:
-
-> I only know this brief.
-
-## Scope Boundary
+## Source Boundary
 
 cc-copilot can read:
 
 - Claude Code JSONL transcripts under `~/.claude` or `$CLAUDE_CONFIG_DIR`.
-- Session metadata such as cwd, branch, title/name, timestamps, tool calls, tool
-  results, assistant messages, and user messages.
+- Raw user prompts, assistant messages, tool calls, and tool results recorded in
+  those transcripts.
+- Session metadata such as cwd, branch, title/name, timestamps, session id,
+  permission mode, and version.
 - Selected multi-session evidence.
-- Bounded read-only project context such as git status, file index, and cited
-  text excerpts.
-- cc-copilot's own Cockpit Session state.
+- Bounded read-only project context such as git status, file index, changed
+  files, and cited text excerpts.
+- cc-copilot's own Cockpit Session conversation log.
 
 cc-copilot cannot read:
 
 - Claude's hidden internal model context.
 - Private chain-of-thought.
-- Any reasoning or cache that Claude Code did not write to the transcript.
+- Any reasoning/cache that Claude Code did not write to the transcript.
 - Unobservable state inside the running agent process.
 
-The product promise should be "complete observable context," not "complete
-Claude internal context."
+The promise is complete observable context, not complete hidden Claude context.
 
-## Design Goal
+## Main Goals
 
-Replace "brief-only chat grounding" with an evidence context engine that can
-retrieve from full observable session history while preserving citations.
+1. **Evidence-first chat**
+   Replace the "render evidence recap, then ask model" path with a context
+   engine that assembles raw, cited evidence for each question.
 
-The deterministic `brief`, `check`, and `observe` commands should remain. They
-are compact operator surfaces. The change is specifically for conversational Q&A
-in `ask`, `chat`, and `cockpit`.
+2. **Question-aware expansion**
+   If the user asks about a specific detail, cc-copilot should pull full
+   transcript messages around relevant lines, not rely on shortened recap text.
 
-## Proposed Architecture
+3. **No fixed round limit**
+   Remove `history[-8:]`-style limits. Long cockpit conversations should be
+   handled through token budgeting and compaction, not arbitrary turn count.
 
-### 1. Evidence Store
+4. **Codex-like compact behavior**
+   Keep the full Cockpit Session on disk, but compact older cockpit Q&A into
+   durable memory when needed. Recent turns stay raw; older turns become
+   structured memory.
 
-Build an indexed representation of the observable context:
+5. **Context HUD**
+   Show the user what the Copilot actually has in context: raw transcript,
+   project facts, cockpit chat, summary index, output tokens, and total context
+   window usage.
 
-- normalized transcript records
-- line numbers and timestamps
-- user asks
-- assistant messages
-- tool calls and results
-- changed files
-- commands and failures
-- TodoWrite plans
-- project facts and file excerpts
-- session metadata
-
-Every item keeps its source citation:
-
-- transcript line: `[L123]`
-- session-qualified transcript line: `[b5c53c29:L123]`
-- project file line: `[path.py:L45]`
-- deterministic collector fact: `[tree]`, `[git:status]`
-
-### 2. Retrieval Layer
-
-For each user question, retrieve a context pack rather than sending only the
-general brief.
-
-Retrieval should combine:
-
-- recency: recent transcript tail and current status
-- relevance: lexical matches against question terms, file names, commands,
-  errors, and mentioned concepts
-- salience: safety signals, failures, changed files, pending tools, plan items
-- user intent: whether the question asks about "why", "what changed", "errors",
-  "next step", "compare sessions", or "project state"
-- continuity: recent Cockpit Session turns, clearly marked as prior grounded
-  conversation rather than fresh evidence
-
-The output is a compact, cited "evidence context pack" assembled from the full
-observable history.
-
-### 3. Prompt Contract
-
-Change the prompt posture from "answer only from the brief" to:
-
-- Observed facts must be supported by cited evidence.
-- Reasoning, synthesis, and recommendations are allowed when they are clearly
-  based on cited evidence.
-- Hypotheses are allowed only when labeled as inference.
-- If evidence is missing, say what is missing and what would need to be checked.
-- Do not claim files, commands, statuses, or actions as observed unless cited.
-- Do not use tools or write files.
-
-This keeps faithfulness while giving the cockpit agent more room to be useful.
-
-### 4. Answer Modes
-
-The same evidence engine can support different response modes:
-
-- **Observe**: concise operational answer with next human decision.
-- **Explain**: deeper causal narrative over retrieved evidence.
-- **Compare**: multi-session comparison with session-qualified citations.
-- **Plan**: suggest next instruction or review checklist, labeled as
-  recommendation.
-- **Explore**: brainstorm possible interpretations, clearly separated from
-  observed facts.
-
-These can be implicit from user language at first. Slash commands can come later
-if needed.
-
-## Prompt Shape
-
-The future prompt should avoid saying "brief" as the cockpit agent's identity.
-Possible shape:
+## Architecture
 
 ```text
-You are cc-copilot, a read-only cockpit agent for supervising coding agents.
-
-You have an evidence context pack assembled from complete observable session
-history and bounded read-only project facts. Use it as your source of observed
-facts.
-
-Rules:
-- Cite observed facts.
-- You may synthesize and recommend, but keep the evidence trail visible.
-- Label inference as inference.
-- If evidence is missing, say what is missing.
-- Do not use tools, modify files, or claim unseen actions.
+Transcript / project / cockpit logs
+-> Evidence Index
+-> Question-aware Retriever
+-> Context Budgeter
+-> Model Prompt
+-> Answer with citations + coverage note
 ```
 
-## Context Budget Strategy
+## Evidence Index
 
-Do not paste the entire transcript into every call. Instead:
+Build an internal index over primary records:
 
-- Always include current status, safety verdict, and recent activity.
-- Always include matching evidence snippets for the user's question.
-- Include broader transcript windows around important cited lines.
-- Include project facts only when useful or when the cockpit is answering a
-  project-context question.
-- Include prior Cockpit Session turns for continuity, but not as new evidence.
-- Provide enough citations for the user to verify claims.
+- Full assistant messages
+- Full human prompts
+- Tool calls
+- Tool results
+- Thinking snippets where available
+- File/project facts
+- Git status/diff facts
+- Session metadata
+- Cited line ranges
 
-This gives the agent access to complete observable history through retrieval
-without overwhelming the model context.
+Each record preserves:
 
-## Deterministic Core Remains
+```text
+session_id
+line number
+kind
+timestamp
+raw text
+short label
+token estimate
+importance score
+```
 
-The existing deterministic surfaces should remain strict:
+## Question-Aware Retrieval
 
-- `brief`: compact cited recap
-- `check`: safety/friction verdict
-- `observe`: operator attention report
-- `status`: fleet board
+For each user question, assemble context by tiers:
 
-Those surfaces are valuable exactly because they are predictable, LLM-free or
-evidence-rendered, and scriptable.
+1. Always include current status/header facts.
+2. Always include recent raw transcript tail.
+3. Include full raw records around cited/relevant lines.
+4. Include matching records by keyword/entity search.
+5. Include related tool call/result pairs together.
+6. Include project facts only when needed or when budget allows.
+7. Include summary/index last, as orientation only.
 
-The evidence context engine extends the conversational layer; it does not
-replace the deterministic core.
+Example: if the user asks "keeper yield 是多少", the retriever should pull the
+full assistant message containing the table, not the 240-character "last words"
+summary.
+
+## Context Budgeter
+
+Use a token budget instead of a fixed turn count:
+
+```text
+system/preamble
++ cockpit memory summary
++ recent cockpit raw turns
++ fresh raw evidence
++ project facts
++ current user question
+<= model context budget
+```
+
+Suggested thresholds:
+
+```text
+< 60% context: normal
+60-80%: HUD warning
+80-95%: compact older cockpit turns
+> 95%: reduce lower-priority evidence tiers
+still too large: clear context-too-large message
+```
+
+## Compaction
+
+Compaction should apply mostly to the cockpit conversation, not the observed
+agent transcript.
+
+The raw Cockpit Session log stays complete on disk. When needed, older Q&A
+becomes structured memory:
+
+```text
+decisions made
+user preferences
+known project facts discussed
+open questions
+discarded assumptions
+important citations
+```
+
+Recent cockpit turns stay raw because they carry local conversational nuance.
+
+## HUD Design
+
+Add a Claude/Codex-style status segment:
+
+```text
+ctx 82k / 128k · raw 61k · project 14k · chat 5k · memory 2k
+```
+
+During answering:
+
+```text
+answering · in ~82k · out ~640 · window 128k · raw 74%
+```
+
+For exact token usage:
+
+- Estimate locally for all backends first.
+- Use API `usage` when OpenAI-compatible backends return it.
+- Add streaming/output counters later where backend support exists.
+- Parse observed-agent usage from Claude/Codex transcripts if available.
+
+## Prompt Posture
+
+The Copilot should say what it knows from evidence, not talk about briefs or
+summaries.
+
+Bad:
+
+```text
+The brief does not say the keeper yield.
+```
+
+Good:
+
+```text
+I do not have the full output table in the current context. I can see the agent
+claimed the overnight funnel produced keepers, but the exact keeper yield
+requires expanding the raw assistant message around [L3040].
+```
+
+Once retrieval can expand that line, it should answer directly from the raw
+record.
 
 ## Implementation Phases
 
-1. Rename prompt language.
-   - Stop telling the LLM that a "brief" is its identity.
-   - Refer to an "evidence context pack" instead.
-   - Allow synthesis/recommendations with citation discipline.
+### v0.7.0: Evidence Expansion
 
-2. Build transcript evidence indexing.
-   - Preserve current `State` and `Brief` behavior.
-   - Add a new structure for searchable transcript evidence items.
-   - Keep all source citations.
+- Add raw transcript chunk retrieval by line, keyword, and recent tail.
+- Feed expanded raw evidence into `ask`/`chat`/`cockpit`.
+- Include paired tool call/result records together.
+- Keep deterministic `brief`, `observe`, `check`, and `status` unchanged.
+- Replace fixed recent-turn replay with a budgeted compatibility path.
 
-3. Add retrieval for chat.
-   - Start with deterministic lexical retrieval plus recency/salience.
-   - Avoid vector databases until the simpler path is proven insufficient.
+### v0.7.1: Context HUD
 
-4. Expand project evidence.
-   - Keep read-only bounded file facts.
-   - Retrieve project snippets relevant to the question rather than always
-     sending the same compact project facts.
+- Add estimated token/context usage to the TUI status line.
+- Show input/context estimates while answering.
+- Split estimates by raw transcript, project facts, cockpit chat, memory, and
+  summary index.
 
-5. Improve answer contract.
-   - Split observed facts, interpretation, and recommendations in prompt rules.
-   - Test that facts remain cited while answers become less timid.
+### v0.7.2: Budget-Aware Chat Memory
 
-6. Add regression fixtures.
-   - Questions requiring earlier transcript context.
-   - Questions requiring multi-session comparison.
-   - Questions requiring project facts.
-   - Questions where evidence is missing.
-   - Questions asking for brainstorming or next-step recommendations.
+- Replace raw-only old cockpit replay with budgeted recent turns plus durable
+  structured memory.
+- Keep the complete raw Cockpit Session log on disk.
+- Add explicit compaction triggers and recovery tests.
 
-## Success Criteria
+### v0.7.3: Project Context Budgeting
 
-- The cockpit agent no longer over-refers to "the brief."
-- It can answer questions about earlier session details when the transcript
-  contains the evidence.
-- It can synthesize and recommend without inventing facts.
-- Cited claims remain verifiable.
-- Deterministic commands keep their current behavior.
-- No write permissions are added.
+- Make project facts tiered: git summary, changed files, key docs, relevant
+  excerpts, broader file index.
+- Retrieve project snippets relevant to the question instead of always sending
+  the same project packet.
 
-## Non-Goals
+### v0.8: Streaming And Exact Usage
 
-- Do not give the LLM raw tool access.
-- Do not make cc-copilot operate the watched agent.
-- Do not claim access to Claude's hidden internal context.
-- Do not remove deterministic `brief`, `check`, `observe`, or `status`.
-- Do not weaken citation requirements for observed facts.
+- Add streaming backend support where possible.
+- Report exact input/output token usage when backend APIs expose it.
+- Add richer HUD behavior for live output counters and coverage changes.
 
+## Non-Negotiables
+
+- cc-copilot remains read-only.
+- Deterministic `brief`, `observe`, `check`, and `status` stay.
+- Summaries are allowed as indexes, not ground truth.
+- Every specific claim should be traceable to primary evidence.
+- When coverage is incomplete, the UI should say so honestly.
+
+## v0.7.0 Acceptance Criteria
+
+- A question about a detail buried inside an earlier full assistant message can
+  retrieve that full message when keywords match.
+- A question citing `[L123]` retrieves nearby raw records and paired tool
+  evidence.
+- Multi-session retrieval keeps session-qualified citations.
+- Cockpit conversation history is included by budget, not by a fixed turn count.
+- The model-facing prompt no longer exposes "brief" as the agent's identity.
+- Existing deterministic commands keep their output shape.

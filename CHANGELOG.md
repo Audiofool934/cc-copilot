@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Evidence context engine**
+- Added the first v0.7 evidence-expansion path for model-backed `ask`, `chat`,
+  and cockpit answers: raw transcript records are retrieved by recent tail,
+  cited line, and question keyword before summaries are used as orientation.
+- Tool call/result pairs are kept together in retrieved evidence, with
+  session-qualified `[session:L…]` citations for raw records.
+- Cockpit conversation replay is now budgeted by context size instead of a
+  fixed `history[-8:]` turn window.
+
 **Cockpit answer quality**
 - Reframed LLM-backed `ask`, `chat`, and narration prompts around cited
   evidence context instead of a "brief", so the cockpit agent is less likely to

@@ -21,7 +21,7 @@ import time
 from dataclasses import asdict
 
 from . import (__version__, locate, transcript as T, state as S, brief as B,
-               scope as SC, observe as O)
+               scope as SC, observe as O, context as EC)
 
 
 def _repo_root() -> str:
@@ -204,15 +204,15 @@ def cmd_ask(args) -> int:
                          f"Run `cc-copilot backends` to see options.\n")
         return 2
     try:
-        ev = SC.render_evidence(path, st, getattr(args, "scope", SC.SESSION),
-                                sessions=getattr(args, "scope_sessions", ""),
-                                project_context=True)
+        ctx = EC.build(path, st, getattr(args, "scope", SC.SESSION),
+                       sessions=getattr(args, "scope_sessions", ""),
+                       question=args.question, history=[], project_context=True)
     except ValueError as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 2
-    sys.stderr.write(f"# {N.backend_name(be)} (grounded in {ev.scope} evidence) …\n")
+    sys.stderr.write(f"# {N.backend_name(be)} (grounded in expanded evidence context) …\n")
     try:
-        print(N.ask_brief(ev.text, args.question, model=getattr(args, "model", None), backend=be))
+        print(N.ask_brief(ctx.text, args.question, model=getattr(args, "model", None), backend=be))
     except Exception as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 1
