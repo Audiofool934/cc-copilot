@@ -68,7 +68,11 @@ def _state_upto(tr: Transcript, cutoff_line: int) -> S.State:
         first_seen_ts=tr.first_seen_ts,
     )
     if old_tr.records:
-        old_tr.last_seen_ts = old_tr.records[-1].ts or tr.first_seen_ts
+        # the last record may be metadata with no ts — use the last real one so
+        # the old state's idle/status (and thus the transition shown) is accurate
+        old_tr.last_seen_ts = next(
+            (r.ts for r in reversed(old_tr.records) if r.ts is not None),
+            tr.first_seen_ts)
     return S.build(old_tr)
 
 

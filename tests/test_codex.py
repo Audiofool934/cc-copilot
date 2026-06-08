@@ -155,6 +155,10 @@ class TestCodexHelpers(unittest.TestCase):
         self.assertEqual(CX._clean_output(out2), "real body")
         # no recognizable wrapper → unchanged
         self.assertEqual(CX._clean_output("just text"), "just text")
+        # a recognized wrapper whose body is only metadata → empty, not the wrapper
+        self.assertEqual(
+            CX._clean_output("Process exited with code 1\nOutput:\nTotal output lines: 0"),
+            "")
 
     def test_cleaned_result_text_in_state(self):
         tr, _ = _state([U.exec_call("echo hi", "c1", ago=20),

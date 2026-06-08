@@ -76,6 +76,24 @@ class TestSinceByLine(unittest.TestCase):
         self.assertIn("a.py", v.text)
 
 
+class TestStateUpto(unittest.TestCase):
+    def test_last_seen_ts_is_last_real_ts_not_full_first(self):
+        from datetime import datetime, timedelta, timezone
+        from cccopilot.transcript import Record, Transcript
+        now = datetime.now(timezone.utc).astimezone()
+        old = now - timedelta(seconds=5000)
+        recent = now - timedelta(seconds=10)
+        recs = [
+            Record(1, "human", old, text="go"),
+            Record(2, "agent_text", recent, text="working"),
+            Record(3, "snapshot", None),          # metadata tail, no timestamp
+        ]
+        tr = Transcript(path="x", records=recs, first_seen_ts=old, last_seen_ts=now)
+        old_state = SI._state_upto(tr, 3)
+        # must use the last *real* ts in the slice, not the full transcript's first
+        self.assertEqual(old_state.tr.last_seen_ts, recent)
+
+
 class TestSinceByTime(unittest.TestCase):
     def test_time_window_excludes_old(self):
         tr, st = _tr_st([

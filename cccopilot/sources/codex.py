@@ -489,7 +489,10 @@ def _clean_output(text: str) -> str:
     head, _, rest = body.partition("\n")
     if head.startswith("Total output lines:"):   # a metadata line Codex sometimes adds
         body = rest
-    return body.strip() or text
+    # a recognized wrapper with an empty body means the command truly produced no
+    # output — return empty, not the wrapper (the `else` paths above keep the
+    # original text when there's no wrapper at all)
+    return body.strip()
 
 
 _PATCH_OP = re.compile(r"^\*\*\*\s+(Add|Update|Delete)\s+File:\s*(.+?)\s*$")

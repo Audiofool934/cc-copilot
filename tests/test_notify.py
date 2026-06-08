@@ -41,6 +41,12 @@ class TestAlertForDiff(unittest.TestCase):
         self.assertIsNone(NO.alert_for_diff(
             _diff(verdict_from="intervene", verdict_to="intervene")))
 
+    def test_steady_state_intervene_with_new_failure_is_silent(self):
+        # a new failure while ALREADY intervene must not re-alert (leading edge only)
+        self.assertIsNone(NO.alert_for_diff(
+            _diff(verdict_from="intervene", verdict_to="intervene",
+                  new_failures=[_fail(99, "Bash")])))
+
     def test_clean_is_silent(self):
         self.assertIsNone(NO.alert_for_diff(_diff()))
 

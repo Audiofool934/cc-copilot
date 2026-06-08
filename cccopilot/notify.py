@@ -39,7 +39,9 @@ def alert_for_diff(d: Diff) -> Optional[str]:
         return f"needs you: off-track / intervene{why}"
     if became_stalled:
         return "stalled — agent stopped mid-action (interrupted or stuck)"
-    if new_fail:
+    # A new failure is worth a ping only if the session wasn't already flagged —
+    # once it's intervene, the human knows; re-alerting each poll is just noise.
+    if new_fail and d.verdict_from != "intervene":
         f = d.new_failures[-1]
         return f"{new_fail} new failure(s) — {f.tool} [L{f.line}]"
     return None
