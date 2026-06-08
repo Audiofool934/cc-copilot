@@ -192,8 +192,18 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
             ol = picker.query_one("#picker-list", OptionList)
             self.assertEqual(ol.highlighted, 0)
             self.assertIn("[ ] Alpha", str(ol.get_option_at_index(0).prompt))
+            # the picker explains itself: a key hint and a live selected count
+            hint = str(picker.query_one("#picker-hint", Static).content)
+            self.assertIn("Space", hint)
+            self.assertIn("Enter", hint)
+            self.assertIn("(0 selected)", str(picker.query_one("#picker-title", Static).content))
 
-            await pilot.press("down", "space", "enter")
+            await pilot.press("down", "space")          # toggle Beta on
+            await pilot.pause()
+            self.assertIn("[x] Beta", str(ol.get_option_at_index(1).prompt))
+            self.assertIn("(1 selected)", str(picker.query_one("#picker-title", Static).content))
+
+            await pilot.press("enter")                  # confirm
             await pilot.pause()
 
         self.assertEqual(chosen, [["b"]])

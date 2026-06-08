@@ -688,14 +688,25 @@ class MultiPicker(ModalScreen):
             yield Static(self._title, id="picker-title")
             yield PickerFilter(placeholder="filter…", id="picker-filter")
             yield OptionList(id="picker-list")
+            yield Static("", id="picker-hint")
 
     def on_mount(self):
         self.query_one("#picker-filter", Input).focus()
         self._render_options()
         self._highlight(0)
+        self._refresh_chrome()
 
     def _list(self) -> OptionList:
         return self.query_one("#picker-list", OptionList)
+
+    def _option_text(self, label: str, selected: bool) -> Text:
+        # style the checkbox + label explicitly so the mark stays legible under
+        # the highlight bar and selected rows are obvious at a glance
+        t = Text()
+        t.append("[x] " if selected else "[ ] ",
+                 style=f"bold {_PAL['success']}" if selected else _PAL["muted"])
+        t.append(label, style=f"bold {_PAL['text']}" if selected else _PAL["text"])
+        return t
 
     def _render_options(self) -> None:
         q = self.query_one("#picker-filter", Input).value.lower()
@@ -704,10 +715,27 @@ class MultiPicker(ModalScreen):
         for i, (label, value) in enumerate(self._options):
             if q and q not in label.lower():
                 continue
-            mark = "[x]" if value in self._selected else "[ ]"
-            ol.add_option(Option(f"{mark} {label}", id=str(i)))
+            ol.add_option(Option(self._option_text(label, value in self._selected), id=str(i)))
         if ol.option_count:
             ol.highlighted = 0
+
+    def _refresh_chrome(self) -> None:
+        """Keep the title count + the key hint current so the picker explains
+        itself — the #1 confusion was not knowing Space toggles (Enter confirms)."""
+        n = len(self._selected)
+        try:
+            self.query_one("#picker-title", Static).update(
+                f"{self._title}   ({n} selected)")
+            hint = Text()
+            hint.append("Space", style=f"bold {_PAL['accent']}")
+            hint.append(" / click toggle · ", style=_PAL["muted"])
+            hint.append("Enter", style=f"bold {_PAL['accent']}")
+            hint.append(" confirm · ", style=_PAL["muted"])
+            hint.append("Esc", style=f"bold {_PAL['accent']}")
+            hint.append(" cancel · type to filter", style=_PAL["muted"])
+            self.query_one("#picker-hint", Static).update(hint)
+        except Exception:
+            pass
 
     def _highlight(self, index: int) -> None:
         ol = self._list()
@@ -739,6 +767,7 @@ class MultiPicker(ModalScreen):
         keep = self._list().highlighted or 0
         self._render_options()
         self._highlight(keep)
+        self._refresh_chrome()
 
     def _selected_values(self) -> list:
         return [value for _label, value in self._options if value in self._selected]
@@ -815,6 +844,7 @@ class Cockpit(App):
               background: $surface; border: round $accent; padding: 1; }
     #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
     #picker-list { height: auto; max-height: 20; }
+    #picker-hint { margin-top: 1; color: $text-muted; }
     """
 
     BINDINGS = [
