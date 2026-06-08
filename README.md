@@ -1,127 +1,48 @@
-# 🛰 cc-copilot
+# CC-Copilot
 
-A **read-only "shadow-memory" sidecar** for long-running coding agents. You step
-away or switch projects; the agent keeps working. When you come back,
-`cc-copilot` tells you — **faithfully** — what it did, whether it's stuck, and
-what to look at, without scrolling the transcript.
+**CC-Copilot helps you stay aligned with AI coding agents.**
 
-![cc-copilot cockpit](docs/cockpit.png)
+Cockpit is the primary TUI experience: a live supervision layer for ongoing
+agentic work, shared context, and next decisions.
 
-*The cockpit (`cc-copilot cockpit`): a resumable Cockpit Session with always-on
-read-only project context, agent-session evidence selection, an attention line
-with the next human decision, a safety verdict pill, and answers grounded in
-evidence — every `[L…]` is a real transcript line.*
+Ask questions across one session, selected sessions, or an entire project
+without injecting supervision chatter into the main Claude Code or Codex
+workflow.
 
-```
-$ cc-copilot brief
-# 🛰  cc-copilot brief — wire up the SSH reconnect path
-`/Users/you/cmux`  branch `ssh-reconnect`  cc v2.1.165
-session `b5c53c29…`  ·  5347 events  ·  span 4h
+![CC-Copilot Cockpit](docs/cockpit.png)
 
-## Status: 🔴 STALLED — no closing message after its last action (interrupted or stuck)
-· last activity 22m ago  ·  permission-mode `auto`
-
-## Safety: 🔴 INTERVENE — looks stuck or off-track; don't let it keep running blind
-- 🔴 stopped mid-action ~22m ago with no closing message  [L5345]
-- 🟠 ran the same command 4× — possible retry loop  [L4497 L4543 L4756 L5239]
-
-## What it's working on (your asks)
-- /codex:review --background --base main  [L5301 18:41]
-- the reconnect should back off, not hammer a dead host  [L4890 02:10]
-
-## What it did
-- tools: Bash×383, Read×129, Edit×83, Grep×65 …
-- changed 7 file(s):
-    - `Sources/WorkspaceRemoteConfiguration.swift` (4 edits)  [L5235 08:48]
-    …
-## ⚠ Friction — 23 error result(s)
-- Edit failed: File has been modified since read…  [L5230] (call [L5229])
-…
-```
-
-Every `[L…]` is a line in the session transcript. **cc-copilot states nothing
-it can't cite.**
-
----
-
-## Why this exists
-
-A long-running agent and the human supervising it live on two different clocks.
-The agent does an hour of work in a burst; the human is off in another project.
-When the human returns, the context is gone — and scrolling a 5,000-line
-transcript is not "situational awareness."
-
-The tools that exist today (mid-2026) split into three camps, and a
-[deep competitive scan](#landscape) found **none of them** do the thing you
-actually want when you walk back to a running agent:
-
-1. **Orchestration terminals** (Conductor, Vibe Kanban, Sculptor, Claude Code's
-   own *Agent View*) — run agents and show **status + diffs**. Coarse routing,
-   no narrative, no judgment.
-2. **Observability platforms** (LangSmith, Langfuse, AgentOps) — **developer
-   debugging** over trace corpora. Not a returning-operator briefing.
-3. **Async coding agents** (Devin, Cursor, Copilot, Jules) — **watch only
-   themselves**, surface author-side PR/diff review.
-
-The open gap — and what cc-copilot aims at — is the **interpretation layer** on
-top of the (now-commoditized) transcript data: a recap + a *"is it safe to
-continue / did it go off track"* judgment + an attention queue + an observer you
-can interrogate, delivered **read-only** and **agent-agnostic**.
-
-## The one rule: faithfulness
-
-The failure mode for a tool like this is to become *a second hallucinating
-agent* — to confidently narrate things that didn't happen. cc-copilot is built
-so it **cannot**: the core is deterministic and every claim carries the
-transcript line it came from. The narration layer (LLM prose) is optional and
-sits *on top of* the cited facts, never replacing them.
-
-This is enforced, not aspirational — see [Verification](#verification).
-
-## Install / run
-
-Requirements: Python 3.9+. For Claude Code projects, cc-copilot reads existing
-transcripts from `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/...`; it never
-writes there.
-
-Clone and run directly:
+## Quick Start
 
 ```bash
-git clone https://github.com/Audiofool934/cc-copilot.git
-cd cc-copilot
-
-./cc-copilot sessions         # see sessions for the current project
-./cc-copilot brief            # recap the most recent session for $PWD
-./cc-copilot cockpit          # full-screen TUI; auto-installs Textual if needed
+cc-copilot cockpit
 ```
 
-Or put the script on your PATH:
+Inside Cockpit:
 
-```bash
-mkdir -p ~/bin
-ln -s "$PWD/cc-copilot" ~/bin/cc-copilot
+```text
+/sessions   choose one or more agent sessions
+/observe    attention queue and next human decision
+/brief      deterministic recap with citations
+/check      safety / off-track verdict
+/diff       changes since last turn
+/model      choose backend/model
+/resume     resume a Cockpit Session
 ```
 
-Package install from GitHub also works:
+## Install
+
+Current install:
 
 ```bash
-python3 -m pip install --user "git+https://github.com/Audiofool934/cc-copilot.git"
 python3 -m pip install --user "cc-copilot[tui] @ git+https://github.com/Audiofool934/cc-copilot.git"
+cc-copilot setup
+cc-copilot cockpit
 ```
 
-First-time cockpit/model setup:
+Core requirements: Python 3.9+. The CLI core is dependency-free; Cockpit uses
+the optional Textual extra.
 
-```bash
-./cc-copilot setup            # installs the optional Textual cockpit extra
-./cc-copilot config --init    # creates ~/.cc-copilot.toml
-./cc-copilot backends         # shows available LLM backends
-```
-
-Use `cc-copilot ...` instead of `./cc-copilot ...` after adding the script to
-your PATH or installing the package.
-
-On fresh Debian/Ubuntu servers, `cc-copilot setup` may ask for Python's venv
-package:
+On fresh Debian/Ubuntu servers, setup may need Python's venv package:
 
 ```bash
 sudo apt-get update
@@ -129,477 +50,300 @@ sudo apt-get install -y python3-venv python3-pip
 cc-copilot setup
 ```
 
-Without sudo, install the TUI dependency into your user Python instead:
+Target install experience:
 
 ```bash
-python3 -m pip install --user 'textual>=2.0'
+npm install -g cc-copilot
+cc-copilot cockpit
 ```
 
-The deterministic commands (`brief`, `check`, `observe`, `status`, `sessions`)
-need no model. The conversational commands (`ask`, `chat`, `cockpit` Q&A,
-`brief --narrate`) use the backend configured in `~/.cc-copilot.toml`,
-environment variables, or explicit `--backend` / `--model` flags.
+That npm wrapper is planned distribution work; the current supported install is
+the Python package from GitHub.
+
+## Why CC-Copilot
+
+Past copilots reduced the cognitive burden of understanding code.
+
+Agentic coding creates a new burden: understanding what agents are doing over
+time. Long-running Claude Code, Codex, and multi-agent workflows produce
+continuous context, decisions, tool calls, errors, and partial progress.
+
+CC-Copilot gives humans a separate supervision layer. You can inspect, ask,
+compare, and realign without interrupting the working agent or forcing yourself
+to reconstruct context manually.
+
+## What Makes It Different
+
+1. **Read-only supervision**
+   CC-Copilot observes agent transcripts and project context without editing
+   files, issuing agent actions, or interfering with the working agent.
+
+2. **Separate Cockpit workflow**
+   Ask supervision questions outside the main agent conversation, so the
+   agent's working context stays clean.
+
+3. **Evidence-grounded answers**
+   Answers are grounded in transcript lines, tool results, project facts, git
+   state, and file evidence.
+
+4. **Multi-session awareness**
+   Follow one session, selected sessions, or an entire project from one
+   interface.
+
+5. **Attention-first UI**
+   Cockpit surfaces status, risk, progress, and the next human decision instead
+   of forcing you to read the whole transcript.
+
+6. **Model-flexible**
+   Use Codex, Claude, OpenAI-compatible APIs, DeepSeek, OpenRouter, Ollama,
+   Gemini, or custom CLI backends.
+
+7. **Terminal-native**
+   Keyboard-first TUI with mouse support, designed for side-window and
+   CMUX-style workflows.
+
+8. **Resumable Cockpit Sessions**
+   Your supervision conversation is independent from the agent session and can
+   be resumed later.
 
 ## Usage
 
 ```bash
-cc-copilot cockpit                  # ⭐ full-screen TUI; auto-installs Textual if needed
-                                    # use /sessions inside it to select one/many sessions
-cc-copilot chat                     # the same, as a plain zero-dep REPL (chat --tui = cockpit)
-cc-copilot status                   # fleet overview: ALL sessions, neediest first
-cc-copilot sessions                 # list this project's sessions, newest first
-cc-copilot resume                   # resumable Cockpit Sessions (--all = every project)
-cc-copilot observe                  # attention queue + next human decision
-cc-copilot observe --scope project  # same observer surface across wider scopes
-cc-copilot brief                    # one-shot recap (defaults to most recent session)
-cc-copilot brief --scope multi      # aggregate every work session in this project
-cc-copilot brief --scope multi --scope-sessions a1b2c3d4,b5c53c29
-cc-copilot check                    # just the "is it safe to continue?" verdict
-cc-copilot ask "did it drift?"      # one-shot grounded Q&A over the session state
-cc-copilot ask --scope repo "what does the project look like?"
-cc-copilot brief --narrate          # recap + an LLM narration of the cited facts
-cc-copilot brief --latest           # …explicitly the newest
-cc-copilot brief <session-id|path>  # a specific session
-cc-copilot brief --cwd /path/to/proj
-cc-copilot state --json             # the raw state model + assessment (machine-readable)
-cc-copilot watch                    # re-render the brief as the transcript grows
+cc-copilot cockpit                 # open the TUI
+cc-copilot sessions                # list project sessions
+cc-copilot status                  # fleet board, neediest first
+cc-copilot observe                 # attention queue
+cc-copilot brief                   # deterministic recap
+cc-copilot check                   # safety verdict
+cc-copilot ask "what changed?"     # one-shot grounded Q&A
+cc-copilot chat                    # plain terminal chat mode
+cc-copilot resume                  # resumable Cockpit Sessions
 ```
 
-It resolves sessions from
-`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded-cwd>/<session>.jsonl`, and
-by default reports on the most recent session *other than the current one* (so
-running `brief` from inside a live session targets the agent you want to watch —
-set `$CLAUDE_SESSION_ID` to make that exclusion exact).
-
-## Status semantics
-
-| Status | Meaning |
-|---|---|
-| 🟢 **RUNNING** | tail is a tool call/result, recently — agent mid-turn |
-| 🔴 **STALLED** | mid-turn but quiet > 3 min — interrupted or stuck (the signal you most want) |
-| 🟡 **AWAITING AGENT** | you spoke last; it hasn't replied |
-| ⚪ **IDLE** | agent gave a closing message — your move |
-
-The distinction between RUNNING and STALLED is the heart of "is it safe to leave
-it alone" — a transcript ending on a tool result means the agent had *not*
-finished its turn; if that was 30 seconds ago it's working, if it was 30 minutes
-ago it died mid-action.
-
-## Safety check — leg ② (`cc-copilot check`)
-
-The differentiated part: not *what* it did, but *how it's going*. A deterministic
-pass over the state flags **friction**, each signal cited:
-
-- **stalled** — stopped mid-action with no closing message
-- **fail-streak** — N commands failed in a row (flailing)
-- **recent failures** — several of the last few commands failed
-- **edit-thrash** — repeated failed edits to one file (edit/read race)
-- **retry-loop** — the exact same command run many times
-- **failing tests** — a test command came back non-zero
-
-Signals are recency-weighted: friction near the tail is live; friction the agent
-already recovered from is tagged `_(earlier)_`. The verdict is run-state aware —
-**INTERVENE** ("it's running *now* and going wrong") only fires for an *active*
-session; a finished session with past friction is **REVIEW**, never intervene.
-
-| verdict | exit | meaning |
-|---|:--:|---|
-| 🔴 **INTERVENE** | 2 | running/stalled with a live alarm — step in |
-| 🟠 **REVIEW** | 1 | friction worth a look before continuing |
-| 🟢 **CLEAR** / ⚪ IDLE / 🟡 AWAITING / ∅ empty | 0 | no friction signals |
-
-The exit code makes it scriptable — wire `cc-copilot check` into a `Stop` hook to
-get pinged only when an agent actually needs you. It's heuristic by design:
-cc-copilot flags friction; you make the call.
-
-## Agent observation — leg ③ (`cc-copilot observe`)
-
-`observe` is the v0.5 cockpit brain: a deterministic, evidence-cited answer to
-"where should my attention go right now?"
+Scope options:
 
 ```bash
-cc-copilot observe
-cc-copilot observe --scope multi
-cc-copilot observe --scope project --scope-sessions a1b2c3d4,b5c53c29
-```
+cc-copilot cockpit                 # one agent session by default
+cc-copilot cockpit --scope multi   # selected/all sessions in this project
+cc-copilot cockpit --scope project # project-level evidence context
 
-It renders four operator surfaces without calling an LLM:
-
-- **Now** — a ranked session board for the selected evidence range.
-- **Attention Queue** — sessions needing intervention, review, or patience.
-- **Next Human Decision** — the smallest action the human should take next.
-- **Recent Evidence** — the failures, changed files, and transcript tail that
-  justify the recommendation.
-
-Single-session citations stay `[L123]`; multi-session/project evidence uses
-`[session:L123]`. Project context also includes a small git glance with `[git:*]`
-citations. The cockpit activity strip shows the same observer line live.
-
-## Multiple sessions
-
-Running several agents at once (e.g. parallel CMUX workspaces)? Two ways to work
-across them:
-
-```bash
-cc-copilot status                 # one screen: every session's status + safety,
-cc-copilot status --cwd ~/cmux    #   sorted so whatever needs you is on top
-cc-copilot fleet --all            #   (alias; --all = every session, not just recent 10)
-```
-```
-cc-copilot status — /Users/you/cmux  (10 of 14 sessions)
- 🔴 stalled    intervene   8m ago   612ev  a1b2c3d4  stopped mid-action [L611]
- 🟡 awaiting-agent review  2m ago  1840ev  b5c53c29  3 commands failed in a row [L244]
- 🟢 running    clear      12s ago   930ev  9f0e1d2c  add the rollback step
- ⚪ idle       idle        1h ago   240ev  77aa88bb  refactor done
-```
-
-Inside the cockpit, `/sessions` opens the compact evidence picker:
-
-```
-you> /sessions
-    [x] reconnect-agent        · b5c53c29 · 91 KB
-    [ ] test-runner            · a1b2c3d4 · 101 KB
-    [x] reviewer               · 77aa88bb · 44 KB
-```
-
-One checked row means single-session evidence; multiple checked rows mean
-multi-session evidence. This changes what the current Cockpit Session reads; it
-does **not** swap to another Cockpit Session.
-
-In the plain REPL, use `/sessions` to list and `/use` to change the single
-evidence session:
-
-```
-you> /sessions           # list the project's sessions, numbered
-you> /use 2              # switch to #2 as evidence; current chat is kept
-you> /use b5c53c29       # …or by id / prefix
-```
-
-Pick a session for any one-shot command with a positional id/prefix/path
-(`cc-copilot brief <id>`), or `--session`. The deterministic core means `status`
-needs no LLM — it's a faithful, friction-ranked board of your whole fleet.
-
-## Cockpit Sessions
-
-The cockpit's resumable unit is a **Cockpit Session**, not an agent transcript.
-It stores your Q&A, backend/model, selected evidence sessions, and project cwd.
-Changing evidence sessions no longer swaps to another chat history; it changes
-what this cockpit reads. `/resume` resumes an entire Cockpit Session.
-`/history` remains a backward-compatible alias.
-
-```bash
-cc-copilot resume          # list this project's cockpit sessions
-cc-copilot resume --all    # every project
-```
-
-## Evidence Range
-
-Every conversational surface has an explicit agent-evidence range, and Q&A
-surfaces always include bounded read-only project context:
-
-| range | agent evidence | citations |
-|---|---|---|
-| `session` | one observed transcript (default) | `[L123]` plus project facts |
-| `multi-session` / `multi` | all or selected work-session transcripts for the cwd | `[b5c53c29:L123]` plus project facts |
-| `project` / `repo` | compatibility alias for all/selected sessions plus project facts | `[b5c53c29:L123]`, `[path.py:L45]`, `[tree]`, `[git:status]` |
-
-Project context is the baseline for the Cockpit agent, not a separate mode. The
-LLM receives only rendered, cited evidence; it does not get tools, repo handles,
-or ambient filesystem access. The project collector reads locally and
-deterministically: git status, a bounded file index, and text excerpts with
-`path:line` citations, skipping common generated/secret paths.
-
-For `multi-session` and `project` scopes you can narrow the transcript set:
-
-```bash
 cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
-cc-copilot observe --scope project --scope-sessions 1,3
+cc-copilot observe --scope project
 ```
 
-In the REPL, `/scope multi a1b2c3d4 b5c53c29` selects a subset and `/scope all`
-clears it back to every work session. In the TUI, use `/sessions`: the checkbox
-picker can select one or many evidence sessions, while project context stays on.
+Session discovery uses Claude Code transcripts under:
 
-## Cockpit TUI — `cc-copilot cockpit`
+```text
+${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded-cwd>/<session>.jsonl
+```
 
-A full-screen cockpit (Textual) — the Python analog of Codex's `ratatui` loop and
-Claude Code's Ink UI: an **evidence-aware status header** (project · evidence
-sessions · Cockpit Session), an **activity strip** above your chat, a
-**background watcher** that pushes stall/off-track alerts as the agent works, and
-**off-thread backend turns** so it never freezes. Default backend is **codex**
-(ChatGPT OAuth); `/model <name>` swaps it live. Click anywhere to focus the
-composer, which takes full multilingual input (CJK / emoji); `Shift+Enter` (or
-`Ctrl+J`) inserts a newline, `Enter` sends.
+By default, commands report on the most recent session other than the current
+one, so running CC-Copilot from inside a live agent session watches the agent
+you want to supervise.
+
+## Cockpit
+
+Cockpit is the main product surface.
+
+It gives you:
+
+- Status header for project, evidence range, Cockpit Session, backend, and risk.
+- Live activity strip from the observed session(s).
+- Attention queue and next human decision via `/observe`.
+- Grounded chat over one session, selected sessions, or project evidence.
+- Context HUD showing estimated input context, output estimate, and evidence
+  split across raw transcript, project facts, chat, memory, and summary index.
+- Background alerts when the agent stalls, errors, or goes off track.
+- Checkbox session picker with `[ ]` / `[x]` multi-select.
+- Resumable Cockpit Sessions via `/resume`.
+
+Keyboard is primary; mouse works too. Click anywhere to return focus to the
+composer. `Enter` sends, `Ctrl+J` inserts a newline, `/` opens command
+suggestions, and `Ctrl+P` opens the command palette.
+
+## Evidence Context
+
+v0.7 introduced the Evidence Context Engine.
+
+For model-backed `ask`, `chat`, and Cockpit answers, CC-Copilot now retrieves
+primary evidence first:
+
+- raw assistant messages
+- raw human prompts
+- tool calls and tool results
+- cited line windows
+- recent transcript tail
+- selected multi-session records
+- read-only project facts
+- git/file evidence
+- Cockpit conversation memory
+
+Summaries still exist, but they are navigation aids and UI surfaces, not the
+only source of truth. See [docs/evidence-context-engine.md](docs/evidence-context-engine.md).
+
+## Models
 
 ```bash
-cc-copilot cockpit            # just run it — first launch auto-installs the TUI
-                              #   extra into a local .venv, then opens the cockpit
-# (explicit / CI:  cc-copilot setup   ·   or install the [tui] extra from GitHub)
-# (= cc-copilot chat --tui)
+cc-copilot backends
+cc-copilot cockpit --backend codex
+cc-copilot cockpit --backend claude
+cc-copilot ask "what matters next?" --backend openai --model gpt-4o
 ```
 
-In-cockpit: `Enter` send · `/` suggestions (`Enter` accepts, `Tab` completes) ·
-`/help` · `/observe` `/brief` `/check` `/diff` (LLM-free) · `/sessions`
-checkbox evidence picker · `/resume` · `/new` · `/model <name>` · `/theme` ·
-`Ctrl+R` refresh · `Ctrl+L` clear · `Ctrl+C` quit. Citations (`[L…]`) are
-preserved verbatim in the log — the faithfulness guarantee holds in the TUI
-exactly as in the CLI.
+Supported backend families:
 
-The cockpit ships a small curated palette set (`cockpit`, `graphite`, `signal`,
-`daybreak`) instead of exposing Textual's generic theme catalogue. Set
-`CC_COPILOT_THEME=graphite` to choose a startup default.
-
-**Your Cockpit Sessions persist.** Each cockpit is saved locally with its Q&A and
-evidence selection, so changing evidence sessions does not wipe or swap the chat.
-`/resume` browses and re-opens whole Cockpit Sessions — even if the underlying
-transcript is gone (read-only view). It's stored under
-`$CC_COPILOT_STATE_DIR` (default `~/.local/state/cc-copilot`, never under `~/.claude`),
-dirs `0700` / files `0600`; opt out with `--no-persist`, `[history] enabled = false`,
-or `CC_COPILOT_HISTORY=0`.
-
-The core and the plain `cc-copilot chat` REPL stay **zero-dependency**; Textual is
-lazy-imported only by the cockpit, and `python -c "import cccopilot.cli"` works on
-a stdlib-only interpreter.
-
-## Chat sidecar — `cc-copilot chat` (the plain REPL)
-
-The main way to use it. In a second terminal, pin to the agent's session and
-hold an ongoing read-only conversation while it works:
-
-```bash
-cd ~/the-project          # same dir the agent is working in
-cc-copilot chat           # pins to that project's most-recent OTHER session
-```
-
-```
-🛰  cc-copilot chat — cockpit sess-b5c53c29
-[🟢 running · idle 12s · 1840 ev · safety: review]
-ask a question, or /help.  Ctrl-D to exit.
-
-you> what was it doing, and did it hit trouble?
-[🟢 running · idle 3s · 1843 ev · safety: review]
-cc > It's wiring the SSH-reconnect backoff. Hit a 3-command fail-streak
-     on the migration [L244 L248 L250] but recovered; tests green [L312].
-
-🔔 observed session → STALLED · 1 new error(s), e.g. Bash [L1871]
-you> is it safe to let it keep going?
-…
-```
-
-- **Live timeline** — every turn re-parses the (growing) JSONL, so answers never
-  lag the observed session; cockpit header/activity surfaces also refresh on the
-  poll interval.
-- **Explicit evidence sessions** — `/sessions` opens a checkbox picker. One
-  checked session grounds questions in that session; multiple checked sessions
-  ground questions in selected multi-session evidence. Project context stays on
-  and the backend remains read-only. `/scope` remains available for CLI/scripted
-  compatibility.
-- **Multi-turn** — it remembers the conversation; follow-ups resolve against both
-  the prior answers and the just-refreshed state.
-- **Push alerts** — a background thread pings you inline when the agent stalls /
-  goes off-track / errors (`--no-alerts` to silence; `--poll N` to tune; default 2s).
-- **Read-only observer of the agent** — it opens the observed transcript for
-  reading only; your separate copilot Q&A is persisted under cc-copilot's state
-  dir unless disabled. It cannot touch the agent it watches.
-- **LLM-free escape hatches** — `/observe`, `/brief`, `/check`, `/diff`, `/refresh`,
-  `/session`, `/resume` work without a backend, and let you verify any prose
-  answer against cited evidence in the same window.
-
-Grounding is identical to `ask`: the chat LLM sees a cited evidence context
-assembled from raw transcript records, read-only project facts, cockpit chat,
-and a summary index. Prior turns are replayed as continuity — never as new
-observed agent facts — so a long conversation can't launder an un-cited claim
-into a later reply.
-
-## Observer chat — leg ④ (`cc-copilot ask`, `brief --narrate`)
-
-The conversational layer — *grounded* so it can't become a second hallucinating
-agent. The LLM gets no tools and no ambient repo access; for `ask`/`chat` it
-receives a bounded **evidence context** assembled from cited raw transcript
-records, tool calls/results, read-only project facts, cockpit chat, and a
-summary index. It keeps `[L…]` citations for observed facts and can synthesize
-or recommend from that evidence:
-
-```bash
-cc-copilot ask "did it go off-track, and is it safe to continue?"
-cc-copilot ask "draft a one-line next instruction"
-cc-copilot brief --narrate          # recap + a 3–5 sentence grounded narration
-```
-
-Because it's pinned to cited evidence, it answers with citations and **declines
-to guess** — e.g. it won't suggest "commit" when the available evidence shows
-no git state. The narration is the one non-deterministic layer and is labelled
-as such; legs ①/② remain the deterministic ground truth beneath it.
-
-The model is pluggable — see **Models / backends** below.
-
-## Models / backends
-
-The deterministic core (`brief`, `check`, `observe`, the chat's live refresh +
-alerts) uses **no model at all**. Only the language features (`ask`, `chat`,
-`--narrate`) call an LLM, and the backend is your choice:
-
-```bash
-cc-copilot backends                       # list backends + availability
-cc-copilot chat --backend codex           # or deepseek / ollama / openai / …
-cc-copilot ask "…" --backend deepseek --model deepseek-reasoner
-export CC_COPILOT_BACKEND=codex           # set a default
-```
-
-| backend | how it authenticates | notes |
+| backend | authentication | notes |
 |---|---|---|
-| `codex` *(default)* | your `codex login` (ChatGPT **OAuth**) | `codex exec`; agentic CLI |
+| `codex` | your `codex login` | default; local agent CLI |
 | `claude` | your Claude Code login | `claude -p`; no API key |
 | `gemini` / `llm` | the CLI's own config | if installed on PATH |
 | `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible HTTP |
-| `openai` | `OPENAI_API_KEY` | |
-| `openrouter` | `OPENROUTER_API_KEY` | any model on OpenRouter |
-| `ollama` | none (local) | `http://localhost:11434`; set `--model` |
+| `openai` | `OPENAI_API_KEY` | OpenAI-compatible HTTP |
+| `openrouter` | `OPENROUTER_API_KEY` | any OpenRouter model |
+| `ollama` | none | local server at `http://localhost:11434` |
+| `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
 
-Two escape hatches for anything else (both zero-dep):
-- **Any OpenAI-compatible API** — `CC_COPILOT_API_BASE` (+ `CC_COPILOT_API_KEY`,
-  `CC_COPILOT_MODEL`). Points at vLLM, LM Studio, Together, Groq, a proxy, etc.
-- **Any CLI** — `CC_COPILOT_LLM_CMD` (e.g. `"llm -m gpt-4o"`); the prompt is
-  appended as the final argument.
-
-Grounding is identical across all of them: every backend receives only the
-bounded cited evidence context with the no-invention preamble. If the selected
-backend is unavailable, `--narrate` degrades to the plain (LLM-free) brief and
-`ask`/`chat` say so.
-
-### Set defaults once — `~/.cc-copilot.toml`
+Set defaults once:
 
 ```bash
-cc-copilot config --init     # write a starter file (chmod 600)
-cc-copilot config            # show the path + effective backend
+cc-copilot config --init
+cc-copilot config
 ```
 
+Example `~/.cc-copilot.toml`:
+
 ```toml
-# ~/.cc-copilot.toml
-backend = "codex"               # default backend; uses your `codex login`
-# model = "..."                 # optional; omit to use the backend default
+backend = "codex"
+# model = "..."
 
 [history]
 enabled = true
 ```
 
-Example API-backed config:
+Precedence: explicit flags > environment variables > config file > built-in
+default.
+
+## Read-Only Contract
+
+CC-Copilot is an observer.
+
+It reads:
+
+- agent transcripts
+- session metadata
+- read-only project facts
+- git status
+- cited file excerpts
+- saved Cockpit conversation state
+
+It does not:
+
+- mutate the observed agent session
+- edit project files
+- run tools on behalf of the observed agent
+- write under `~/.claude`
+- inject supervision chatter into Claude Code or Codex
+
+Deterministic commands work without an LLM:
+
+```bash
+cc-copilot brief
+cc-copilot observe
+cc-copilot check
+cc-copilot status
+```
+
+Interactive `/diff` is available inside Cockpit and `cc-copilot chat`.
+
+LLM-backed answers receive bounded cited evidence context, not tool access or
+ambient repo access.
+
+## Cockpit Sessions
+
+A Cockpit Session is separate from an agent session.
+
+It stores:
+
+- your supervision Q&A
+- backend/model selection
+- project cwd
+- selected evidence sessions
+- durable compacted memory for older Q&A
+
+Changing evidence with `/sessions` changes what the current Cockpit reads; it
+does not switch to another Cockpit Session.
+
+Saved state lives under:
+
+```text
+${CC_COPILOT_STATE_DIR:-~/.local/state/cc-copilot}
+```
+
+Directories are `0700`, files are `0600`. Disable persistence with:
+
+```bash
+cc-copilot cockpit --no-persist
+```
+
+or:
 
 ```toml
-backend = "deepseek"
-model = "deepseek-reasoner"
-
-[env]                           # exported as env vars (real env still wins)
-DEEPSEEK_API_KEY = "sk-…"
+[history]
+enabled = false
 ```
 
-Precedence everywhere: **explicit `--backend`/`--model` flag > real env var >
-this file > built-in default.** Keys live in the `[env]` table (kept `chmod 600`);
-point `$CC_COPILOT_CONFIG` elsewhere to relocate it.
+## How It Works
 
-## How it works
-
-```
-transcript.py   parse the JSONL ledger into normalized, line-addressed records
-                (filters harness-injected isMeta / isCompactSummary / <synthetic>
-                 text; recovers genuine /slash-command invocations)
-state.py        fold records into a deterministic working-state model — plan,
-                changed files (failed edits excluded), commands, errors, status —
-                each fact carrying its evidence line(s)
-brief.py        render the evidence-cited recap
-observe.py      rank attention and render the next-human-decision report
-scope.py        render session / multi-session / project evidence scopes
-locate.py       map cwd ⇄ Claude config projects session files
-cli.py          sessions / observe / brief / state / watch
+```text
+transcript.py   parse Claude Code JSONL into line-addressed records
+state.py        fold records into deterministic session state
+assess.py       classify stalls, failures, retry loops, and safety signals
+brief.py        render deterministic cited recaps
+observe.py      rank attention and next human decision
+scope.py        collect session, multi-session, and project evidence
+context.py      retrieve raw evidence for model-backed answers
+store.py        persist resumable Cockpit Sessions and compacted memory
+backends.py     call Codex, Claude, OpenAI-compatible APIs, Ollama, etc.
+tui.py          Cockpit, the Textual TUI
 ```
 
-The data plane (parse JSONL + hooks) is deliberately thin and replaceable —
-several other tools already do it. cc-copilot's value is the **reading** of that
-data, not its collection.
-
-## <a name="verification"></a>Verification
-
-The faithfulness claim is checked adversarially, not asserted. A fleet of
-auditor agents each take a *real* session, run `brief`, then re-read every cited
-JSONL line and try to find a claim the line doesn't support. (The audit harness
-is a reusable workflow — re-run it as a regression gate.)
-
-Three rounds against 10 real sessions, ~150 citations re-checked each time —
-**zero fabrications in any round** (every cited line always existed with
-matching text); the bugs were misattribution/classification, and each round
-drove them down:
-
-| round | unfaithful files | critical | major | minor |
-|------:|:---:|:---:|:---:|:---:|
-| 1 | 6/10 | 1 | 11 | 2 |
-| 2 | 1/10 | 0 | 1 | 1 |
-| **3** | **0/10** | **0** | **0** | **1** (wording) |
-
-Bugs found and fixed:
-
-- **status lied mid-turn** — a transcript ending on a tool result was reported
-  IDLE ("finished, waiting on you") instead of RUNNING/STALLED;
-- **harness text laundered as human/agent words** — `isMeta` resume stubs,
-  slash-command template bodies, `isCompactSummary` summaries, and `<synthetic>`
-  placeholders leaked into "your asks" / "agent's last words";
-- **failed edits counted as changes** — an `Edit` whose result was `is_error`
-  still inflated the changed-file count;
-- **housekeeping commands as asks** — `/compact`, `/clear`, `/mcp` etc. were
-  surfaced as intents and (when trailing) mis-anchored the status.
-
-## Roadmap
-
-The differentiated product is the full stack:
-
-- **① recap** — ✅ evidence-cited "what it did while you were away" (`brief`)
-- **② judgment** — ✅ "is it safe to continue / did it go off track" (`check`:
-  fail-streaks, edit-thrash, retry-loops, stalls, failing tests — recency-weighted)
-- **③ attention cockpit** — ✅ "where should I look, and what is the smallest
-  next human decision?" (`observe`, plus the cockpit attention line)
-- **④ observer chat** — ✅ ask it "did it drift?", "draft the next instruction"
-  (`ask` / cockpit; `--narrate` for the displayed recap) — an LLM layer
-  *grounded in cited evidence context*
-
-The stack the [landscape](#landscape) said was the open gap is now built end to
-end. The [evidence context engine](docs/evidence-context-engine.md) is the v0.7
-chat foundation: question-aware raw transcript retrieval, context HUD, durable
-cockpit memory compaction, and budgeted project evidence. Next product
-directions: hook-driven push ("it stalled 10 min ago" — `check`'s exit code
-already supports this), a live `watch` + narrate loop, and other agents (Codex,
-Gemini CLI) behind the same `State` model (only the `transcript.py` parser is
-Claude-Code-specific; `state`/`assess`/`brief`/`narrate` are agent-agnostic).
-
-Rust migration is documented as a deferred architecture decision in
-[docs/rust-migration.md](docs/rust-migration.md). Current guidance: keep
-iterating in Python/Textual until the cockpit interaction model stabilizes; if
-we later need a native TUI rewrite, prefer Rust + Ratatui/crossterm.
+Only `transcript.py` is Claude-Code-specific. The downstream state, assessment,
+briefing, context, and cockpit layers are designed to generalize to other
+agent transcript formats.
 
 ## Development
 
 ```bash
 git clone https://github.com/Audiofool934/cc-copilot.git
 cd cc-copilot
-./cc-copilot brief --cwd ~/some-project      # runs on stdlib alone
 
-python3 -m unittest discover -s tests        # stdlib-only core tests
-cc-copilot setup                             # adds the optional TUI (.venv + textual)
+python3 -m unittest discover
+cc-copilot setup
+cc-copilot cockpit
 ```
 
-Layout: the core (`transcript` → `state` → `assess` → `brief`/`observe`) is
-pure, deterministic, and dependency-free; `narrate`/`backends` add the optional
-LLM layer; `chat`/`tui` are the interactive surfaces; `cli` ties it together.
-Only `transcript.py` is Claude-Code-specific — everything downstream is
-agent-agnostic. Tests stay stdlib-only; Textual is an optional extra,
-lazy-imported by the cockpit.
+Core tests are stdlib-only. Textual is optional and lazy-imported by Cockpit.
 
-## <a name="landscape"></a>Landscape (mid-2026)
+## Roadmap
 
-Closest contenders and why they don't close the gap: **Devin** Session Insights
-(recap, but single-vendor, no open-ended safety verdict, no observer chat);
-**GitHub Copilot** PR summary + self-review (PR-bound, single-vendor); **Cursor**
-(diff-scoped review; drift detection is a *separate* security product);
-**Claude Code Agent View** (multi-session status board, explicitly avoids
-transcripts). Research precedent for "agent-watching-agent" exists (Meta **Wink**,
-Scale **MRT**, **InferAct**) but emits machine-consumed corrections/scores, not a
-human-facing recap. The recap leg is being encroached; the **judgment + observer**
-legs are open.
+- npm installer wrapper for easier sharing
+- Rust migration for portable single-binary distribution
+- deeper project evidence retrieval and file ranking
+- streaming responses and exact backend token usage
+- additional transcript parsers beyond Claude Code
+- hook-driven push alerts for unattended runs
+
+Rust migration is tracked separately in [docs/rust-migration.md](docs/rust-migration.md).
+
+## Philosophy
+
+The main agent conversation should stay focused on doing the work.
+
+Supervision is a different job: inspect what happened, compare evidence, ask
+what matters, preserve decisions, and decide whether to intervene. Mixing that
+into the working agent thread creates noise and changes the very context you
+are trying to observe.
+
+CC-Copilot keeps supervision outside the main workflow. Cockpit is where the
+human can regain situational awareness without contaminating the agent's own
+conversation.
