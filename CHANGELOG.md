@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.10.4 — 2026-06-08
+
+**Activity-timeline review fixes.** A multi-pass self-review of the 0.10.3
+RichLog timeline surfaced several rough edges, now fixed:
+- **Scroll-up no longer gets yanked to the bottom.** A full rebuild (an
+  `--no-alerts` growth tick, or any project / multi-session scope, which rebuilds
+  on every poll) snapped unconditionally to the newest line — defeating the
+  tail-follow guarantee. It now preserves your scroll position, following only
+  when you were *exactly* at the bottom (so a reader one line up isn't yanked
+  either).
+- **The gutter bar no longer bleeds its color into the line.** The `▌` prefix
+  color was the base style of the whole line, tinting the status and file-change
+  text accent-purple; it is now scoped to just the glyph.
+- **Warn vs. alarm gutter color.** Soft "warn" observer lines get an amber bar
+  that matches their text; only true failures / alarms are red.
+- **No more spurious horizontal scrollbar** in the timeline — long lines wrap to
+  the panel width (`min_width=1` + `overflow-x: hidden`) instead of forcing a
+  sideways scroll.
+- Narrower exception handling on the title update, and dead-code cleanup
+  (gutter fallback branch, an unused test import).
+
 ## 0.10.3 — 2026-06-08
 
 **The activity timeline now holds the *entire* session — scroll through all of
