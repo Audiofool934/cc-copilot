@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.9.1 — 2026-06-08
+
+**Observe your own current session.**
+- **Fixed current-session detection.** Claude Code renamed the session env var to
+  `CLAUDE_CODE_SESSION_ID`, but cc-copilot still read the old `CLAUDE_SESSION_ID`,
+  so it could no longer tell which session is *yours*. Both names now work
+  (`resolve` and the pickers).
+- **`/sessions` always includes your current (live) session** — even when it's in
+  a different project than the one the cockpit is watching — marked "⟵ your live
+  session". Fixes "`/sessions` cannot show our current session": cc-copilot is
+  project-scoped, so a session you're sitting in elsewhere would never appear.
+- New **`--here`** flag and **`/here`** command (cockpit + REPL) to observe the
+  session you're running inside of directly, regardless of cwd.
+
 ## 0.9.0 — 2026-06-08
 
 **"While you were away" — the re-entry layer.** Built on the normalized model, so

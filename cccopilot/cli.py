@@ -100,6 +100,14 @@ def cmd_setup(args) -> int:
 
 def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
+    if getattr(args, "here", False):
+        p = locate.current_session_path()
+        if p:
+            return p
+        sys.stderr.write(
+            "cc-copilot: --here needs to run inside a Claude Code session "
+            "(CLAUDE_CODE_SESSION_ID is unset, or its transcript wasn't found).\n")
+        sys.exit(2)
     latest = bool(getattr(args, "latest", False))
     session = None if latest else getattr(args, "session", None)
     path = SRC.resolve(cwd, session, include_current=latest)
@@ -518,6 +526,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--agent", action="append", metavar="NAME",
                         help="restrict to an agent's sessions (claude/codex; repeatable). "
                              "Default: every agent with sessions on this machine.")
+        sp.add_argument("--here", action="store_true",
+                        help="observe the session you're running inside of "
+                             "(your current Claude Code session), not another one")
 
     sp = sub.add_parser("sessions", help="list sessions for this project")
     common(sp)

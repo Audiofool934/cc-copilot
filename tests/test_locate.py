@@ -95,7 +95,7 @@ class TestLocate(unittest.TestCase):
 
         root = tempfile.mkdtemp()
         old_root = L.projects_root
-        old_self = os.environ.get("CLAUDE_SESSION_ID")
+        saved = {k: os.environ.get(k) for k in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
         cwd = "/tmp/cc-copilot-latest-test"
         d = os.path.join(root, L.encode_cwd(cwd))
         os.makedirs(d)
@@ -108,7 +108,10 @@ class TestLocate(unittest.TestCase):
                     f.write("{}\n")
             os.utime(other, (1000, 1000))
             os.utime(current, (2000, 2000))
-            os.environ["CLAUDE_SESSION_ID"] = "newest"
+            # the current session is identified by CLAUDE_CODE_SESSION_ID (newer
+            # name); clear the legacy var so only this one is in effect
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "newest"
+            os.environ.pop("CLAUDE_SESSION_ID", None)
 
             self.assertEqual(L.resolve(cwd), other)
             self.assertEqual(L.resolve(cwd, include_current=True), current)
@@ -116,10 +119,11 @@ class TestLocate(unittest.TestCase):
             self.assertEqual(cli._resolve_or_die(args), current)
         finally:
             L.projects_root = old_root
-            if old_self is None:
-                os.environ.pop("CLAUDE_SESSION_ID", None)
-            else:
-                os.environ["CLAUDE_SESSION_ID"] = old_self
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
             shutil.rmtree(root)
 
     def test_session_refs_include_titles(self):

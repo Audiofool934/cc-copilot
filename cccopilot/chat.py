@@ -41,6 +41,7 @@ _HELP = """commands (all but questions are LLM-free):
   /scope [name]     show or set evidence range: session, multi-session, project
   /session          current cockpit target
   /sessions         list agent sessions available as evidence
+  /here             observe your own current (live) session
   /use <n|id>       change the current evidence session (keeps this cockpit chat)
   /resume           resume another cockpit session
   /new              start a new independent cockpit session
@@ -236,6 +237,8 @@ class ChatSession:
             return f"cockpit: {self.store.conv_id}\ntarget: {self.path}\nevidence: {self.scope_label()}\n{self.banner()}"
         if c == "/sessions":
             return self._list_sessions()
+        if c == "/here":
+            return self._switch_here()
         if c.startswith("/use"):
             return self._switch(cmd.strip()[4:].strip())
         if c in ("/new", "/new-cockpit"):
@@ -440,6 +443,18 @@ class ChatSession:
         self.switch_path(target)
         return (f"evidence session → {os.path.basename(target)[:-6][:8]} "
                 f"(cockpit chat kept)\n{self.banner()}")
+
+    def _switch_here(self):
+        """Switch to observing the session cc-copilot is running inside of."""
+        p = LOC.current_session_path()
+        if not p:
+            return ("no current session detected — run cc-copilot inside a live "
+                    "Claude Code session (CLAUDE_CODE_SESSION_ID).")
+        if os.path.abspath(p) == os.path.abspath(self.path):
+            return "already observing your live session"
+        self.switch_path(p)
+        return (f"now observing your live session → "
+                f"{os.path.basename(p)[:-6][:8]}\n{self.banner()}")
 
     def switch_path(self, path):
         """Change the evidence target while keeping this Cockpit session."""

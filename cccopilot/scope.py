@@ -313,7 +313,41 @@ def _candidate_refs(path: str) -> list:
             continue
         seen.add(k)
         deduped.append(r)
+    _mark_current_session(deduped, here)
     return deduped
+
+
+def _mark_current_session(refs: list, here: str) -> None:
+    """Ensure the human's *own* live session is always selectable from a picker.
+
+    cc-copilot supervises *another* agent by default, but the session you're
+    sitting in may be in a different project than the one being watched — so it
+    would never appear in the project-scoped candidate list. Tag it ``live`` if
+    present, and inject it (cross-project) if not, so ``/sessions`` can always
+    offer "observe my current session".
+    """
+    cur_id = LOC.current_session_id()
+    if not cur_id:
+        return
+    for r in refs:
+        if r.session_id == cur_id or r.session_id.startswith(cur_id):
+            r.live = True
+            return
+    cur_path = LOC.current_session_path()
+    if not cur_path or os.path.abspath(cur_path) == here:
+        return
+    try:
+        st = S.build(SRC.parse(cur_path))
+        title = getattr(st.tr, "title", "") or ""
+    except OSError:
+        title = ""
+    try:
+        ref = LOC.SessionRef(
+            cur_path, cur_id, os.path.getmtime(cur_path), os.path.getsize(cur_path),
+            title, False, agent=SRC.source_for_path(cur_path).name, live=True)
+    except OSError:
+        return
+    refs.append(ref)
 
 
 def _session_items(path: str, current_st=None, selectors=None) -> list:

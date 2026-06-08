@@ -51,6 +51,7 @@ class SessionRef:
     own: bool = False        # a cc-copilot narration call, not a real work session
     agent: str = "claude"    # which agent wrote this transcript (claude | codex | …)
     model: str = ""          # model/provider, when the transcript records it
+    live: bool = False       # this is the human's *current* session (CLAUDE_CODE_SESSION_ID)
 
     @property
     def hhmm(self) -> str:
@@ -221,6 +222,39 @@ def ago(mtime: float) -> str:
     return f"{int(s // 86400)}d"
 
 
+def current_session_id() -> str:
+    """The id of the session cc-copilot is *running inside*, if any.
+
+    Claude Code exposes this as ``CLAUDE_CODE_SESSION_ID`` (newer) — we keep the
+    older ``CLAUDE_SESSION_ID`` as a fallback so both vintages work. Used to
+    exclude (or, on request, target) the human's own live session.
+    """
+    return (os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("CLAUDE_SESSION_ID") or "")
+
+
+def current_session_path() -> Optional[str]:
+    """The transcript path of the current session, found by id across projects.
+
+    The current session may live in a different project than the cwd the cockpit
+    is pointed at, so we search every project bucket for ``<id>.jsonl`` rather
+    than assuming the encoded-cwd directory.
+    """
+    sid = current_session_id()
+    if not sid:
+        return None
+    root = projects_root()
+    try:
+        buckets = os.listdir(root)
+    except OSError:
+        return None
+    for b in buckets:
+        p = os.path.join(root, b, sid + ".jsonl")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def resolve(cwd: str, session: Optional[str] = None,
             include_current: bool = False) -> Optional[str]:
     """Resolve a transcript path.
@@ -242,7 +276,7 @@ def resolve(cwd: str, session: Optional[str] = None,
     sessions = list_sessions(cwd)
     if not sessions:
         return None
-    self_id = "" if include_current else os.environ.get("CLAUDE_SESSION_ID", "")
+    self_id = "" if include_current else current_session_id()
     for ref in sessions:
         if self_id and ref.session_id == self_id:
             continue
