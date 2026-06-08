@@ -7,6 +7,13 @@ import unittest
 
 from cccopilot import cli, locate as LOC, scope as SC
 
+try:
+    import textual  # noqa: F401  — probe first; cccopilot.tui sys.exits without it
+    from cccopilot import tui
+    HAVE_TEXTUAL = True
+except Exception:                                   # pragma: no cover
+    HAVE_TEXTUAL = False
+
 
 class _SessionEnv(unittest.TestCase):
     KEYS = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CONFIG_DIR")
@@ -105,8 +112,8 @@ class TestSurfacing(_SessionEnv):
         os.environ["CLAUDE_CODE_SESSION_ID"] = sid
         self.assertEqual(LOC.current_session_path(), pn)   # most recently written
 
+    @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
     def test_picker_label_marks_live(self):
-        from cccopilot import tui
         ref = types.SimpleNamespace(title="my work", session_id="abc12345",
                                     size=1024, path="/p/x.jsonl", agent="claude", live=True)
         self.assertIn("live session", tui._session_picker_label(ref))
