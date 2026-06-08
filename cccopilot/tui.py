@@ -36,7 +36,7 @@ try:
     from textual.screen import ModalScreen
     from textual.theme import Theme
     from textual.widgets import (Collapsible, Footer, Input, Markdown, OptionList,
-                                 Static, TextArea)
+                                 RichLog, Static, TextArea)
     from textual.widgets.option_list import Option
     from rich.text import Text
 except ImportError:
@@ -277,12 +277,9 @@ def _activity_line(record):
     return None
 
 
-# How many recent activity events the timeline seeds on (re)build, so there's
-# real history to scroll back through — not just the last handful.
-_TIMELINE_EVENTS = 150
-
-
-def _recent_activity_lines(st, limit: int = 5) -> list:
+def _recent_activity_lines(st, limit=None) -> list:
+    """Activity lines for the timeline, oldest→newest. ``limit`` None = the whole
+    session (the RichLog timeline holds it all and scrolls)."""
     if st is None:
         return []
     rows = []
@@ -291,10 +288,22 @@ def _recent_activity_lines(st, limit: int = 5) -> list:
         if line is None:
             continue
         rows.append(line)
-        if len(rows) >= limit:
+        if limit is not None and len(rows) >= limit:
             break
     rows.reverse()
     return rows
+
+
+def _timeline_gutter(renderable, cls: str = "role-event") -> Text:
+    """Prefix a timeline line with a colored gutter bar (event vs alert), the
+    RichLog-line equivalent of the old per-row left border."""
+    bar = _PAL["error"] if cls == "role-alert" else _PAL["accent"]
+    t = Text("▌ ", style=bar)
+    if isinstance(renderable, Text):
+        t.append_text(renderable)
+    else:
+        t.append(str(renderable))
+    return t
 
 
 def _sid(ref=None, st=None, path: str = "") -> str:
@@ -822,7 +831,8 @@ class Cockpit(App):
         border-bottom: solid $accent;
         background: $panel; padding: 0 1;
     }
-    #timeline-title { color: $accent; text-style: bold; }
+    #timeline-title { color: $accent; text-style: bold; height: 1; }
+    #timeline-log { height: 1fr; background: $panel; scrollbar-size-vertical: 1; }
     #chat { height: 1fr; background: $surface; padding: 0 1; }
 
     /* status + composer flow at the bottom (above the docked Footer); no
@@ -904,8 +914,14 @@ class Cockpit(App):
     # ---- layout ----
     def compose(self) -> ComposeResult:
         header = Static("", id="status-header")
-        timeline = VerticalScroll(
-            Static(_TIMELINE_TITLE, id="timeline-title"), id="timeline")
+        # The activity log is a RichLog (not one widget per line) so it can hold
+        # the *entire* session history efficiently and scroll through all of it;
+        # the title stays pinned above it.
+        timeline_log = RichLog(id="timeline-log", markup=False, highlight=False,
+                               wrap=True, auto_scroll=False)
+        timeline_log.can_focus = False
+        timeline = Vertical(
+            Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
         chat = VerticalScroll(id="chat")
         # The timeline and chat are display-only. Keep them out of the focus
         # chain so a click (or Tab) can never strand focus on a scroll pane —
@@ -1111,45 +1127,46 @@ class Cockpit(App):
         chat.mount(widget)
         chat.scroll_end(animate=False)
 
-    def _timeline(self, renderable, cls="role-event"):
-        tl = self.query_one("#timeline", VerticalScroll)
-        # tail-follow: only auto-scroll to the newest line when you're already at
-        # the bottom, so scrolling up to review history isn't yanked back down by
-        # the next event.
-        at_bottom = tl.scroll_offset.y >= tl.max_scroll_y - 1
-        tl.mount(Static(renderable, classes=(cls + " timeline-row").strip()))
-        if at_bottom:
-            tl.scroll_end(animate=False)
+    def _timeline(self, renderable, cls="role-event", follow=None):
+        """Append one line to the activity log. ``follow`` None = tail-follow
+        (auto-scroll only when already at the bottom, so scroll-up sticks);
+        False = bulk write (caller scrolls once at the end)."""
+        rl = self.query_one("#timeline-log", RichLog)
+        if follow is None:
+            follow = rl.scroll_offset.y >= rl.max_scroll_y - 1
+        rl.write(_timeline_gutter(renderable, cls), scroll_end=follow)
 
     def _rebuild_timeline(self):
-        tl = self.query_one("#timeline", VerticalScroll)
+        rl = self.query_one("#timeline-log", RichLog)
         snap = _scope_snapshot(self.session)
         title = _scope_activity_title(self.session, snap)
         try:
             self.query_one("#timeline-title", Static).update(title)
         except Exception:
-            tl.mount(Static(title, id="timeline-title"))
-        for child in list(tl.query(".timeline-row")):
-            child.remove()
+            pass
+        rl.clear()
         for level, line in O.timeline_lines(
                 self.session.path, self.session.st, self.session.scope,
                 sessions=self.session.scope_sessions, limit=2):
             self._timeline(_observer_timeline_line(level, line),
-                           "role-alert" if level in ("alarm", "warn") else "role-event")
+                           "role-alert" if level in ("alarm", "warn") else "role-event",
+                           follow=False)
         if self.session.scope == SC.SESSION:
-            self._timeline(_timeline_status_line(self.session.st))
-            for line in _recent_activity_lines(self.session.st, limit=_TIMELINE_EVENTS):
-                self._timeline(line)
+            self._timeline(_timeline_status_line(self.session.st), follow=False)
+            for line in _recent_activity_lines(self.session.st):   # the *entire* history
+                self._timeline(line, follow=False)
+            rl.scroll_end(animate=False)                           # land on the newest
             return
         if self.session.scope == SC.PROJECT:
             root = _project_cwd(self.session)
             branch, changed = _git_summary(root)
             self._timeline(Text(f"project · {branch} · {changed} git change"
                                 f"{'s' if changed != 1 else ''} · {_short_activity(root, 62)}",
-                                style=_PAL["muted"]))
-        self._timeline(_scope_timeline_summary(self.session, snap))
+                                style=_PAL["muted"]), follow=False)
+        self._timeline(_scope_timeline_summary(self.session, snap), follow=False)
         for line in _scoped_recent_activity_lines(snap.get("items", [])):
-            self._timeline(line)
+            self._timeline(line, follow=False)
+        rl.scroll_end(animate=False)
 
     def _rebuild_chat(self, clear=True):
         """Repaint the chat pane from the session's (possibly restored) history,

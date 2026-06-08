@@ -21,6 +21,14 @@ except Exception:                                   # pragma: no cover
 from tests.util import write, user, asst, tool, result
 
 
+def _timeline_text(app):
+    """Title + the RichLog activity lines, as one string for content assertions."""
+    from textual.widgets import RichLog, Static
+    title = str(app.query_one("#timeline-title", Static).content)
+    rl = app.query_one("#timeline-log", RichLog)
+    return title + "\n" + "\n".join(s.text for s in rl.lines)
+
+
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestComposerCJK(unittest.IsolatedAsyncioTestCase):
     """The composer must accept multilingual input verbatim and submit it."""
@@ -357,8 +365,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
-            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
-        joined = "\n".join(rows)
+            joined = _timeline_text(app)
         self.assertIn("session activity", joined)
         self.assertIn("agent", joined)
         self.assertIn("done", joined)
@@ -442,16 +449,18 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                                      "content": "ok"}]}}) + "\n")
         sess = ChatSession(p, alerts=False, persist=False)
         app = tui.Cockpit(sess, poll=999, alerts=False)
+        from textual.widgets import RichLog
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            tl = app.query_one("#timeline", VerticalScroll)
-            self.assertGreater(len(tl.query(".timeline-row")), 30)  # real history, not ~5
-            self.assertGreater(tl.max_scroll_y, 0)                  # scrollable
-            tl.scroll_to(y=1, animate=False)
+            rl = app.query_one("#timeline-log", RichLog)
+            # the ENTIRE session is held (60 events), not a capped handful
+            self.assertGreater(len(rl.lines), 55)
+            self.assertGreater(rl.max_scroll_y, 0)                  # scrollable
+            rl.scroll_to(y=1, animate=False)
             await pilot.pause()
             app._timeline(tui.Text("late event"))                  # tail-follow
             await pilot.pause()
-            self.assertLessEqual(tl.scroll_offset.y, 3)            # not yanked to bottom
+            self.assertLessEqual(rl.scroll_offset.y, 3)            # not yanked to bottom
 
     async def test_timeline_height_clamped_to_small_screen(self):
         import tempfile
@@ -481,8 +490,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 fh.write(json.dumps(asst("fresh auto activity", 0)) + "\n")
             app._tick_refresh()
             await pilot.pause()
-            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
-        self.assertIn("fresh auto activity", "\n".join(rows))
+            joined = _timeline_text(app)
+        self.assertIn("fresh auto activity", joined)
 
     async def test_in_flight_answer_stays_with_cockpit_after_evidence_switch(self):
         sess = self._session("sess-A")
@@ -566,8 +575,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.session.scope, "project")
             self.assertIn("watching project", str(app.query_one("#status", Static).content))
             self.assertIn("evidence project", str(app.query_one("#status-header", Static).content))
-            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
-            self.assertIn("project activity", "\n".join(rows))
+            joined = _timeline_text(app)
+            self.assertIn("project activity", joined)
 
     async def test_scope_command_selects_session_subset(self):
         from textual.widgets import Static
@@ -584,8 +593,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                           str(app.query_one("#status", Static).content))
             self.assertIn("evidence multi-session:1",
                           str(app.query_one("#status-header", Static).content))
-            rows = [str(w.content) for w in app.query_one("#timeline").query(Static)]
-            self.assertIn("multi-session activity", "\n".join(rows))
+            joined = _timeline_text(app)
+            self.assertIn("multi-session activity", joined)
 
     async def test_sessions_selection_sets_single_or_multi_evidence(self):
         sess = self._session("sess-A")
