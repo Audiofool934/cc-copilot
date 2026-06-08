@@ -175,10 +175,15 @@ class ChatSession:
                                   project_context=True)
 
     def answer_context(self, q: str, history=None, st=None):
+        hist = self.history if history is None else list(history)
+        memory_text = ""
+        if self.store.enabled:
+            memory_text, hist = self.store.compact_memory(
+                hist, max_raw_chars=EC.chat_history_budget_chars())
         return EC.build(self.path, self.st if st is None else st, self.scope,
                         sessions=self.scope_sessions, question=q,
-                        history=self.history if history is None else history,
-                        project_context=True)
+                        history=hist, project_context=True,
+                        memory_text=memory_text)
 
     def answer(self, q: str) -> str:
         self.refresh()

@@ -200,6 +200,23 @@ class TestRestore(_StateHome):
         self.assertGreater(s.last_context_stats.raw_tokens, 0)
         self.assertGreater(s.last_output_tokens, 0)
 
+    def test_large_history_is_compacted_into_prompt_memory(self):
+        seen = []
+        N.chat_brief = lambda brief, history, q, model=None, backend=None: \
+            seen.append(brief) or "answer [sess-A:L2]"
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False)
+        long = "x" * 5000
+        for i in range(9):
+            s.answer(f"should keep project read-only decision {i}? {long}")
+
+        s.answer("what did we decide?")
+
+        self.assertIn("## Durable Cockpit Memory", seen[-1])
+        self.assertIn("project read-only", seen[-1])
+        self.assertTrue(os.path.exists(s.store.memory_path))
+        self.assertEqual(len(s.store.load_history()), 20)
+
 
 class TestConfigToggle(unittest.TestCase):
     def setUp(self):

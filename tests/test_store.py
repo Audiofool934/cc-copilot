@@ -77,6 +77,35 @@ class TestRoundTrip(_Base):
         self.assertEqual(meta["title"], "q1")           # first question, kept
         self.assertEqual(meta["last_q"], "q3")
 
+    def test_compaction_writes_durable_memory_without_truncating_raw_log(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        st = _St(_Tr())
+        for i in range(8):
+            s.record_turn(f"should we ship option {i}?", f"answer {i} [sess:L{i + 1}]", st=st)
+
+        memory, recent = s.compact_memory(max_raw_chars=260)
+
+        self.assertIn("Deterministic compaction", memory)
+        self.assertIn("Open Questions", memory)
+        self.assertIn("[sess:L1]", memory)
+        self.assertLess(len(recent), len(s.load_history()))
+        self.assertEqual(len(s.load_history()), 16)
+        self.assertEqual(s.load_memory(), memory)
+        self.assertTrue(os.path.exists(s.memory_path))
+
+    def test_truncate_deletes_stale_memory(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        st = _St(_Tr())
+        for i in range(8):
+            s.record_turn(f"q{i}", f"a{i} [sess:L{i + 1}]", st=st)
+        s.compact_memory(max_raw_chars=120)
+        self.assertTrue(os.path.exists(s.memory_path))
+
+        self.assertTrue(s.truncate(2))
+
+        self.assertFalse(os.path.exists(s.memory_path))
+        self.assertEqual(len(s.load_history()), 4)
+
 
 class TestConcurrency(_Base):
     def test_flock_serializes_multikb_writers(self):

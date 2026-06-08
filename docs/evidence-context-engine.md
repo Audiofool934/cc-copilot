@@ -243,9 +243,12 @@ record.
 ### v0.7.2: Budget-Aware Chat Memory
 
 - Replace raw-only old cockpit replay with budgeted recent turns plus durable
-  structured memory.
-- Keep the complete raw Cockpit Session log on disk.
-- Add explicit compaction triggers and recovery tests.
+  structured memory. **Implemented with deterministic `memory.json`
+  compaction.**
+- Keep the complete raw Cockpit Session log on disk. **Implemented: compaction
+  never rewrites `turns.jsonl`; rewind/truncate deletes stale memory.**
+- Add explicit compaction triggers and recovery tests. **Implemented with store,
+  context, and ChatSession regression coverage.**
 
 ### v0.7.3: Project Context Budgeting
 

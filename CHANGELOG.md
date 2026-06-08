@@ -13,6 +13,9 @@
 - Added local context-usage estimates and a cockpit HUD segment showing input
   context, output estimate, raw/project/chat/memory/index split, and model
   window budget.
+- Added budget-triggered durable cockpit memory: older Q&A compacts into a
+  deterministic `memory.json` sidecar while the complete raw `turns.jsonl` log
+  remains intact.
 
 **Cockpit answer quality**
 - Reframed LLM-backed `ask`, `chat`, and narration prompts around cited

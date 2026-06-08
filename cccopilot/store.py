@@ -9,6 +9,7 @@ Layout (under the state home — ``$CC_COPILOT_STATE_DIR`` >
 
     conversations/<conv_id>/turns.jsonl   append-only, the source of truth
     conversations/<conv_id>/meta.json     derived cache (cheap listing), rebuildable
+    conversations/<conv_id>/memory.json   deterministic compacted Q&A memory
 
 Older stores used the observed Claude Code session uuid as ``conv_id``. v0.6
 keeps those readable and adds independent Cockpit session ids for new/forked
@@ -33,6 +34,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -193,6 +195,10 @@ class Store:
     def meta_path(self) -> str:
         return os.path.join(self.dir, "meta.json")
 
+    @property
+    def memory_path(self) -> str:
+        return os.path.join(self.dir, "memory.json")
+
     # ---- write (best-effort) ----
     def record_turn(self, q: str, a: str, st=None, backend=None, model=None) -> bool:
         if not self.enabled:
@@ -346,6 +352,41 @@ class Store:
             return []
         return out
 
+    def load_memory(self) -> str:
+        """Durable structured memory for older cockpit turns, if present."""
+        if not self.enabled:
+            return ""
+        d = _read_json(self.memory_path)
+        if not isinstance(d, dict):
+            return ""
+        return d.get("text", "") if isinstance(d.get("text"), str) else ""
+
+    def compact_memory(self, history=None, max_raw_chars: int = 36000) -> tuple:
+        """Return ``(memory_text, recent_history)`` for a budgeted prompt.
+
+        The raw ``turns.jsonl`` log remains complete. This writes only a
+        rebuildable ``memory.json`` sidecar derived from older turns.
+        """
+        if not self.enabled:
+            return "", list(history or [])
+        turns = _history_to_turns(history) if history is not None else self._load_turns()
+        if not turns:
+            self._delete_memory()
+            return "", []
+        recent = _recent_turns_by_budget(turns, max_raw_chars)
+        older = turns[:max(0, len(turns) - len(recent))]
+        recent_history = _turns_to_history(recent)
+        if not older:
+            self._delete_memory()
+            return "", recent_history
+        text = _memory_text(older, kept_recent=len(recent))
+        try:
+            self._write_memory(text, len(older), len(recent))
+        except Exception as e:
+            _warn_once(f"cc-copilot: memory compaction failed ({e}); continuing with raw history")
+            return "", list(history or _turns_to_history(turns))
+        return text, recent_history
+
     def delete(self) -> bool:
         """Remove this conversation's saved files (best-effort). conv_id is
         sanitized, so this can only ever touch conversations/<conv_id>/."""
@@ -390,6 +431,7 @@ class Store:
                     last = kept[-1][1] if kept else {}
                     self._write_meta(len(kept), last.get("q", ""), last.get("a", ""),
                                      last.get("backend"), last.get("model"))
+                    self._delete_memory()
             return True
         except (OSError, ValueError):
             return False
@@ -411,6 +453,46 @@ class Store:
         self.title = h.title or self.title
         self.scope = h.scope or self.scope
         self.scope_sessions = list(h.scope_sessions or [])
+
+    def _load_turns(self) -> list:
+        if not self.enabled:
+            return []
+        turns = []
+        try:
+            with open(self.turns_path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    obj = _parse(line)
+                    if obj is not None and obj.get("kind") == "turn":
+                        turns.append(obj)
+        except OSError:
+            return []
+        return turns
+
+    def _write_memory(self, text: str, source_turns: int, recent_turns: int) -> None:
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+        _chmod(self.dir, 0o700)
+        payload = {
+            "schema": 1,
+            "updated": time.time(),
+            "source_turns": int(source_turns),
+            "recent_turns": int(recent_turns),
+            "text": text,
+        }
+        tmp = self.memory_path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as mf:
+            json.dump(payload, mf, ensure_ascii=False)
+            mf.flush()
+            os.fsync(mf.fileno())
+        os.replace(tmp, self.memory_path)
+        _fsync_dir(self.dir)
+
+    def _delete_memory(self) -> None:
+        try:
+            os.unlink(self.memory_path)
+            _fsync_dir(self.dir)
+        except OSError:
+            pass
 
 
 # ── module-level helpers ────────────────────────────────────────────────────
@@ -493,6 +575,156 @@ def _title_from(q: str) -> str:
     line = (q or "").strip().splitlines()[0] if (q or "").strip() else ""
     line = line[:60].strip()
     return line or "(untitled)"
+
+
+def _history_to_turns(history) -> list:
+    turns, pending = [], None
+    for role, text in list(history or []):
+        if role == "user":
+            pending = {"q": str(text or ""), "a": ""}
+        elif role == "assistant":
+            if pending is None:
+                pending = {"q": "", "a": str(text or "")}
+            else:
+                pending["a"] = str(text or "")
+            turns.append(pending)
+            pending = None
+    if pending is not None:
+        turns.append(pending)
+    return turns
+
+
+def _turns_to_history(turns: list) -> list:
+    out = []
+    for t in turns:
+        out.append(("user", t.get("q", "")))
+        out.append(("assistant", t.get("a", "")))
+    return out
+
+
+def _turn_cost(t: dict) -> int:
+    return len(t.get("q", "")) + len(t.get("a", "")) + 80
+
+
+def _recent_turns_by_budget(turns: list, max_raw_chars: int) -> list:
+    if not turns:
+        return []
+    max_raw_chars = max(1, int(max_raw_chars or 0))
+    recent, used = [], 0
+    for t in reversed(turns):
+        cost = _turn_cost(t)
+        if recent and used + cost > max_raw_chars:
+            break
+        recent.append(t)
+        used += cost
+    recent.reverse()
+    return recent
+
+
+_CITE_RE = re.compile(r"\[(?:[A-Za-z0-9_.-]+:)?L\d+[^\]]*\]")
+
+
+def _memory_text(turns: list, kept_recent: int = 0) -> str:
+    rows = [
+        f"- Deterministic compaction of {len(turns)} older cockpit turn(s); "
+        "the complete raw Q&A log remains in `turns.jsonl`.",
+        f"- Recent raw turn(s) kept outside memory: {kept_recent}.",
+        "",
+    ]
+    sections = [
+        ("Decisions Made", _memory_decisions(turns)),
+        ("User Preferences", _memory_preferences(turns)),
+        ("Known Project Facts Discussed", _memory_facts(turns)),
+        ("Open Questions", _memory_questions(turns)),
+        ("Discarded Assumptions", _memory_discarded(turns)),
+        ("Important Citations", _memory_citations(turns)),
+    ]
+    for title, lines in sections:
+        rows.append(f"### {title}")
+        rows.extend(lines or ["- (none captured deterministically)"])
+        rows.append("")
+    return "\n".join(rows).rstrip()
+
+
+def _memory_decisions(turns: list) -> list:
+    keys = ("ok", "okay", "yes", "ship", "commit", "merge", "decide", "decision",
+            "let's", "lets", "use ", "scope", "enable", "disable", "deprecate")
+    return _memory_matches(turns, keys, prefer="q", limit=8)
+
+
+def _memory_preferences(turns: list) -> list:
+    keys = ("i think", "i want", "i believe", "prefer", "should", "need",
+            "better", "no need", "default", "always")
+    return _memory_matches(turns, keys, prefer="q", limit=8)
+
+
+def _memory_facts(turns: list) -> list:
+    out = []
+    for i, t in enumerate(turns, 1):
+        a = t.get("a", "")
+        cites = _CITE_RE.findall(a)
+        if cites:
+            out.append(f"- Turn {i}: {_clip(_first_sentence(a), 220)} {' '.join(cites[:4])}")
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _memory_questions(turns: list) -> list:
+    out = []
+    for i, t in enumerate(turns, 1):
+        q = t.get("q", "")
+        if "?" in q or any(k in q.lower() for k in ("what", "why", "how", "whether", "吗")):
+            out.append(f"- Turn {i}: {_clip(q, 220)}")
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _memory_discarded(turns: list) -> list:
+    keys = ("not ", "don't", "do not", "instead", "rather", "remove", "deprecate",
+            "no need", "shouldn't", "avoid")
+    return _memory_matches(turns, keys, prefer="qa", limit=8)
+
+
+def _memory_citations(turns: list) -> list:
+    seen, out = set(), []
+    for i, t in enumerate(turns, 1):
+        cites = _CITE_RE.findall((t.get("q", "") + "\n" + t.get("a", "")))
+        unique = []
+        for cite in cites:
+            if cite not in seen:
+                seen.add(cite)
+                unique.append(cite)
+        if unique:
+            out.append(f"- Turn {i}: {' '.join(unique[:8])}")
+        if len(out) >= 10:
+            break
+    return out
+
+
+def _memory_matches(turns: list, keys: tuple, prefer: str, limit: int) -> list:
+    out = []
+    for i, t in enumerate(turns, 1):
+        q, a = t.get("q", ""), t.get("a", "")
+        hay = (q + "\n" + a).lower() if prefer == "qa" else q.lower()
+        if any(k in hay for k in keys):
+            text = q if prefer in ("q", "qa") and q.strip() else a
+            out.append(f"- Turn {i}: {_clip(text, 220)}")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _first_sentence(text: str) -> str:
+    text = " ".join((text or "").split())
+    parts = re.split(r"(?<=[.!?。！？])\s+", text, maxsplit=1)
+    return parts[0] if parts else text
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _rebuild_meta_dict(conv_id: str):

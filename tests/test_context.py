@@ -73,6 +73,18 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("window 128k", answering)
         self.assertIn("raw 74%", answering)
 
+    def test_memory_text_is_separate_budgeted_context_tier(self):
+        p = write([user("task", 60), asst("done", 5)])
+        st = S.build(T.parse(p))
+
+        ctx = EC.build(p, st, "session", question="continue",
+                       history=[("user", "recent q"), ("assistant", "recent a")],
+                       memory_text="- Decisions made: keep project read-only.")
+
+        self.assertIn("## Durable Cockpit Memory", ctx.text)
+        self.assertIn("keep project read-only", ctx.text)
+        self.assertGreater(ctx.stats.memory_tokens, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

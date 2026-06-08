@@ -113,9 +113,15 @@ def _tok(n: int) -> str:
     return f"{round(n / 1000)}k"
 
 
+def chat_history_budget_chars(max_tokens: int = None) -> int:
+    max_tokens = _context_token_budget(max_tokens)
+    max_chars = max_tokens * 4
+    return max(4000, min(max_chars // 5, 36000))
+
+
 def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
           question: str = "", history=None, project_context: bool = True,
-          max_tokens: int = None) -> EvidenceContext:
+          max_tokens: int = None, memory_text: str = "") -> EvidenceContext:
     """Assemble a question-aware evidence context pack.
 
     Raw transcript records are primary. The rendered deterministic recap is
@@ -133,7 +139,8 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
     raw_text = _render_raw_records(selected)
     project_text = _render_project_context(path, st, sc, project_context)
     index_text = _render_summary_index(path, st, sc, selectors)
-    chat_text = _render_chat_history(history, max_chars=max(4000, min(max_chars // 5, 36000)))
+    memory = _render_memory(memory_text)
+    chat_text = _render_chat_history(history, max_chars=chat_history_budget_chars(max_tokens))
     status_text = _render_status(path, st, sc, selectors, sources, terms, selected)
 
     stats = ContextStats(
@@ -141,6 +148,7 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
         raw_tokens=estimate_tokens(raw_text),
         project_tokens=estimate_tokens(project_text) if project_text else 0,
         chat_tokens=estimate_tokens(chat_text) if chat_text else 0,
+        memory_tokens=estimate_tokens(memory) if memory else 0,
         index_tokens=estimate_tokens(index_text) if index_text else 0,
         raw_records=len(selected),
         raw_candidates=sum(len(src.records) for src in sources),
@@ -148,6 +156,7 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
 
     sections = [
         ("status", status_text),
+        ("memory", memory),
         ("chat", chat_text),
         ("raw", raw_text),
         ("project", project_text),
@@ -436,6 +445,13 @@ def _render_chat_history(history: list, max_chars: int) -> str:
     rows.append("")
     rows.extend(chosen)
     return "\n".join(rows).rstrip()
+
+
+def _render_memory(memory_text: str) -> str:
+    text = (memory_text or "").strip()
+    if not text:
+        return ""
+    return "## Durable Cockpit Memory\n" + text
 
 
 def _turn_block(n: int, turn: list) -> str:
