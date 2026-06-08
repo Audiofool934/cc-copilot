@@ -402,8 +402,12 @@ def cmd_state(args) -> int:
 def cmd_watch(args) -> int:
     path = _resolve_or_die(args)
     interval = max(2, args.interval)
+    notify = getattr(args, "notify", False)
     last_size = -1
-    sys.stderr.write(f"# watching {path} (every {interval}s, Ctrl-C to stop)\n")
+    prev = None
+    base = os.path.basename(path)[:8]
+    mode = " · desktop alerts on" if notify else ""
+    sys.stderr.write(f"# watching {path} (every {interval}s{mode}, Ctrl-C to stop)\n")
     try:
         while True:
             try:
@@ -414,12 +418,87 @@ def cmd_watch(args) -> int:
                 last_size = size
                 tr = SRC.parse(path)
                 st = S.build(tr)
+                if notify and prev is not None:
+                    from .notify import alert_for_diff, desktop_notify
+                    msg = alert_for_diff(S.diff(prev, st))
+                    if msg:
+                        desktop_notify(f"cc-copilot · {base}", msg)
+                prev = st
                 os.system("clear" if os.name != "nt" else "cls")
                 print(B.render(st))
-                print(f"\n_(watching · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
+                print(f"\n_(watching{mode} · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
             time.sleep(interval)
     except KeyboardInterrupt:
         sys.stderr.write("\n# stopped\n")
+    return 0
+
+
+def _now_iso() -> str:
+    import datetime
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def cmd_since(args) -> int:
+    from . import lastlook as LL, since as SI
+    path = _resolve_or_die(args)
+    if getattr(args, "path", False):
+        sys.stderr.write(f"# transcript: {path}\n")
+    tr = SRC.parse(path)
+    st = S.build(tr)
+    key = LL.key_for(getattr(st.tr, "session_id", "") or "", path)
+    cur_line = tr.records[-1].line if tr.records else 0
+    cur_ts = tr.records[-1].raw_ts if tr.records else ""
+    when = (getattr(args, "when", None) or "last-look").strip().lower()
+
+    if when in ("last-look", "lastlook", "last"):
+        mark = LL.get(key)
+        if mark is None:
+            LL.mark(key, cur_line, cur_ts, _now_iso())
+            print(f"No last-look mark for `{key[:8]}` yet — recorded your current "
+                  f"position (L{cur_line}).\nRe-run `cc-copilot since` after the agent "
+                  f"works to see what changed. (Or `since 30m` for a time window.)")
+            return 0
+        view = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look")
+    else:
+        secs = SI.parse_duration(when)
+        if secs is None:
+            sys.stderr.write(f"cc-copilot: unknown time {when!r}; use 'last-look' or a "
+                             f"duration like 30m / 2h / 1d\n")
+            return 2
+        view = SI.build(tr, st, seconds=secs, label=when)
+
+    print(view.text)
+    # advance the marker so the next `since` is incremental (unless --peek)
+    if when in ("last-look", "lastlook", "last") and not getattr(args, "peek", False):
+        LL.mark(key, cur_line, cur_ts, _now_iso())
+    return 0
+
+
+def cmd_handoff(args) -> int:
+    from . import handoff as HO, lastlook as LL, since as SI
+    path = _resolve_or_die(args)
+    if getattr(args, "path", False):
+        sys.stderr.write(f"# transcript: {path}\n")
+    tr = SRC.parse(path)
+    st = S.build(tr)
+    agent = SRC.source_for_path(path).name
+    sv = None
+    mark = LL.get(LL.key_for(getattr(st.tr, "session_id", "") or "", path))
+    if mark is not None:
+        sv = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look")
+    md = HO.render(st, agent=agent, generated_at=time.strftime("%Y-%m-%d %H:%M"),
+                   since_view=sv)
+    out = getattr(args, "out", None)
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                f.write(md + "\n")
+        except OSError as e:
+            sys.stderr.write(f"cc-copilot: could not write {out}: {e}\n")
+            return 1
+        print(f"wrote handoff → {out}  ({len(md.splitlines())} lines)")
+    else:
+        print(md)
     return 0
 
 
@@ -550,7 +629,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("watch", help="re-render the brief as the transcript grows")
     session_args(sp)
     sp.add_argument("--interval", type=int, default=5, help="poll seconds (default 5)")
+    sp.add_argument("--notify", action="store_true",
+                    help="desktop/terminal alert when the agent needs you "
+                         "(transition into intervene / stalled / new failure)")
     sp.set_defaults(func=cmd_watch)
+
+    sp = sub.add_parser("since",
+                        help="what changed since you last looked (or in the last 30m/2h/…)")
+    session_args(sp)
+    sp.add_argument("when", nargs="?", default="last-look",
+                    help="'last-look' (default) or a duration like 30m / 2h / 1d")
+    sp.add_argument("--peek", action="store_true",
+                    help="don't advance the last-look marker after showing")
+    sp.set_defaults(func=cmd_since)
+
+    sp = sub.add_parser("handoff",
+                        help="write a shareable Markdown handoff (brief + what changed)")
+    session_args(sp)
+    sp.add_argument("--out", metavar="FILE", help="write to this file (default: stdout)")
+    sp.set_defaults(func=cmd_handoff)
 
     return p
 

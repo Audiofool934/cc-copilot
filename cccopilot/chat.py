@@ -19,14 +19,22 @@ import threading
 
 from . import (sources as SRC, state as S, brief as B, assess as A,
                narrate as N, locate as LOC, store as ST, scope as SC,
-               observe as O, context as EC)
+               observe as O, context as EC, lastlook as LL, since as SI,
+               handoff as HO)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
 
+
+def _now_iso() -> str:
+    import datetime
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
 _HELP = """commands (all but questions are LLM-free):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
+  /since [when]     what changed since you last looked (or 30m / 2h / 1d)
+  /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
   /refresh          re-read evidence now
@@ -214,6 +222,10 @@ class ChatSession:
             return self.evidence().text
         if c == "/observe":
             return O.render(self.path, self.st, self.scope, sessions=self.scope_sessions)
+        if c == "/since" or c.startswith("/since "):
+            return self._since(cmd.strip()[6:].strip())
+        if c == "/handoff" or c.startswith("/handoff "):
+            return self._handoff(cmd.strip()[8:].strip())
         if c == "/check":
             return B.render_check(self.st) if self.scope == SC.SESSION else self.evidence().text
         if c == "/refresh":
@@ -312,6 +324,71 @@ class ChatSession:
         refs = SC.resolve_session_refs(self.path, SC.parse_selectors(selectors))
         self.scope_sessions = [r.session_id for r in refs]
         self._persist_state()
+
+    # ---- re-entry: last-look, /since, /handoff ---------------------------
+    def _lastlook_key(self) -> str:
+        sid = getattr(getattr(self, "st", None), "tr", None)
+        sid = getattr(sid, "session_id", "") if sid is not None else ""
+        return LL.key_for(sid, self.path)
+
+    def _cur_line(self):
+        tr = getattr(self.st, "tr", None)
+        recs = getattr(tr, "records", []) if tr is not None else []
+        return (recs[-1].line if recs else 0,
+                recs[-1].raw_ts if recs else "")
+
+    def mark_lastlook(self) -> None:
+        """Record that the human has now seen everything up to the live tail."""
+        line, ts = self._cur_line()
+        LL.mark(self._lastlook_key(), line, ts, _now_iso())
+
+    def since_summary(self):
+        """A SinceView vs the stored last-look marker, or None if no marker/state."""
+        if self.st is None:
+            return None
+        mark = LL.get(self._lastlook_key())
+        if mark is None:
+            return None
+        return SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
+                        label="last look")
+
+    def _since(self, arg: str):
+        if self.st is None:
+            return "(no live session — transcript gone; nothing to diff)"
+        when = (arg or "last-look").strip().lower()
+        line, ts = self._cur_line()
+        key = self._lastlook_key()
+        if when in ("", "last-look", "lastlook", "last"):
+            mark = LL.get(key)
+            if mark is None:
+                LL.mark(key, line, ts, _now_iso())
+                return (f"No last-look mark yet — recorded your current position (L{line}). "
+                        f"Run /since again after the agent works, or `/since 30m` for a window.")
+            view = SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
+                            label="last look")
+            LL.mark(key, line, ts, _now_iso())     # consume: next /since is incremental
+            return view.text
+        secs = SI.parse_duration(when)
+        if secs is None:
+            return f"unknown time {when!r} — use 'last-look' or a duration like 30m / 2h / 1d"
+        return SI.build(self.st.tr, self.st, seconds=secs, label=when).text
+
+    def _handoff(self, arg: str):
+        if self.st is None:
+            return "(no live session — transcript gone; nothing to hand off)"
+        agent = SRC.source_for_path(self.path).name
+        import time as _t
+        md = HO.render(self.st, agent=agent, generated_at=_t.strftime("%Y-%m-%d %H:%M"),
+                       since_view=self.since_summary())
+        out = (arg or "").strip()
+        if out:
+            try:
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(md + "\n")
+                return f"wrote handoff → {out}  ({len(md.splitlines())} lines)"
+            except OSError as e:
+                return f"could not write {out}: {e}"
+        return md
 
     # ---- session switching (select among multiple sessions) --------------
     def _siblings(self):

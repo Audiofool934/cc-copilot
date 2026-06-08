@@ -1,0 +1,91 @@
+"""The 'what changed since you last looked' renderer."""
+
+import unittest
+
+from cccopilot import state as S, transcript as T, since as SI
+from tests.util import asst, result, tool, user, write
+
+
+def _tr_st(events):
+    p = write(events)
+    tr = T.parse(p)
+    return tr, S.build(tr)
+
+
+class TestDuration(unittest.TestCase):
+    def test_parse_duration(self):
+        self.assertEqual(SI.parse_duration("30m"), 1800)
+        self.assertEqual(SI.parse_duration("2h"), 7200)
+        self.assertEqual(SI.parse_duration("1d"), 86400)
+        self.assertEqual(SI.parse_duration("90s"), 90)
+        self.assertEqual(SI.parse_duration(" 45M "), 2700)
+        self.assertIsNone(SI.parse_duration("soon"))
+        self.assertIsNone(SI.parse_duration(""))
+
+
+class TestSinceByLine(unittest.TestCase):
+    def test_nothing_new_when_cutoff_at_tail(self):
+        tr, st = _tr_st([user("go", 120), asst("done", 5)])
+        v = SI.build(tr, st, since_line=tr.records[-1].line)
+        self.assertFalse(v.has_changes)
+        self.assertIn("Nothing new", v.text)
+
+    def test_new_command_after_cutoff_only(self):
+        tr, st = _tr_st([
+            user("go", 300),
+            tool("Bash", {"command": "old-command"}, "t1", 200),
+            result("t1", "ok", ago=199),
+            tool("Bash", {"command": "new-command"}, "t2", 20),
+            result("t2", "ok", ago=19),
+        ])
+        # cutoff just after the first command's result (line 3)
+        v = SI.build(tr, st, since_line=3)
+        self.assertTrue(v.has_changes)
+        self.assertIn("new-command", v.text)
+        self.assertNotIn("old-command", v.text)
+
+    def test_new_failures_surface(self):
+        tr, st = _tr_st([
+            user("go", 300),
+            tool("Bash", {"command": "a"}, "t1", 200),
+            result("t1", "ok", ago=199),
+            tool("Bash", {"command": "boom"}, "t2", 20),
+            result("t2", "segfault", is_error=True, ago=19),
+        ])
+        v = SI.build(tr, st, since_line=3)
+        self.assertIn("New failures", v.text)
+        self.assertIn("[L5", v.text)        # the failing result line is cited
+
+    def test_new_human_asks(self):
+        tr, st = _tr_st([
+            user("first ask", 300), asst("ok", 250),
+            user("second ask", 20),
+        ])
+        v = SI.build(tr, st, since_line=2)
+        self.assertIn("second ask", v.text)
+        self.assertNotIn("first ask", v.text)
+
+    def test_changed_files_surface(self):
+        tr, st = _tr_st([
+            user("edit it", 200),
+            tool("Edit", {"file_path": "a.py"}, "t1", 20),
+            result("t1", "ok", ago=19),
+        ])
+        v = SI.build(tr, st, since_line=1)
+        self.assertIn("Files changed", v.text)
+        self.assertIn("a.py", v.text)
+
+
+class TestSinceByTime(unittest.TestCase):
+    def test_time_window_excludes_old(self):
+        tr, st = _tr_st([
+            user("old ask", 7200), asst("old reply", 7100),   # ~2h ago
+            user("recent ask", 600), asst("recent reply", 300),  # <1h ago
+        ])
+        v = SI.build(tr, st, seconds=3600, label="1h")
+        self.assertIn("recent ask", v.text)
+        self.assertNotIn("old ask", v.text)
+
+
+if __name__ == "__main__":
+    unittest.main()

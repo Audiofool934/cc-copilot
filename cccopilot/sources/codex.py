@@ -413,18 +413,19 @@ class CodexSource(AgentSource):
         call_id = str(payload.get("call_id") or "")
         out = payload.get("output")
         text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
-        is_err = _exit_failed(text)
+        is_err = _exit_failed(text)            # decide failure from the full wrapper…
+        body = _short(_clean_output(text))     # …then show just the real output body
         arity = patch_arity.get(call_id)
         if arity:  # an apply_patch that expanded into per-file calls
             for idx in range(arity):
                 tr.records.append(Record(
                     line, "tool_result", ts, raw_ts,
-                    tool_id=f"{call_id}#{idx}", is_error=is_err, text=_short(text),
+                    tool_id=f"{call_id}#{idx}", is_error=is_err, text=body,
                 ))
             return
         tr.records.append(Record(
             line, "tool_result", ts, raw_ts,
-            tool_id=call_id, is_error=is_err, text=_short(text),
+            tool_id=call_id, is_error=is_err, text=body,
         ))
 
 
@@ -464,6 +465,31 @@ def _exit_failed(output: str) -> bool:
         return int(m.group(1)) != 0
     except ValueError:
         return False
+
+
+def _clean_output(text: str) -> str:
+    """Strip Codex's tool-output wrapper, keeping just the real output body.
+
+    Codex wraps shell/patch output with a header (``Chunk ID`` / ``Wall time`` /
+    ``Process exited with code N`` / ``Output:``). The status is parsed from the
+    full wrapper by :func:`_exit_failed`; for *display* (briefs, since, context)
+    the body after ``Output:`` is what matters. Falls back to the original text
+    when there's no recognizable wrapper.
+    """
+    if not text:
+        return text
+    marker = "\nOutput:\n"
+    idx = text.find(marker)
+    if idx != -1:
+        body = text[idx + len(marker):]
+    elif text.startswith("Output:\n"):
+        body = text[len("Output:\n"):]
+    else:
+        return text
+    head, _, rest = body.partition("\n")
+    if head.startswith("Total output lines:"):   # a metadata line Codex sometimes adds
+        body = rest
+    return body.strip() or text
 
 
 _PATCH_OP = re.compile(r"^\*\*\*\s+(Add|Update|Delete)\s+File:\s*(.+?)\s*$")
