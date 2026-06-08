@@ -433,7 +433,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
     async def test_timeline_seeds_history_and_tail_follows(self):
         import json
         import tempfile
-        from textual.containers import VerticalScroll
         from cccopilot.chat import ChatSession
         d = tempfile.mkdtemp(prefix="ccbig-")
         p = os.path.join(d, "big.jsonl")
@@ -461,6 +460,60 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._timeline(tui.Text("late event"))                  # tail-follow
             await pilot.pause()
             self.assertLessEqual(rl.scroll_offset.y, 3)            # not yanked to bottom
+
+    async def test_rebuild_keeps_scrolled_up_reader_and_follows_bottom(self):
+        """A full rebuild (an alerts=False growth tick, or any non-SESSION scope)
+        must not yank a scrolled-up reader to the bottom — the append-path
+        tail-follow guard never covered _rebuild_timeline. Covers the off-by-one
+        boundary: a reader parked exactly ONE line above the bottom (the case a
+        `>= max - 1` guard wrongly treats as 'at bottom'). A reader actually at
+        the bottom still follows the newest line."""
+        import json
+        import tempfile
+        from cccopilot.chat import ChatSession
+        from textual.widgets import RichLog
+        d = tempfile.mkdtemp(prefix="ccscroll-")
+        p = os.path.join(d, "s.jsonl")
+
+        def append_event(i):
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                        "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                "message": {"role": "user", "content": "go"}}) + "\n")
+        for i in range(60):
+            append_event(i)
+        sess = ChatSession(p, alerts=False, persist=False)
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            rl = app.query_one("#timeline-log", RichLog)
+            self.assertGreater(rl.max_scroll_y, 3)          # comfortably scrollable
+            # (a) a deep scroll-up survives a rebuild
+            rl.scroll_to(y=2, animate=False)
+            await pilot.pause()
+            append_event(100)                               # new activity lands…
+            app._tick_refresh()                             # …alerts=False → FULL rebuild
+            await pilot.pause()
+            self.assertLessEqual(rl.scroll_offset.y, 3)     # stayed up top, NOT yanked
+            # (b) off-by-one boundary: parked exactly ONE line above the bottom
+            parked = rl.max_scroll_y - 1
+            rl.scroll_to(y=parked, animate=False)
+            await pilot.pause()
+            append_event(101)                               # bottom moves down by one…
+            app._tick_refresh()                             # …a `>= max-1` guard yanks here
+            await pilot.pause()
+            self.assertLess(rl.scroll_offset.y, rl.max_scroll_y)   # held above the bottom
+            # (c) a reader at the true bottom still follows the newest line
+            rl.scroll_end(animate=False)
+            await pilot.pause()
+            append_event(102)
+            app._tick_refresh()
+            await pilot.pause()
+            self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)   # followed exactly to bottom
 
     async def test_timeline_height_clamped_to_small_screen(self):
         import tempfile
