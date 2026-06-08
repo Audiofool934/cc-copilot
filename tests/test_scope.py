@@ -14,7 +14,21 @@ def _write_at(path, events):
     return path
 
 
-class TestScopeEvidence(unittest.TestCase):
+class _NoAmbientSession(unittest.TestCase):
+    """Discovery includes the human's current session (CLAUDE_CODE_SESSION_ID).
+    Running the suite from inside a live Claude session would inject that real
+    session into temp-project fixtures, so neutralize it for hermetic counts."""
+    def setUp(self):
+        self._sess_env = {k: os.environ.pop(k, None)
+                          for k in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")}
+
+    def tearDown(self):
+        for k, v in self._sess_env.items():
+            if v is not None:
+                os.environ[k] = v
+
+
+class TestScopeEvidence(_NoAmbientSession):
     def _project_sessions(self):
         cwd = tempfile.mkdtemp(prefix="ccscope-proj-")
         d = tempfile.mkdtemp(prefix="ccscope-sessions-")

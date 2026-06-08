@@ -150,6 +150,7 @@ _HELP_TEXT = (
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /sessions               choose evidence sessions\n"
+    "  /here                   observe your own current (live) session\n"
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
@@ -167,6 +168,7 @@ _SLASH_CMDS = [
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
     ("/sessions", "choose one or more evidence sessions", False),
+    ("/here", "observe your own current (live) session", False),
     ("/resume", "browse & resume cockpit sessions", False),
     ("/new", "start a new independent cockpit session", False),
     ("/theme", "switch cockpit palette", False),
@@ -185,8 +187,9 @@ _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 def _session_picker_label(ref, current_path: str = "") -> str:
     title = ref.title or "(untitled)"
     cur = " (current)" if current_path and os.path.abspath(ref.path) == os.path.abspath(current_path) else ""
+    live = " ⟵ your live session" if getattr(ref, "live", False) else ""
     agent = f"{getattr(ref, 'agent', 'claude'):<6}"
-    return f"{agent} · {title[:40]:<40} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}"
+    return f"{agent} · {title[:40]:<40} · {ref.session_id[:8]} · {ref.size // 1024} KB{cur}{live}"
 
 
 def _session_selection_ids(session, refs: list) -> list:
@@ -1345,6 +1348,15 @@ class Cockpit(App):
             self.action_diff(); return
         if low in ("/sessions", "/session"):
             self.action_sessions(); return
+        if low == "/here":
+            if not self.session.switch_to_here():
+                self.notify("no current session detected (CLAUDE_CODE_SESSION_ID unset)",
+                            severity="warning")
+                return
+            self._reset_watch_baseline()
+            self._refresh_scope_view()
+            self.notify("now observing your live session", severity="information")
+            return
         if low == "/resume" or low.startswith("/resume") or low == "/history" or low.startswith("/history"):
             self.action_history(); return
         if low == "/new" or low == "/new-cockpit":

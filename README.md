@@ -20,7 +20,8 @@ cc-copilot cockpit
 Inside Cockpit:
 
 ```text
-/sessions   choose one or more agent sessions
+/sessions   choose one or more agent sessions (incl. your own live session)
+/here       observe the session you're running inside of
 /observe    attention queue and next human decision
 /since      what changed since you last looked (or 30m / 2h)
 /handoff    shareable Markdown handoff (brief + what changed)
@@ -150,7 +151,10 @@ cwd and tagged with their agent. Restrict the set with `--agent claude`,
 
 By default, commands report on the most recent session other than the current
 one, so running CC-Copilot from inside a live agent session watches the agent
-you want to supervise. See [docs/cross-model-adapters.md](docs/cross-model-adapters.md).
+you want to supervise. To watch your **own** current session instead, use
+`--here` (e.g. `cc-copilot cockpit --here`) or `/here` inside the cockpit — it is
+also always listed in `/sessions` as "your live session", even across projects.
+See [docs/cross-model-adapters.md](docs/cross-model-adapters.md).
 
 ## Cockpit
 

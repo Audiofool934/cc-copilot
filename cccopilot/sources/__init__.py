@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Tuple
 
-from ..locate import SessionRef
+from ..locate import SessionRef, current_session_id
 from ..transcript import Transcript
 from .base import AgentSource, all_sources, register
 from .claude import ClaudeSource
@@ -153,7 +153,7 @@ def resolve(cwd: str, session: Optional[str] = None, include_current: bool = Fal
     sessions = list_sessions(cwd, agents=agents)
     if not sessions:
         return None
-    self_id = "" if include_current else os.environ.get("CLAUDE_SESSION_ID", "")
+    self_id = "" if include_current else current_session_id()
     for ref in sessions:
         if self_id and ref.session_id == self_id:
             continue
