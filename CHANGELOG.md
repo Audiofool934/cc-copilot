@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.4 — 2026-06-08
+
+**Your custom session name wins over the auto-title.** A session you renamed
+(e.g. "dev") was showing its Claude-generated title ("Design CC Copilot…")
+instead. cc-copilot treated `ai-title` and `custom-title` with equal precedence
+(latest-by-position wins), and Claude Code keeps re-emitting the `ai-title` as
+the conversation grows, so the auto-title landed after your rename and overrode
+it. Now a human-set name (`custom-title`, or the session `name`) always beats the
+auto-generated `ai-title`, in both `/sessions` and brief headers.
+
 ## 0.9.3 — 2026-06-08
 
 **Readable selection highlight.** The cursor row in the `/sessions` and other

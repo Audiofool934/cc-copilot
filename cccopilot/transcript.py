@@ -82,6 +82,7 @@ class Transcript:
     version: str = ""
     permission_mode: str = ""
     title: str = ""
+    title_is_custom: bool = False   # a name the human set beats the auto ai-title
     records: list = field(default_factory=list)
     raw_lines: int = 0
     parse_errors: int = 0
@@ -213,10 +214,15 @@ def _ingest(tr: Transcript, line: int, obj: dict) -> None:
         tr.version = obj["version"]
     if typ in ("permission-mode", "mode") and obj.get("permissionMode"):
         tr.permission_mode = obj["permissionMode"]
-    if typ in ("ai-title", "custom-title"):
-        title = obj.get("aiTitle") or obj.get("customTitle")
-        if isinstance(title, str) and title.strip():
-            tr.title = title.strip()
+    if typ == "custom-title":
+        t = obj.get("customTitle")
+        if isinstance(t, str) and t.strip():
+            tr.title = t.strip()            # the human's own name
+            tr.title_is_custom = True
+    elif typ == "ai-title":
+        t = obj.get("aiTitle")
+        if isinstance(t, str) and t.strip() and not tr.title_is_custom:
+            tr.title = t.strip()            # auto-title only if no custom name set
 
     # Harness-injected, NOT the human's/agent's own words. A returning person
     # must never see these as "your asks" or "agent's last words":
