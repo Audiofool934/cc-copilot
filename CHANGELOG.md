@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.10.3 — 2026-06-08
+
+**The activity timeline now holds the *entire* session — scroll through all of
+it, no cap.** The previous limit (~150 events) existed because the panel mounted
+one widget per line, which is O(N) (3000 lines ≈ 5 s). The timeline is now a
+`RichLog`, which keeps all lines but only renders the visible window — so the
+whole history is scrollable and a 1500-event session loads in ~0.3 s. Tail-follow
+(scroll-up sticks), the colored gutter bars, and the pinned "session activity"
+title are all preserved.
+
 ## 0.10.2 — 2026-06-08
 
 **Scrollable activity history.** The cockpit's activity timeline seeded only the
