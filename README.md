@@ -131,15 +131,20 @@ cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
 cc-copilot observe --scope project
 ```
 
-Session discovery uses Claude Code transcripts under:
+Session discovery spans every coding agent with sessions on this machine:
 
 ```text
-${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded-cwd>/<session>.jsonl
+${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<encoded-cwd>/<session>.jsonl   # Claude Code
+${CODEX_HOME:-~/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl              # Codex
 ```
+
+A project's sessions from both agents appear on one board, grouped by project
+cwd and tagged with their agent. Restrict the set with `--agent claude`,
+`--agent codex`, `$CC_COPILOT_AGENTS`, or `[agents] enabled` in the config.
 
 By default, commands report on the most recent session other than the current
 one, so running CC-Copilot from inside a live agent session watches the agent
-you want to supervise.
+you want to supervise. See [docs/cross-model-adapters.md](docs/cross-model-adapters.md).
 
 ## Cockpit
 
@@ -295,7 +300,11 @@ enabled = false
 ## How It Works
 
 ```text
-transcript.py   parse Claude Code JSONL into line-addressed records
+sources/        agent adapters: discover sessions + parse a transcript
+  base.py         the AgentSource contract + registry/dispatch
+  claude.py       Claude Code (~/.claude/projects/**)
+  codex.py        Codex (~/.codex/sessions/**/rollout-*.jsonl)
+transcript.py   the normalized record model Claude Code parses into
 state.py        fold records into deterministic session state
 assess.py       classify stalls, failures, retry loops, and safety signals
 brief.py        render deterministic cited recaps
@@ -307,9 +316,11 @@ backends.py     call Codex, Claude, OpenAI-compatible APIs, Ollama, etc.
 tui.py          Cockpit, the Textual TUI
 ```
 
-Only `transcript.py` is Claude-Code-specific. The downstream state, assessment,
-briefing, context, and cockpit layers are designed to generalize to other
-agent transcript formats.
+Agent specifics live entirely in `sources/`. Each adapter supplies just two
+things — discovery and parse — and emits the same normalized records, so state,
+assessment, briefing, context, and cockpit are agent-agnostic. One cockpit can
+watch Claude Code and Codex sessions side by side, grouped by project. Adding
+another agent (Gemini CLI, Aider, …) is a new `sources/` adapter, not a rewrite.
 
 ## Development
 

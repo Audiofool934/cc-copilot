@@ -207,6 +207,22 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("abcdef12", label)
         self.assertIn("(current)", label)
 
+    async def test_session_picker_label_shows_agent(self):
+        ref = types.SimpleNamespace(
+            title="codex work", session_id="019ea15e7785", size=2048,
+            path="/tmp/rollout-x.jsonl", agent="codex")
+        self.assertIn("codex", tui._session_picker_label(ref))
+
+    async def test_session_selection_matches_codex_path_by_ref(self):
+        # Codex filenames aren't bare session ids; selection must match by path
+        refs = [types.SimpleNamespace(
+            session_id="019ea15e7785",
+            path="/tmp/rollout-2026-06-07T10-00-00-019ea15e7785.jsonl")]
+        sess = types.SimpleNamespace(
+            scope=tui.SC.SESSION, scope_sessions=[],
+            path="/tmp/rollout-2026-06-07T10-00-00-019ea15e7785.jsonl")
+        self.assertEqual(tui._session_selection_ids(sess, refs), ["019ea15e7785"])
+
     async def test_busy_indicator_rotates(self):
         self.assertNotEqual(tui._busy_indicator(0), tui._busy_indicator(1))
         self.assertEqual(tui._busy_indicator(0), tui._busy_indicator(len(tui._BUSY_FRAMES)))

@@ -11,7 +11,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from . import assess as A, brief as B, locate as LOC, state as S, transcript as T
+from . import assess as A, brief as B, locate as LOC, state as S, sources as SRC
 from .brief import _dur, _oneline
 
 
@@ -86,7 +86,7 @@ def render_evidence(path: str, st=None, scope: str = SESSION,
     """
     sc = normalize(scope)
     if st is None and path and os.path.isfile(path):
-        st = S.build(T.parse(path))
+        st = S.build(SRC.parse(path))
     if sc == SESSION:
         title = _session_title(st, None) if st is not None else "history-only session"
         text = B.render(st) if st is not None else _history_only(path)
@@ -273,15 +273,47 @@ def resolve_session_refs(path: str, selectors=None) -> list:
 
 
 def _candidate_refs(path: str) -> list:
-    refs = LOC.refs_in_dir(os.path.dirname(path), include_own=True) if path else []
+    """All work sessions for the anchor's project, across in-scope agents.
+
+    The anchor agent's own sessions are discovered the way that agent groups a
+    project — Claude Code co-locates them in one directory (robust even outside
+    the canonical projects dir); Codex scatters them by date and is found by
+    cwd. Other in-scope agents are unioned in by project cwd, so a multi-session
+    view spans Claude Code and Codex for the same project.
+    """
     here = os.path.abspath(path) if path else ""
+    src = SRC.source_for_path(path) if path else None
+    anchor_agent = src.name if src is not None else "claude"
+
+    refs = []
+    if anchor_agent == "claude":
+        refs = LOC.refs_in_dir(os.path.dirname(path), include_own=True) if path else []
+    cwd = SRC.read_cwd(path) if path else ""
+    if cwd:
+        for ref in SRC.list_sessions(cwd, include_own=True):
+            if ref.agent == "claude" and anchor_agent == "claude":
+                continue  # already covered by co-located siblings
+            refs.append(ref)
+
     refs = [r for r in refs if not r.own or os.path.abspath(r.path) == here]
-    if not refs and path and os.path.isfile(path):
-        st = S.build(T.parse(path))
-        refs = [LOC.SessionRef(path, getattr(st.tr, "session_id", "") or os.path.basename(path)[:-6],
-                               os.path.getmtime(path), os.path.getsize(path),
-                               getattr(st.tr, "title", "") or "", False)]
-    return refs
+    if path and os.path.isfile(path) and not any(os.path.abspath(r.path) == here for r in refs):
+        try:
+            st = S.build(SRC.parse(path))
+            sid = getattr(st.tr, "session_id", "") or os.path.basename(path)[:-6]
+            refs.append(LOC.SessionRef(
+                path, sid, os.path.getmtime(path), os.path.getsize(path),
+                getattr(st.tr, "title", "") or "", False, agent=anchor_agent))
+        except OSError:
+            pass
+
+    seen, deduped = set(), []
+    for r in sorted(refs, key=lambda r: r.mtime, reverse=True):
+        k = os.path.abspath(r.path)
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(r)
+    return deduped
 
 
 def _session_items(path: str, current_st=None, selectors=None) -> list:
@@ -291,7 +323,7 @@ def _session_items(path: str, current_st=None, selectors=None) -> list:
     for ref in refs:
         try:
             st = current_st if os.path.abspath(ref.path) == here and current_st is not None \
-                else S.build(T.parse(ref.path))
+                else S.build(SRC.parse(ref.path))
             a = A.assess(st)
         except Exception:
             continue
@@ -318,7 +350,7 @@ def _rank(status: str, verdict: str) -> int:
 
 def _project_root(path: str, st=None) -> str:
     tr = getattr(st, "tr", None)
-    cwd = (getattr(tr, "cwd", "") if tr is not None else "") or LOC.read_cwd(path or "")
+    cwd = (getattr(tr, "cwd", "") if tr is not None else "") or SRC.read_cwd(path or "")
     return os.path.abspath(cwd or os.getcwd())
 
 

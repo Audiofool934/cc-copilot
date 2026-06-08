@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-06-08
+
+**Cross-model agent adapters** — cc-copilot is no longer Claude-only.
+- New `sources/` adapter layer with an `AgentSource` contract (discover sessions
+  + parse a transcript) and a path/cwd dispatcher. Claude Code is now adapter #1
+  (a behavior-preserving delegation to the existing parser/locator); **Codex is
+  adapter #2**, reading `${CODEX_HOME:-~/.codex}/sessions/**/rollout-*.jsonl`.
+- One cockpit watches **Claude Code and Codex sessions side by side**, grouped by
+  project cwd and tagged by agent. `sessions` and `status` show an agent column;
+  `/sessions`, multi-session scope, and the cockpit picker span both agents.
+- The Codex adapter normalizes Codex's tool vocabulary into the canonical model
+  so the existing deterministic state folding works unchanged: `exec_command` /
+  `shell` → `Bash` (with exit-code → failure), `apply_patch` → per-file
+  `Edit`/`Write`, and `update_plan` → `TodoWrite` (the plan surfaces in recaps).
+  `reasoning` maps to agent thinking; the duplicate `event_msg` stream is ignored
+  so messages aren't double-counted.
+- Scope discovery: `--agent claude|codex` (repeatable), `$CC_COPILOT_AGENTS`, or
+  `[agents] enabled = [...]` in `~/.cc-copilot.toml`. Default: every agent whose
+  storage exists. Sources whose home dir is absent are silently skipped.
+- Read-only contract now spans agents: never writes under `~/.claude` **or**
+  `~/.codex`. cc-copilot's own `codex exec` narration sessions are detected and
+  hidden, same as for Claude.
+- See [docs/cross-model-adapters.md](docs/cross-model-adapters.md). 29 new tests
+  (Codex parse→state, dispatcher routing/union/gating, cross-agent discovery).
+
 ## 0.7.0 — 2026-06-08
 
 **Evidence context engine**

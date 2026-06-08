@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 
-from . import (transcript as T, state as S, brief as B, assess as A,
+from . import (sources as SRC, state as S, brief as B, assess as A,
                narrate as N, locate as LOC, store as ST, scope as SC,
                observe as O, context as EC)
 
@@ -150,7 +150,7 @@ class ChatSession:
         self.last_size = size
         self.prev = self.st
         try:
-            self.st = S.build(T.parse(self.path))
+            self.st = S.build(SRC.parse(self.path))
         except OSError:                    # transcript gone — stay in history-only mode
             self.st = None
             return False
@@ -315,11 +315,10 @@ class ChatSession:
 
     # ---- session switching (select among multiple sessions) --------------
     def _siblings(self):
-        d = os.path.dirname(self.path)
-        refs = LOC.refs_in_dir(d, include_own=True)
-        # hide cc-copilot's own narration sessions, but never hide the one we're
-        # currently attached to.
-        refs = [r for r in refs if not r.own or r.path == self.path]
+        # Agent-aware project discovery: Claude Code co-located siblings plus any
+        # Codex sessions for the same project cwd. Own narration sessions are
+        # hidden (the anchor is always kept).
+        refs = SC._candidate_refs(self.path)
         self._session_refs = refs
         self._listing = [r.path for r in refs]
         return self._listing
@@ -342,17 +341,17 @@ class ChatSession:
     def _switch(self, arg):
         if not arg:
             return "usage: /use <number|session-id|prefix>  (see /sessions)"
-        paths = getattr(self, "_listing", None) or self._siblings()
+        self._siblings()
+        refs = getattr(self, "_session_refs", [])
         target = None
         if arg.isdigit():
             i = int(arg) - 1
-            if 0 <= i < len(paths):
-                target = paths[i]
+            if 0 <= i < len(refs):
+                target = refs[i].path
         if target is None:
-            for p in paths:
-                sid = os.path.basename(p)[:-6]
-                if sid == arg or sid.startswith(arg):
-                    target = p
+            for r in refs:
+                if r.session_id == arg or r.session_id.startswith(arg):
+                    target = r.path
                     break
         if target is None:
             return f"no session matching {arg!r} — try /sessions"
@@ -395,7 +394,7 @@ class ChatSession:
                 self.store.session_id = getattr(tr, "session_id", "") or self.store.session_id
                 self.store.cwd = getattr(tr, "cwd", "") or self.store.cwd
                 self.store.title = getattr(tr, "title", "") or self.store.title
-        self.cwd = (getattr(tr, "cwd", "") or LOC.read_cwd(path) or "")
+        self.cwd = (getattr(tr, "cwd", "") or SRC.read_cwd(path) or "")
 
     def attach_conv(self, header) -> bool:
         """Attach by a stored conversation header (from /history). Returns True
@@ -466,7 +465,7 @@ class ChatSession:
                 continue
             self._alert_size = size
             try:
-                st = S.build(T.parse(self.path))
+                st = S.build(SRC.parse(self.path))
             except Exception:
                 continue
             msg = _fmt_alert(S.diff(self._alert_state, st))

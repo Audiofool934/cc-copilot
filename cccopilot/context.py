@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import scope as SC, state as S, transcript as T
+from . import scope as SC, state as S, transcript as T, sources as SRC
 from .brief import _dur
 
 
@@ -190,7 +190,7 @@ def _sources(path: str, st, scope: str, sessions) -> list:
     for ref in SC.resolve_session_refs(path, SC.parse_selectors(sessions)):
         try:
             rst = st if here and os.path.abspath(ref.path) == here and st is not None \
-                else S.build(T.parse(ref.path))
+                else S.build(SRC.parse(ref.path))
         except Exception:
             continue
         out.append(_source(ref.path, rst, ref.session_id))
@@ -201,7 +201,7 @@ def _load_current(path: str, st) -> Optional[_Source]:
     if st is None:
         if not path or not os.path.isfile(path):
             return None
-        st = S.build(T.parse(path))
+        st = S.build(SRC.parse(path))
     sid = getattr(st.tr, "session_id", "") or (os.path.basename(path or "")[:-6])
     return _source(path, st, sid)
 
