@@ -128,6 +128,8 @@ class TestCodexHelpers(unittest.TestCase):
         # a body that merely echoes the phrase must not be read as a failure
         self.assertFalse(CX._exit_failed(
             "Process exited with code 0\nOutput:\nbuild exited with code 1"))
+        # a marker mid-line (not the wrapper header) is ignored
+        self.assertFalse(CX._exit_failed("see the log: Exit code: 1 was printed"))
 
     def test_patch_files(self):
         patch = ("*** Begin Patch\n*** Add File: x.py\n+a\n"

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Dict, List, Optional, Tuple
 
 from .. import locate
@@ -52,16 +53,26 @@ _MAX_SCAN = 800
 # so head metadata can be cached by path with no invalidation.
 _HEAD_CACHE: Dict[str, Tuple[str, str, bool]] = {}   # path -> (cwd, model, own)
 
+# The directory walk that enumerates rollouts is the dominant discovery cost.
+# A multi/project cockpit refresh calls list_sessions several times per poll, so
+# cache the walk briefly per Codex home: this dedups the within-refresh calls and
+# bounds the walk to once per TTL across the poll loop. Keyed by home so tests
+# (each a fresh temp CODEX_HOME) never see another's entries. Staleness is at
+# most TTL seconds — fine for a session board.
+_ROLLOUTS_TTL = 2.0
+_ROLLOUTS_CACHE: Dict[str, Tuple[float, List[Tuple[str, float]]]] = {}  # home -> (mono, items)
+
 _UUID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$"
 )
-# Codex tool outputs report the real status on a header line:
+# Codex tool outputs report the real status on its own header line:
 #   function_call_output:     "Process exited with code N"
 #   custom_tool_call_output:  "Exit code: N"
-# Anchor to those markers so a command whose stdout merely echoes
-# "exited with code 1" isn't misread as a failure.
-_EXIT_RE = re.compile(r"(?:Process exited with code|Exit code:)\s*(-?\d+)")
+# Anchor to the start of a line (and take the first match, which is the real
+# wrapper header — it precedes any echoed stdout) so a command whose output
+# merely contains "exited with code 1" isn't misread as a failure.
+_EXIT_RE = re.compile(r"^(?:Process exited with code|Exit code:)\s*(-?\d+)", re.MULTILINE)
 
 # Codex shell tools → cc-copilot's canonical command tool.
 _SHELL_TOOLS = {"exec_command", "shell", "exec", "run_command", "local_shell"}
@@ -165,7 +176,12 @@ def _thread_names() -> Dict[str, str]:
 
 
 def _iter_rollouts() -> List[Tuple[str, float]]:
-    """All rollout files across the session dirs as ``(path, mtime)``."""
+    """All rollout files across the session dirs as ``(path, mtime)``, newest
+    first. Cached per Codex home for a short TTL (see ``_ROLLOUTS_CACHE``)."""
+    home = codex_home()
+    cached = _ROLLOUTS_CACHE.get(home)
+    if cached is not None and (time.monotonic() - cached[0]) < _ROLLOUTS_TTL:
+        return cached[1]
     out: List[Tuple[str, float]] = []
     for root in _session_dirs():
         if not os.path.isdir(root):
@@ -180,6 +196,7 @@ def _iter_rollouts() -> List[Tuple[str, float]]:
                 except OSError:
                     continue
     out.sort(key=lambda t: t[1], reverse=True)
+    _ROLLOUTS_CACHE[home] = (time.monotonic(), out)
     return out
 
 
