@@ -233,10 +233,12 @@ record.
 
 ### v0.7.1: Context HUD
 
-- Add estimated token/context usage to the TUI status line.
-- Show input/context estimates while answering.
+- Add estimated token/context usage to the TUI status line. **Implemented.**
+- Show input/context estimates while answering. **Implemented with local input
+  estimates and post-answer output estimates.**
 - Split estimates by raw transcript, project facts, cockpit chat, memory, and
-  summary index.
+  summary index. **Implemented; memory remains `0` until v0.7.2 durable memory
+  lands.**
 
 ### v0.7.2: Budget-Aware Chat Memory
 

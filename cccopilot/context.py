@@ -41,6 +41,7 @@ class ContextStats:
     raw_tokens: int = 0
     project_tokens: int = 0
     chat_tokens: int = 0
+    memory_tokens: int = 0
     index_tokens: int = 0
     raw_records: int = 0
     raw_candidates: int = 0
@@ -77,6 +78,39 @@ class _Selected:
 def estimate_tokens(text: str) -> int:
     """Small local estimate used before exact backend usage exists."""
     return max(1, (len(text or "") + 3) // 4)
+
+
+def format_hud(stats: ContextStats, output_tokens: int = None) -> str:
+    """Compact context usage line for TUI/CLI surfaces."""
+    parts = [
+        f"ctx ~{_tok(stats.estimated_tokens)} / {_tok(stats.budget_tokens)}",
+        f"raw {_tok(stats.raw_tokens)}",
+        f"project {_tok(stats.project_tokens)}",
+        f"chat {_tok(stats.chat_tokens)}",
+        f"memory {_tok(stats.memory_tokens)}",
+        f"index {_tok(stats.index_tokens)}",
+    ]
+    if output_tokens is not None:
+        parts.insert(1, f"out ~{_tok(output_tokens)}")
+    if stats.truncated:
+        parts.append("trimmed")
+    return " · ".join(parts)
+
+
+def format_answering(stats: ContextStats, output_tokens: int = 0) -> str:
+    raw_pct = int(round(100 * stats.raw_tokens / max(1, stats.estimated_tokens)))
+    return (f"in ~{_tok(stats.estimated_tokens)} · out ~{_tok(output_tokens)} · "
+            f"window {_tok(stats.budget_tokens)} · raw {raw_pct}%")
+
+
+def _tok(n: int) -> str:
+    n = max(0, int(n or 0))
+    if n < 1000:
+        return str(n)
+    if n < 10000:
+        s = f"{n / 1000:.1f}".rstrip("0").rstrip(".")
+        return f"{s}k"
+    return f"{round(n / 1000)}k"
 
 
 def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,

@@ -188,6 +188,18 @@ class TestRestore(_StateHome):
         self.assertEqual(s.history, [])
         self.assertIn("history is off", s.meta("/history all"))
 
+    def test_answer_records_context_usage_estimates(self):
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False, persist=False)
+
+        ans = s.answer("what happened?")
+
+        self.assertEqual(ans, "A:what happened?")
+        self.assertIsNotNone(s.last_context_stats)
+        self.assertGreater(s.last_context_stats.estimated_tokens, 0)
+        self.assertGreater(s.last_context_stats.raw_tokens, 0)
+        self.assertGreater(s.last_output_tokens, 0)
+
 
 class TestConfigToggle(unittest.TestCase):
     def setUp(self):

@@ -10,6 +10,9 @@
   session-qualified `[session:L…]` citations for raw records.
 - Cockpit conversation replay is now budgeted by context size instead of a
   fixed `history[-8:]` turn window.
+- Added local context-usage estimates and a cockpit HUD segment showing input
+  context, output estimate, raw/project/chat/memory/index split, and model
+  window budget.
 
 **Cockpit answer quality**
 - Reframed LLM-backed `ask`, `chat`, and narration prompts around cited

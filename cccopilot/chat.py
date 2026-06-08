@@ -120,6 +120,8 @@ class ChatSession:
         self.st = None
         self.prev = None
         self.last_size = -1
+        self.last_context_stats = None
+        self.last_output_tokens = 0
         self._alerts = alerts
         self._persist = persist and ST.enabled()
         self.store = ST.Store.open_for(path, enabled=self._persist)
@@ -181,7 +183,10 @@ class ChatSession:
     def answer(self, q: str) -> str:
         self.refresh()
         ctx = self.answer_context(q, history=self.history)
+        self.last_context_stats = ctx.stats
+        self.last_output_tokens = 0
         txt = N.chat_brief(ctx.text, [], q, model=self.model, backend=self.backend)
+        self.last_output_tokens = EC.estimate_tokens(txt)
         self.history.append(("user", q))
         self.history.append(("assistant", txt))
         # durable copilot history (best-effort; never breaks the answer)

@@ -48,6 +48,31 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("question 0", ctx.text)
         self.assertIn("answer 9", ctx.text)
 
+    def test_context_stats_drive_hud_lines(self):
+        stats = EC.ContextStats(
+            estimated_tokens=82000,
+            raw_tokens=61000,
+            project_tokens=14000,
+            chat_tokens=5000,
+            memory_tokens=2000,
+            index_tokens=900,
+            budget_tokens=128000,
+        )
+
+        hud = EC.format_hud(stats, output_tokens=640)
+        answering = EC.format_answering(stats, output_tokens=0)
+
+        self.assertIn("ctx ~82k / 128k", hud)
+        self.assertIn("out ~640", hud)
+        self.assertIn("raw 61k", hud)
+        self.assertIn("project 14k", hud)
+        self.assertIn("chat 5k", hud)
+        self.assertIn("memory 2k", hud)
+        self.assertIn("index 900", hud)
+        self.assertIn("in ~82k", answering)
+        self.assertIn("window 128k", answering)
+        self.assertIn("raw 74%", answering)
+
 
 if __name__ == "__main__":
     unittest.main()

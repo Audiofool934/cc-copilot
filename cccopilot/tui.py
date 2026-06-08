@@ -46,7 +46,7 @@ except ImportError:
 
 from . import (transcript as T, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
-               observe as O)
+               observe as O, context as EC)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -797,6 +797,8 @@ class Cockpit(App):
         self.alerts = alerts
         self._busy = False
         self._busy_frame = 0
+        self._ctx_stats = None
+        self._out_tokens = 0
         self._slash_open = False
         self._watch_stop = threading.Event()
         self._watch_path = None
@@ -1121,7 +1123,13 @@ class Cockpit(App):
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
-            t.append("   " + _busy_indicator(self._busy_frame), style=_PAL["accent"])
+            busy = _busy_indicator(self._busy_frame)
+            if self._ctx_stats is not None:
+                busy += " · " + EC.format_answering(self._ctx_stats, self._out_tokens)
+            t.append("   " + busy, style=_PAL["accent"])
+        elif self._ctx_stats is not None:
+            t.append("   " + EC.format_hud(self._ctx_stats, self._out_tokens),
+                     style=_PAL["muted"])
         status.update(t)
 
     def _tick_busy(self) -> None:
@@ -1161,6 +1169,10 @@ class Cockpit(App):
             return
         self.session.refresh()
         ctx = self.session.answer_context(text, history=list(self.session.history))
+        self._ctx_stats = ctx.stats
+        self._out_tokens = 0
+        self.session.last_context_stats = ctx.stats
+        self.session.last_output_tokens = 0
         self._busy = True
         self._busy_frame = 0
         self._update_status()
@@ -1182,6 +1194,8 @@ class Cockpit(App):
     def _answer_done(self, text, ans, ok, st, store):
         self._busy = False
         self._busy_frame = 0
+        self._out_tokens = EC.estimate_tokens(ans) if ok else 0
+        self.session.last_output_tokens = self._out_tokens
         same = store is self.session.store     # still on the originating conversation?
         if ok:
             # the cockpit's single durable write-site (the REPL has its own in
