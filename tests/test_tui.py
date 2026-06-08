@@ -377,6 +377,49 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sess-A", header)
         self.assertIn("activity current session", header)
 
+    async def test_timeline_resize_keys_persist_and_clamp(self):
+        import tempfile
+        from cccopilot import prefs as PREFS
+        old = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="cctl-")
+        os.environ.pop("CC_COPILOT_TIMELINE_HEIGHT", None)
+        try:
+            app = tui.Cockpit(self._session("sess-A"), poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                h0 = app._timeline_height
+                await pilot.press("ctrl+up")
+                await pilot.pause()
+                self.assertEqual(app._timeline_height, h0 + 1)
+                self.assertEqual(PREFS.get_int("timeline_height", -1), h0 + 1)
+                for _ in range(20):
+                    await pilot.press("ctrl+down")     # clamp at the minimum
+                await pilot.pause()
+                self.assertEqual(app._timeline_height, tui.Cockpit.TIMELINE_MIN)
+        finally:
+            if old is None:
+                os.environ.pop("CC_COPILOT_STATE_DIR", None)
+            else:
+                os.environ["CC_COPILOT_STATE_DIR"] = old
+
+    async def test_timeline_height_restored_on_launch(self):
+        import tempfile
+        from cccopilot import prefs as PREFS
+        old = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="cctl2-")
+        os.environ.pop("CC_COPILOT_TIMELINE_HEIGHT", None)
+        try:
+            PREFS.set("timeline_height", 11)
+            app = tui.Cockpit(self._session("sess-A"), poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                self.assertEqual(app._timeline_height, 11)
+        finally:
+            if old is None:
+                os.environ.pop("CC_COPILOT_STATE_DIR", None)
+            else:
+                os.environ["CC_COPILOT_STATE_DIR"] = old
+
     async def test_auto_refresh_updates_activity_without_manual_refresh(self):
         from textual.widgets import Static
         sess = self._session("sess-A")

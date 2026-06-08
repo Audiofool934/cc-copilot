@@ -174,7 +174,9 @@ It gives you:
 
 Keyboard is primary; mouse works too. Click anywhere to return focus to the
 composer. `Enter` sends, `Ctrl+J` inserts a newline, `/` opens command
-suggestions, and `Ctrl+P` opens the command palette.
+suggestions, and `Ctrl+P` opens the command palette. `Ctrl+↑` / `Ctrl+↓` resize
+the activity timeline (the chat fills the rest); the height is remembered across
+launches.
 
 ## While You Were Away
 
