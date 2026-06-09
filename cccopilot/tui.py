@@ -40,6 +40,7 @@ try:
                                  RichLog, Static, TextArea)
     from textual.widgets.option_list import Option
     from rich.text import Text
+    from rich.cells import cell_len as _cell_len
 except ImportError:
     raise SystemExit(
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
@@ -264,6 +265,25 @@ def _assemble(segs) -> Text:
     for txt, sty in segs:
         t.append(txt) if sty is None else t.append(txt, style=sty)
     return t
+
+
+def _pack_rows(parts, w: int, sep: str = " · ") -> list:
+    """Greedy-pack ``sep``-joined parts into rows whose display width is <= ``w``,
+    so each rendered row is ONE visual line (no surprise soft-wrap that would push
+    a stacked status past its height cap and clip a field). A part wider than ``w``
+    gets its own row — the only place a soft-wrap can still happen, and only at
+    pathological widths."""
+    rows, cur = [], ""
+    for p in parts:
+        cand = p if not cur else cur + sep + p
+        if cur and _cell_len(cand) > w:
+            rows.append(cur)
+            cur = p
+        else:
+            cur = cand
+    if cur:
+        rows.append(cur)
+    return rows
 
 
 def _short_activity(text: str, limit: int = 70) -> str:
@@ -909,10 +929,12 @@ class Cockpit(App):
     /* status + composer flow at the bottom (above the docked Footer); no
        competing dock:bottom so the composer box is always visible. */
     /* height:auto so a narrow sidebar can reflow the status into stacked rows
-       (no field gets cropped); bounded so the long HUD can't starve #chat.
-       text-wrap:wrap is the safety net for an over-long single field. */
+       (no field gets cropped); bounded so the long HUD can't starve #chat. The
+       rows are width-packed (see _pack_rows) so they don't soft-wrap, so the cap
+       only needs to clear the worst packed case (~9 rows at a 30-col sidebar with
+       a full HUD). text-wrap:wrap is the safety net for a single over-long field. */
     #status {
-        height: auto; min-height: 1; max-height: 8;
+        height: auto; min-height: 1; max-height: 12;
         background: $boost; color: $text; padding: 0 1; text-wrap: wrap;
     }
     #composer {
@@ -1497,26 +1519,28 @@ class Cockpit(App):
             t.append(*badge)
         t.append("\n")
         t.append(*copilot)
+        # watched session + idle: together if they fit, else one per row.
+        watch_txt = "↳ " + watch_lbl
         t.append("\n")
-        t.append("↳ " + watch_lbl, style=watch_sty)
-        t.append(" · " + idle, style=_PAL["muted"])
+        t.append(watch_txt, style=watch_sty)
+        if _cell_len(watch_txt + " · " + idle) <= w:
+            t.append(" · " + idle, style=_PAL["muted"])
+        else:
+            t.append("\n")
+            t.append(idle, style=_PAL["muted"])
+        # HUD: greedy-pack the " · " parts so every row fits w (no soft-wrap →
+        # the rendered height equals the row count and stays under the cap, so
+        # nothing is clipped). trimmed keeps its own warning-colored row.
         if self._busy:
-            head = " · ".join(hud_parts[:2])
-            t.append("\n")
-            t.append(_busy_indicator(self._busy_frame) + ((" · " + head) if head else ""),
-                     style=hud_sty)
-            if hud_parts[2:]:
+            for row in _pack_rows([_busy_indicator(self._busy_frame)] + hud_parts, w):
                 t.append("\n")
-                t.append(" · ".join(hud_parts[2:]), style=hud_sty)
+                t.append(row, style=hud_sty)
         elif hud_parts:
-            trimmed = "trimmed" in hud_parts
             core = [p for p in hud_parts if p != "trimmed"]
-            t.append("\n")
-            t.append(" · ".join(core[:3]), style=hud_sty)        # ctx · out · raw
-            if core[3:]:
+            for row in _pack_rows(core, w):
                 t.append("\n")
-                t.append(" · ".join(core[3:]), style=hud_sty)    # project · chat · memory · index
-            if trimmed:
+                t.append(row, style=hud_sty)
+            if "trimmed" in hud_parts:
                 t.append("\n")
                 t.append("trimmed", style=_PAL["warning"])
         return t

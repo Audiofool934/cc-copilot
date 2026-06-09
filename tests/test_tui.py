@@ -941,6 +941,41 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertIn(verdict, brutal)
             self.assertIn("index 90", brutal)
 
+    async def test_status_bar_narrow_rows_render_without_clipping(self):
+        """Codex P2 regression: narrow rows are width-packed so they don't
+        soft-wrap past the height cap. Reads the RENDERED strips (not .plain,
+        which clipping wouldn't change) to prove every field is actually on
+        screen, and that the rendered height equals the row count (no wrap)."""
+        from textual.widgets import Static
+        from cccopilot import context as EC, assess as A
+        sess = self._session("sess-A")
+        sess.model = "gpt-5"
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        # narrow (32) but tall (44) so the terminal height is not the limiter
+        async with app.run_test(size=(32, 44)) as pilot:
+            await pilot.pause()
+            app._ctx_stats = EC.ContextStats(
+                estimated_tokens=1200, raw_tokens=1100, project_tokens=4000,
+                chat_tokens=800, memory_tokens=120, index_tokens=90,
+                budget_tokens=200000, truncated=True)
+            app._out_tokens = 300
+            app._update_status()
+            await pilot.pause()
+            verdict = A.assess(sess.st).verdict.upper()
+            status = app.query_one("#status", Static)
+            # rendered height == logical row count → packing prevented soft-wrap
+            self.assertEqual(status.region.height,
+                             app._status_text(30).plain.count("\n") + 1)
+            self.assertLessEqual(status.region.height, 12)      # within the CSS cap
+            strips = app.screen._compositor.render_strips()
+            y0 = status.region.y
+            visible = "\n".join(strips[y].text for y in
+                                range(y0, min(y0 + status.region.height, len(strips))))
+            for tok in (verdict, "copilot codex:gpt-5", "claude session", "idle",
+                        "ctx ~1.2k / 200k", "out ~300", "raw 1.1k", "project 4k",
+                        "chat 800", "memory 120", "index 90", "trimmed"):
+                self.assertIn(tok, visible, f"{tok} CLIPPED (not on screen) at 32 cols")
+
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa
         sess = self._session("sess-A")
