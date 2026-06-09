@@ -1039,6 +1039,68 @@ class WelcomeScreen(ModalScreen):
         self.dismiss(("skip", None))
 
 
+class KeyPrompt(ModalScreen):
+    """Capture an API key inline when the quick `/model` switch lands on a
+    provider that needs one. The backend picker can't carry a key, so without
+    this the cockpit switches to (say) DeepSeek silently and every chat then
+    fails at call time with "set DEEPSEEK_API_KEY". A focused single-provider
+    cousin of :class:`WelcomeScreen`'s key field. Dismisses with the entered key
+    string on Save, or None if cancelled (keep the current backend)."""
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, choice):
+        super().__init__()
+        self._choice = choice             # onboard.Choice (kind == "api")
+
+    def compose(self) -> ComposeResult:
+        c = self._choice
+        with Vertical(id="keyprompt"):
+            t = Text()
+            t.append(f"{c.label} ", style=f"bold {c.brand_hex or _PAL['accent']}")
+            t.append("needs an API key", style=_PAL["text"])
+            yield Static(t, id="keyprompt-title")
+            yield Static(
+                Text(f"Paste your {c.key_env} to switch. Saved to "
+                     "~/.cc-copilot.toml (chmod 600); a real env var still wins.",
+                     style=_PAL["muted"]),
+                id="keyprompt-intro")
+            yield Input(placeholder=f"{c.key_env} — paste & Enter",
+                        password=True, id="keyprompt-key")
+            yield Static("", id="keyprompt-hint")
+            with Horizontal(id="keyprompt-actions"):
+                yield Button("Save & switch", id="keyprompt-save", variant="primary")
+                yield Button("Cancel", id="keyprompt-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#keyprompt-key", Input).focus()
+
+    @on(Input.Submitted, "#keyprompt-key")
+    def _on_submit(self, event) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#keyprompt-save")
+    def _on_save(self, event) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#keyprompt-cancel")
+    def _on_cancel(self, event) -> None:
+        self.action_cancel()
+
+    def _save(self) -> None:
+        key = self.query_one("#keyprompt-key", Input).value.strip()
+        if not key:                       # we only open when no key is set
+            self.query_one("#keyprompt-hint", Static).update(
+                Text(f"paste a {self._choice.key_env}, or Cancel to keep your "
+                     "current backend.", style=_PAL["warning"]))
+            self.query_one("#keyprompt-key", Input).focus()
+            return
+        self.dismiss(key)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── the cockpit ────────────────────────────────────────────────────────────
 class Cockpit(App):
     CSS = """
@@ -1120,6 +1182,15 @@ class Cockpit(App):
     #welcome-hint { color: $text-muted; height: auto; min-height: 1; margin-bottom: 1; }
     #welcome-actions { height: auto; align: right middle; }
     #welcome-actions Button { margin-left: 2; }
+    KeyPrompt { align: center middle; }
+    #keyprompt { width: 66; max-width: 92%; height: auto; max-height: 80%;
+                 background: $surface; border: round $accent; padding: 1 2; }
+    #keyprompt-title { text-style: bold; margin-bottom: 1; }
+    #keyprompt-intro { color: $text-muted; margin-bottom: 1; }
+    #keyprompt-key { margin-bottom: 1; }
+    #keyprompt-hint { color: $text-muted; height: auto; min-height: 1; margin-bottom: 1; }
+    #keyprompt-actions { height: auto; align: right middle; }
+    #keyprompt-actions Button { margin-left: 2; }
     #picker { width: 80; max-width: 90%; height: auto; max-height: 80%;
               background: $surface; border: round $accent; padding: 1; }
     #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
@@ -2261,9 +2332,45 @@ class Cockpit(App):
             be = BK.resolve(name)
         except BK.BackendError as e:
             self.notify(str(e), severity="error"); return
+        # Landing on an API provider that still needs a key: capture it inline.
+        # The picker can't carry a key, and resolve() succeeds without one (the
+        # key is only checked at call time), so switching silently would leave
+        # every chat failing with "set <PROVIDER>_API_KEY". Prompt instead.
+        choice = OB.choice_for_or_none(name)
+        if choice and choice.kind == "api" and not be.available():
+            self.push_screen(KeyPrompt(choice),
+                             lambda k: self._finish_api_switch(name, choice, k))
+            return
+        self._commit_backend(name, be)
+
+    def _commit_backend(self, name, be):
         self.backend = self.session.backend = name
+        # Keep the active model coherent with the new backend's kind: an API
+        # backend uses its provider default (e.g. deepseek-chat); a CLI backend
+        # uses its own and must not inherit a stale API model — otherwise a
+        # claude→deepseek→claude round-trip would run `claude --model
+        # deepseek-chat`. Mirrors the onboarding path (_after_onboard).
+        if isinstance(be, BK.OpenAICompatBackend):
+            self.model = self.session.model = be.default_model or self.model
+        elif isinstance(be, BK.CliBackend):
+            self.model = self.session.model = None
         self.notify(f"backend → {name}", severity="information")
         self._update_status()
+
+    def _finish_api_switch(self, name, choice, key):
+        """KeyPrompt callback: persist the entered key, then complete the switch.
+        A None key means the user cancelled — keep the current backend."""
+        if not key:
+            self.notify(f"kept {self.backend or 'current'} backend — no key entered",
+                        severity="warning")
+            return
+        try:
+            OB.write_choice(name, model=choice.default_model, key_value=key)
+            OB.apply_to_env(name, model=choice.default_model, key_value=key)
+        except OSError as e:
+            self.notify(f"could not save key: {e}", severity="error"); return
+        self._commit_backend(name, BK.resolve(name))
+        self.notify(f"key saved · {choice.key_env}", severity="information")
 
     def action_toggle_select_mode(self) -> None:
         """Release / re-grab the mouse. Textual captures the mouse for scroll and

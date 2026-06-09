@@ -75,6 +75,17 @@ def choice_for(name: str) -> Choice:
     raise ValueError(f"unknown onboarding choice {name!r}")
 
 
+def choice_for_or_none(name: str):
+    """Like :func:`choice_for` but returns None for backends outside the curated
+    set (ollama / custom / gemini / llm) instead of raising — callers that switch
+    to *any* backend use this to ask "is this a key-needing API provider?"."""
+    try:
+        c = choice_for(name)
+    except ValueError:
+        return None
+    return c if c.kind != "skip" else None
+
+
 def detect() -> list:
     """Each curated choice annotated with whether it's usable on this machine."""
     reg = BK.registry()

@@ -1324,6 +1324,118 @@ class TestWelcomeScreen(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestModelSwitchKeyPrompt(unittest.IsolatedAsyncioTestCase):
+    """The quick `/model` (Ctrl+T) switch to an API provider that has no key
+    must capture one inline — otherwise it switches silently and the next chat
+    fails at call time with "set <PROVIDER>_API_KEY"."""
+
+    def setUp(self):
+        import tempfile
+        self._saved = {k: os.environ.pop(k, None) for k in
+                       ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                        "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL",
+                        "DEEPSEEK_API_KEY", "OPENAI_API_KEY")}
+        self.dir = tempfile.mkdtemp()
+        os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.dir, "cc.toml")
+        os.environ["CC_COPILOT_NO_ONBOARD"] = "1"     # don't auto-open WelcomeScreen
+
+    def tearDown(self):
+        for k in ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                  "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL",
+                  "DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
+            os.environ.pop(k, None)
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    def _cockpit(self, backend="codex", model=None):
+        from cccopilot.chat import ChatSession
+        sess = ChatSession(write([user("x", 30), asst("y", 10)]),
+                           backend=backend, model=model)
+        sess.refresh()
+        return tui.Cockpit(sess, poll=999, alerts=False)
+
+    async def test_switch_to_api_without_key_opens_keyprompt(self):
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek")              # no DEEPSEEK_API_KEY set
+            await pilot.pause()
+            self.assertIsInstance(app.screen, tui.KeyPrompt)
+            self.assertEqual(app.backend, "codex")    # NOT switched yet — awaiting key
+
+    async def test_keyprompt_save_persists_key_and_switches(self):
+        from textual.widgets import Input
+        from cccopilot import config as CFG
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek")
+            await pilot.pause()
+            scr = app.screen
+            scr.query_one("#keyprompt-key", Input).value = "sk-deep"
+            scr._save()
+            await pilot.pause()
+            self.assertEqual(app.backend, "deepseek")
+            self.assertEqual(app.session.backend, "deepseek")
+            self.assertEqual(app.model, "deepseek-chat")   # provider default applied
+        data = CFG._load_simple(os.environ["CC_COPILOT_CONFIG"])
+        self.assertEqual(data.get("backend"), "deepseek")
+        self.assertEqual(data["env"]["DEEPSEEK_API_KEY"], "sk-deep")
+        self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "sk-deep")  # live this run
+
+    async def test_keyprompt_empty_submit_blocks(self):
+        from textual.widgets import Input
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek")
+            await pilot.pause()
+            scr = app.screen
+            scr.query_one("#keyprompt-key", Input).value = "   "   # whitespace only
+            scr._save()
+            await pilot.pause()
+            self.assertIsInstance(app.screen, tui.KeyPrompt)       # still open
+            self.assertEqual(app.backend, "codex")                 # unchanged
+
+    async def test_keyprompt_cancel_keeps_current_backend(self):
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek")
+            await pilot.pause()
+            app.screen.action_cancel()
+            await pilot.pause()
+            self.assertNotIsInstance(app.screen, tui.KeyPrompt)
+            self.assertEqual(app.backend, "codex")                 # never switched
+        from cccopilot import onboard as OB
+        # nothing was persisted by a cancel
+        self.assertFalse(os.path.isfile(os.environ["CC_COPILOT_CONFIG"]))
+
+    async def test_switch_to_api_with_key_skips_prompt(self):
+        os.environ["DEEPSEEK_API_KEY"] = "sk-already"
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek")
+            await pilot.pause()
+            self.assertNotIsInstance(app.screen, tui.KeyPrompt)    # no prompt needed
+            self.assertEqual(app.backend, "deepseek")
+            self.assertEqual(app.model, "deepseek-chat")
+
+    async def test_switch_to_cli_clears_stale_api_model(self):
+        os.environ["OPENAI_API_KEY"] = "sk-oi"
+        app = self._cockpit(backend="openai", model="gpt-4o")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("claude")                # CLI backend
+            await pilot.pause()
+            self.assertEqual(app.backend, "claude")
+            self.assertIsNone(app.model)              # gpt-4o not passed to claude
+            self.assertIsNone(app.session.model)
+
+
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
     """The slimmed footer's discoverability moved into a rotating tip line."""
 
