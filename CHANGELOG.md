@@ -9,7 +9,9 @@
   a long line (a deep path, a long error) stays on one row and you pan across it
   with the trackpad / shift-wheel. The horizontal scrollbar is drawn at
   zero thickness, so there's no chunky bar eating a row — scrolling without the
-  gutter. (The vertical history scrollbar stays a thin 1 cell.)
+  gutter. (The vertical history scrollbar stays a thin 1 cell.) The pan survives
+  same-session refreshes — it no longer snaps back to column 0 on every poll /
+  theme change / `/refresh` while you're tailing. (Caught by a Codex review.)
 - **Evidence switches land on the newest line again.** The 0.10.4 scroll-preserve
   was applied to *every* rebuild, so switching evidence (`/sessions`, `/use`,
   `/here`, `/resume`) restored the previous view's scroll offset — opening a

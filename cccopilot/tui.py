@@ -1155,13 +1155,17 @@ class Cockpit(App):
     def _land_timeline(self, rl, prev_y, was_bottom, keep_scroll):
         """Land the viewport after a full rebuild. ``keep_scroll`` (a *same-session*
         refresh — poll tick, theme change, manual refresh) holds the reader's
-        position, following only if they were already at the bottom, so a
-        timer-driven rebuild can't yank a scrolled-up reader down. Otherwise (first
-        build, or an evidence/scope switch where the rebuilt content is a
-        *different* history) land on the newest line — restoring a stale offset
-        would open a freshly-selected session scrolled into the middle."""
-        if keep_scroll and not was_bottom:
-            rl.scroll_to(y=prev_y, animate=False, force=True)
+        position: follow the newest line only if they were already at the bottom,
+        and keep the horizontal pan either way — scroll_end defaults to x_axis=True,
+        which would snap a panned-across long line back to column 0 every tick.
+        Otherwise (first build, or an evidence/scope switch into a *different*
+        history) land on the newest line and reset the pan — a stale offset would
+        open a freshly-selected session scrolled into the middle."""
+        if keep_scroll:
+            if was_bottom:
+                rl.scroll_end(animate=False, x_axis=False)   # follow y, keep x pan
+            else:
+                rl.scroll_to(y=prev_y, animate=False, force=True)   # x left untouched
         else:
             rl.scroll_end(animate=False)
 

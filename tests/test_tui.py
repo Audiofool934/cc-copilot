@@ -550,6 +550,43 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertLessEqual(rl.scroll_offset.y, 3)          # held the reader's place
 
+    async def test_keep_scroll_preserves_horizontal_pan_at_bottom(self):
+        """A same-session refresh while tailing must keep a horizontal pan — a bare
+        scroll_end (x_axis=True) would snap a panned-across long line to column 0
+        every poll. An evidence switch instead resets the pan to the start."""
+        import json
+        import tempfile
+        from cccopilot.chat import ChatSession
+        from textual.widgets import RichLog
+        d = tempfile.mkdtemp(prefix="ccpan-")
+        p = os.path.join(d, "s.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                "message": {"role": "user", "content": "go"}}) + "\n")
+        sess = ChatSession(p, alerts=False, persist=False)
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            rl = app.query_one("#timeline-log", RichLog)
+            for i in range(40):                                  # long unwrapped lines
+                app._timeline(tui.Text(f"line {i} " + ("y" * 120)))
+            await pilot.pause()
+            self.assertGreater(rl.max_scroll_x, 30)              # genuinely pannable
+            rl.scroll_to(x=30, y=rl.max_scroll_y, animate=False)  # at bottom AND panned
+            await pilot.pause()
+            self.assertEqual(rl.scroll_offset.x, 30)
+            self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)
+            app._rebuild_timeline(keep_scroll=True)              # poll/theme/refresh
+            await pilot.pause()
+            self.assertEqual(rl.scroll_offset.x, 30)             # pan KEPT (x_axis=False)
+            self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)  # still tailing
+            # an evidence switch resets the horizontal pan to the start
+            rl.scroll_to(x=30, y=rl.max_scroll_y, animate=False)
+            await pilot.pause()
+            app._rebuild_timeline()                              # keep_scroll=False
+            await pilot.pause()
+            self.assertEqual(rl.scroll_offset.x, 0)              # pan reset for new evidence
+
     async def test_timeline_height_clamped_to_small_screen(self):
         import tempfile
         from cccopilot import prefs as PREFS
