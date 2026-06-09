@@ -347,14 +347,23 @@ def _stream_out(handle, header: str = None) -> None:
     ``header`` is printed just before the first chunk — so a stream that dies
     before producing anything doesn't leave an orphaned heading."""
     first = True
-    for chunk in handle:
-        if first and header:
-            sys.stdout.write(header)
-            first = False
-        sys.stdout.write(chunk)
+    try:
+        for chunk in handle:
+            if first and header:
+                sys.stdout.write(header)
+                first = False
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+        sys.stdout.write("\n")
         sys.stdout.flush()
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    except BrokenPipeError:
+        # the downstream consumer closed early (`cc-copilot ask … | head`) —
+        # normal Unix flow, not an error. Point stdout at /dev/null so the
+        # interpreter's exit-time flush doesn't print a second traceback.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except Exception:
+            pass
 
 
 def cmd_ask(args) -> int:

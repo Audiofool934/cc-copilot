@@ -1477,6 +1477,7 @@ class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(t in content for t in tui._TIPS))
 
 
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
     """Streamed answers paint progressively, finalize once, and never persist
     a partial; exact backend usage replaces the chars/4 estimate in the HUD."""
@@ -1606,6 +1607,63 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
             self.assertIsNot(app._stream_md, first_md)
             self.assertTrue(app._stream_md.is_attached)
             self.assertEqual(app._stream_buf, "first half second half")
+
+    async def test_switch_away_and_back_still_renders_completed_answer(self):
+        # /resume back to the SAME conversation builds a NEW Store object for
+        # the same conv_id — the finished answer must render and join history,
+        # not vanish until the next reattach (store identity ≠ conv identity)
+        from cccopilot import store as ST
+        from textual.widgets import Markdown
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin = sess.store
+            sess.store = ST.Store(origin.conv_id, enabled=True)  # "came back"
+            before = len(app.query_one("#chat").query(Markdown))
+            app._answer_done("q", "late answer [L1]", True, sess.st, origin)
+            await pilot.pause()
+            self.assertEqual(sess.history[-1], ("assistant", "late answer [L1]"))
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), before + 1)
+
+    async def test_usage_of_switched_conv_does_not_leak_into_hud(self):
+        from cccopilot import backends as BK, store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            other = ST.Store("conv-elsewhere-0000", enabled=False)
+            app._answer_done("q", "a [L1]", True, sess.st, other,
+                             BK.Usage(100, 42, cost_usd=0.30))
+            await pilot.pause()
+            self.assertFalse(app._out_exact)             # turn A's exact usage…
+            self.assertIsNone(app._last_cost)            # …never paints conv B's HUD
+
+    async def test_forget_midstream_aborts_and_does_not_resurrect(self):
+        from cccopilot import backends as BK
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True                             # mid-answer
+            app._answer_chunk(sess.store, "doomed partial ")
+            await pilot.pause()
+            app.action_forget()                          # deletes the conv dir
+            await pilot.pause()
+            self.assertTrue(app._answer_abandoned)
+            from textual.widgets import Markdown
+            app._answer_chunk(sess.store, "more")        # late chunk: dropped
+            await pilot.pause()
+            self.assertEqual(app._stream_buf, "doomed partial ")   # unchanged
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), 0)
+            app._answer_done("q", "doomed partial more", True, sess.st,
+                             sess.store, BK.Usage(10, 5))
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            self.assertFalse(app._answer_abandoned)      # consumed
+        self.assertEqual(sess.history, [])
+        # the completed turn must NOT re-create the files /forget removed
+        self.assertFalse(os.path.exists(sess.store.turns_path))
 
 
 if __name__ == "__main__":

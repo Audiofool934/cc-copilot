@@ -134,6 +134,15 @@ class StreamHandle:
             self.usage = getattr(self._be, "last_usage", None)
             self.done = True
 
+    def cancel(self):
+        """Best-effort, thread-safe abort. The consuming thread is usually
+        blocked INSIDE the backend read — this kills the transport so that
+        read returns and the stream unwinds immediately (see Backend.cancel)."""
+        try:
+            getattr(self._be, "cancel", lambda: None)()
+        except Exception:
+            pass
+
 
 def stream_enabled() -> bool:
     return os.environ.get("CC_COPILOT_STREAM", "").strip().lower() not in (

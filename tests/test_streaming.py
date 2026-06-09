@@ -82,6 +82,16 @@ class TestClaudeParser(unittest.TestCase):
                            _j({"type": "result", "is_error": False, "result": "x"})])
         self.assertEqual([v for k, v in ev if k == "text"], ["x"])
 
+    def test_multi_message_deltas_get_separator(self):
+        def delta(t):
+            return _j({"type": "stream_event",
+                       "event": {"type": "content_block_delta",
+                                 "delta": {"type": "text_delta", "text": t}}})
+        stop = _j({"type": "stream_event", "event": {"type": "message_stop"}})
+        ev = self._events([delta("first."), stop, delta("second."), stop])
+        texts = [v for k, v in ev if k == "text"]
+        self.assertEqual("".join(texts), "first.\n\nsecond.")
+
 
 class TestCodexParser(unittest.TestCase):
     def test_messages_and_usage(self):
@@ -132,6 +142,12 @@ class TestSseParser(unittest.TestCase):
         ev = list(BK._parse_sse_stream(iter(body.splitlines())))
         self.assertEqual([v for k, v in ev if k == "text"], ["blocking shape"])
         self.assertEqual([v for k, v in ev if k == "usage"][0].input_tokens, 4)
+
+    def test_utf8_bom_on_first_line_does_not_drop_chunk(self):
+        lines = ["\ufeff" + "data: " + _j({"choices": [{"delta": {"content": "first"}}]}),
+                 "data: [DONE]"]
+        ev = list(BK._parse_sse_stream(iter(lines)))
+        self.assertEqual([v for k, v in ev if k == "text"], ["first"])
 
 
 # ── CliBackend.stream against fake CLIs ───────────────────────────────────
@@ -234,6 +250,74 @@ class TestCliStream(_FakeCli):
         with self.assertRaises(BK.BackendError) as cm:
             list(be.stream("q", timeout=1))
         self.assertIn("timed out", str(cm.exception))
+
+    def test_cancel_unblocks_a_stream_stuck_in_read(self):
+        # the consumer thread is BLOCKED in readline (no output coming);
+        # cancel() from another thread must kill the transport and unblock it
+        # promptly — this is the TUI quit path (otherwise quit hangs until the
+        # stream timeout because Textual joins thread workers at shutdown)
+        import time
+        script = self._script(
+            "import json, sys, time\n"
+            "if '--help' in sys.argv:\n"
+            "    print('--output-format stream-json'); sys.exit(0)\n"
+            "print(json.dumps({'type': 'stream_event', 'event': {\n"
+            "    'type': 'content_block_delta',\n"
+            "    'delta': {'type': 'text_delta', 'text': 'one'}}}), flush=True)\n"
+            "time.sleep(30)\n")
+        be = BK.CliBackend("claude", [sys.executable, script, "-p"], flavor="claude")
+        h = N.run_brief_stream("brief", "task", backend=be, timeout=60)
+        got, errs = [], []
+
+        def consume():
+            try:
+                for c in h:
+                    got.append(c)
+            except Exception as e:
+                errs.append(e)
+
+        t = threading.Thread(target=consume, daemon=True)
+        t.start()
+        deadline = time.monotonic() + 5
+        while not got and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(got, ["one"])                  # blocked mid-stream now
+        h.cancel()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive())                  # unblocked promptly
+        self.assertTrue(errs)                           # surfaced as BackendError
+        self.assertEqual(h.text, "one")                 # partial text preserved
+
+
+class TestStreamOutBrokenPipe(unittest.TestCase):
+    def test_broken_pipe_is_swallowed(self):
+        # `cc-copilot ask … | head` closes our stdout mid-stream — that is
+        # normal Unix flow and must not surface as an error (or exit 120)
+        from cccopilot import cli as CLI
+
+        class _Pipe:
+            def __init__(self):
+                self.writes = 0
+
+            def write(self, s):
+                self.writes += 1
+                if self.writes > 1:
+                    raise BrokenPipeError()
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                raise OSError("no real fd")             # exercise the guard too
+
+        be = _StubBackend(chunks=("a", "b", "c"))
+        h = N.run_brief_stream("brief", "task", backend=be)
+        real = sys.stdout
+        sys.stdout = _Pipe()
+        try:
+            CLI._stream_out(h)                          # must not raise
+        finally:
+            sys.stdout = real
 
 
 # ── OpenAICompatBackend.stream against a local HTTP server ───────────────

@@ -87,6 +87,14 @@ class Backend:
         during iteration — consumers must wrap the loop, not just the call."""
         yield self.complete(prompt, model=model, timeout=timeout)
 
+    def cancel(self):
+        """Best-effort, thread-safe abort of an in-flight ``stream()``.
+
+        A streaming consumer is usually BLOCKED inside the generator (on a
+        subprocess pipe read or a socket read), where a stop flag checked
+        between chunks can't reach it. cancel() kills the underlying transport
+        so the blocked read returns immediately and the generator unwinds."""
+
     def describe(self) -> str:
         return self.name
 
@@ -100,11 +108,12 @@ def _parse_claude_stream(lines):
     builds without partial messages), fall back to the per-message `assistant`
     events, then to the final result text."""
     saw_delta = False
+    pending_sep = False                   # a message boundary awaits a separator
     fallback_texts = []
     result_text = ""
     usage = None
     for line in lines:
-        line = line.strip()
+        line = line.strip().lstrip("\ufeff")
         if not line:
             continue
         try:
@@ -114,12 +123,19 @@ def _parse_claude_stream(lines):
         t = obj.get("type")
         if t == "stream_event":
             ev = obj.get("event") or {}
-            delta = ev.get("delta") or {}
-            if ev.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
-                txt = delta.get("text") or ""
-                if txt:
-                    saw_delta = True
-                    yield ("text", txt)
+            et = ev.get("type")
+            if et == "content_block_delta":
+                delta = ev.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    txt = delta.get("text") or ""
+                    if txt:
+                        if pending_sep:   # deltas of a NEW assistant message —
+                            txt = "\n\n" + txt   # don't mash multi-turn output
+                            pending_sep = False
+                        saw_delta = True
+                        yield ("text", txt)
+            elif et == "message_stop" and saw_delta:
+                pending_sep = True
         elif t == "assistant" and not saw_delta:
             msg = obj.get("message") or {}
             parts = [c.get("text", "") for c in (msg.get("content") or [])
@@ -156,7 +172,7 @@ def _parse_codex_stream(lines):
     from the turn.completed event (token counts only, no cost)."""
     first = True
     for line in lines:
-        line = line.strip()
+        line = line.strip().lstrip("\ufeff")
         if not line:
             continue
         try:
@@ -191,7 +207,9 @@ def _parse_sse_stream(lines):
     non_sse = []
     saw_sse = False
     for line in lines:
-        line = line.strip()
+        # a leading UTF-8 BOM on the first line would otherwise defeat the
+        # "data:" match and silently drop the first content chunk
+        line = line.strip().lstrip("\ufeff")
         if not line:
             continue
         if not line.startswith("data:"):
@@ -337,6 +355,7 @@ class CliBackend(Backend):
                                  encoding="utf-8", errors="replace", cwd=self.cwd)
         except FileNotFoundError:
             raise BackendError(self.reason())
+        self._proc = p                    # cancel() target while the stream lives
         # drain stderr off-thread (a full pipe would deadlock the child)
         err_chunks = []
         t_err = threading.Thread(target=lambda: err_chunks.append(p.stderr.read()),
@@ -363,6 +382,7 @@ class CliBackend(Backend):
                 elif kind == "usage":
                     self.last_usage = val
             rc = p.wait()
+            t_err.join(timeout=5)         # the drain races us to err_chunks
             if timed_out.is_set():
                 raise BackendError(f"{self.name} timed out after {timeout}s"
                                    + (" (partial answer shown)" if got else ""))
@@ -374,9 +394,18 @@ class CliBackend(Backend):
                 raise BackendError(f"{self.name} returned no output")
         finally:
             watchdog.cancel()
+            self._proc = None
             try:
                 p.kill()      # no-op if already exited
                 p.wait(timeout=5)      # reap (also after an abandoned stream)
+            except Exception:
+                pass
+
+    def cancel(self):
+        p = getattr(self, "_proc", None)
+        if p is not None:
+            try:
+                p.kill()      # EOFs the consumer's blocked readline immediately
             except Exception:
                 pass
 
@@ -487,6 +516,7 @@ class OpenAICompatBackend(Backend):
                 raise BackendError(f"{self.name} request failed: {e}")
         if resp is None:
             raise BackendError(f"{self.name} rejected the streaming request")
+        self._resp = resp                 # cancel() target while the stream lives
         got = False
         try:
             # http.client decodes chunked transfer transparently; iterating the
@@ -505,12 +535,21 @@ class OpenAICompatBackend(Backend):
             raise BackendError(f"{self.name} stream stalled: {e}"
                                + (" (partial answer shown)" if got else ""))
         finally:
+            self._resp = None
             try:
                 resp.close()
             except Exception:
                 pass
         if not got:
             raise BackendError(f"{self.name} returned no output")
+
+    def cancel(self):
+        r = getattr(self, "_resp", None)
+        if r is not None:
+            try:
+                r.close()     # aborts the socket; the blocked read unwinds
+            except Exception:
+                pass
 
     def describe(self) -> str:
         k = f", key ${self.key_env}" if self.needs_key else ", no key"
