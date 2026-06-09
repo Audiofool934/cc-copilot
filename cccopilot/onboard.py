@@ -89,8 +89,8 @@ def detect() -> list:
             status = ("ready · " + c.blurb.split("—")[0].strip()) if ready \
                 else f"`{c.name}` CLI not found on PATH — install it to use this"
         else:  # api
-            status = f"key already set ({c.key_env})" if ready \
-                else f"needs an API key ({c.key_env})"
+            status = f"key set · {c.key_env}" if ready \
+                else f"needs key · {c.key_env}"
         out.append(Detected(c, ready, status))
     return out
 

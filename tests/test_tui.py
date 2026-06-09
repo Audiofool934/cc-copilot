@@ -1323,5 +1323,47 @@ class TestWelcomeScreen(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(app.model)
 
 
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
+    """The slimmed footer's discoverability moved into a rotating tip line."""
+
+    def _session(self):
+        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N
+        real = N.available
+        N.available = lambda b=None: True
+        self.addCleanup(lambda: setattr(N, "available", real))
+        p = write([user("go", 60), asst("ok", 20)])
+        s = ChatSession(p, backend="codex")
+        s.refresh()
+        return s
+
+    def test_tips_exist_and_fit_a_narrow_cockpit(self):
+        self.assertGreaterEqual(len(tui._TIPS), 12)
+        for t in tui._TIPS:
+            self.assertLessEqual(len(t), 64, t)          # narrow-sidebar contract
+            self.assertNotIn("`", t)                     # rendered as plain Text, no md
+
+    def test_resize_keys_hidden_from_footer_essentials_kept(self):
+        show = {b.key: b.show for b in tui.Cockpit.BINDINGS}
+        for hidden in ("shift+up", "shift+down", "ctrl+r", "ctrl+l"):
+            self.assertFalse(show.get(hidden), hidden)   # decluttered (the user's ask)
+        for kept in ("ctrl+t", "ctrl+n", "ctrl+c"):
+            self.assertTrue(show.get(kept), kept)        # the few high-value keys stay
+
+    def test_next_tip_covers_every_tip_before_repeating(self):
+        app = tui.Cockpit(self._session(), poll=999, alerts=False)
+        seen = [app._next_tip() for _ in range(len(tui._TIPS))]
+        self.assertEqual(set(seen), set(tui._TIPS))      # a full non-repeating pass
+
+    async def test_rotate_tip_renders_a_line(self):
+        from textual.widgets import Static
+        app = tui.Cockpit(self._session(), poll=999, alerts=False)
+        async with app.run_test():
+            content = str(app.query_one("#tip", Static).content)
+            self.assertIn("💡", content)                  # the subtle marker
+            self.assertTrue(any(t in content for t in tui._TIPS))
+
+
 if __name__ == "__main__":
     unittest.main()

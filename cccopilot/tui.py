@@ -14,6 +14,7 @@ the I/O surface changes. Textual is imported lazily so the core stays zero-dep.
 from __future__ import annotations
 
 import os
+import random
 import re
 import subprocess
 import threading
@@ -211,6 +212,33 @@ _SLASH_CMDS = [
     ("/quit", "exit the cockpit", False),
 ]
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
+
+# Rotating feature tips shown subtly above the composer (see _rotate_tip). They
+# carry the discoverability the slimmed-down footer no longer shows — ordered
+# from "most useful when you just got back" down to niche keys. Each is one line,
+# <=64 chars so it survives a narrow sidebar. Curated from the core feature set.
+_TIPS = [
+    "/since recaps what the agent did while you were away",
+    "Re-entry greets you: N new since you last looked",
+    "Every recap line cites a transcript line [L#] — never guessed",
+    "/check tells you if it's safe to continue — off-track signals",
+    "/handoff writes a shareable Markdown brief of what changed",
+    "/observe surfaces the next human decision waiting on you",
+    "/brief recaps with sources, no LLM, no guessing",
+    "/diff shows what changed since your last turn",
+    "Read-only: the cockpit never writes to the agent or transcript",
+    "/sessions picks which session(s) the cockpit watches",
+    "/use <n|id> switches the watched session by number or id",
+    "/here watches your OWN current live session",
+    "/scope multi or project widens the evidence across sessions",
+    "One cockpit watches Claude AND Codex at once, by project",
+    "/model switches the backend — Claude, Codex or an API",
+    "/init reopens the model picker; /theme switches the palette",
+    "/resume reopens a past cockpit · /new starts fresh; Q&A stays",
+    "/select or Ctrl+N frees the mouse for native drag-select",
+    "Shift+Up/Down resizes the activity timeline",
+    "/clear or Ctrl+L wipes the view, saved history stays",
+]
 
 
 def _session_picker_label(ref, current_path: str = "") -> str:
@@ -1058,6 +1086,10 @@ class Cockpit(App):
         height: auto; min-height: 1; max-height: 12;
         background: $boost; color: $text; padding: 0 1; text-wrap: wrap;
     }
+    /* rotating feature tip — one subtle muted line on the flat ground, just
+       above the composer. height:1 + no wrap so a long tip clips instead of
+       growing the row and stealing space from the chat. */
+    #tip { height: 1; padding: 0 1; color: $text-muted; text-wrap: nowrap; }
     #composer {
         height: auto; min-height: 3; max-height: 8;
         border: round $accent; padding: 0 1; margin: 0 1;
@@ -1078,7 +1110,7 @@ class Cockpit(App):
     Picker { align: center middle; }
     MultiPicker { align: center middle; }
     WelcomeScreen { align: center middle; }
-    #welcome { width: 66; max-width: 92%; height: auto; max-height: 90%;
+    #welcome { width: 74; max-width: 94%; height: auto; max-height: 90%;
                background: $surface; border: round $accent; padding: 1 2; }
     #welcome-title { text-style: bold; color: $primary; }
     #welcome-intro { color: $text-muted; margin-bottom: 1; }
@@ -1108,10 +1140,12 @@ class Cockpit(App):
     }
     """
 
+    # Footer shows only the few highest-value keys; the rest are still bound but
+    # `show=False` (they'd crowd a narrow cockpit). The hidden ones — resize,
+    # refresh, clear — surface instead in the rotating tip line above the
+    # composer (see _TIPS / _rotate_tip), which is where discovery now lives.
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit"),
-        Binding("ctrl+r", "refresh_now", "refresh"),
-        Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+t", "model", "model"),
         # release the mouse so the TERMINAL does native selection + copy (⌘C):
         # Textual captures the mouse for scroll/click, which blocks the terminal's
@@ -1120,12 +1154,16 @@ class Cockpit(App):
         # the next row and stops the event, so it keeps nav; with no modal open
         # the composer lets ctrl+n bubble here to toggle select mode.
         Binding("ctrl+n", "toggle_select_mode", "select"),
+        Binding("ctrl+r", "refresh_now", "refresh", show=False),
+        Binding("ctrl+l", "clear_chat", "clear view", show=False),
         # resize the activity timeline (the chat fills the rest); persisted.
         # priority so it works while the composer is focused. Shift+arrows are
         # the primary keys — macOS grabs Ctrl+Up/Down for Mission Control, so
         # those stay as a hidden alias for platforms where they get through.
-        Binding("shift+up", "grow_timeline", "taller", priority=True),
-        Binding("shift+down", "shrink_timeline", "shorter", priority=True),
+        # show=False: it was the noisiest pair in the footer (the user's ask) —
+        # it lives in the tips now.
+        Binding("shift+up", "grow_timeline", "taller", priority=True, show=False),
+        Binding("shift+down", "shrink_timeline", "shorter", priority=True, show=False),
         Binding("ctrl+up", "grow_timeline", "taller", priority=True, show=False),
         Binding("ctrl+down", "shrink_timeline", "shorter", priority=True, show=False),
     ]
@@ -1178,6 +1216,7 @@ class Cockpit(App):
         yield timeline
         yield chat
         yield Static("", id="status")
+        yield Static("", id="tip")              # rotating feature tip (subtle)
         slash = OptionList(id="slash")          # `/` command autocomplete
         slash.can_focus = False
         slash.display = False
@@ -1206,8 +1245,10 @@ class Cockpit(App):
         self._update_status()
         composer = self.query_one("#composer", Composer)
         composer.border_title = "› ask the copilot"
-        composer.border_subtitle = "Enter send · Ctrl+J newline · / commands · Ctrl+P palette"
+        composer.border_subtitle = "Enter send · Ctrl+J newline · / commands"
         composer.focus()
+        self._rotate_tip()                                  # show one immediately
+        self.set_interval(16, self._rotate_tip, name="tips")
         self.set_interval(0.12, self._tick_busy, name="busy-spinner")
         self.set_interval(self.poll, self._tick_refresh, name="auto-refresh")
         if self.alerts:
@@ -1267,7 +1308,7 @@ class Cockpit(App):
         # status, composer, footer, and a minimal chat (matters on short terminals
         # and keeps a persisted height sane after moving to a smaller window).
         try:
-            room = self.size.height - 10
+            room = self.size.height - 11   # header+status+tip+composer+footer+min chat
         except Exception:
             room = self.TIMELINE_MAX
         hi = max(self.TIMELINE_MIN, min(self.TIMELINE_MAX, room))
@@ -1285,6 +1326,37 @@ class Cockpit(App):
     def action_shrink_timeline(self) -> None:
         self._apply_timeline_height(getattr(self, "_timeline_height", self.TIMELINE_DEFAULT) - 1)
         PREFS.set("timeline_height", self._timeline_height)
+
+    # ---- rotating feature tips (the slimmed footer's discoverability moved here) ----
+    def _next_tip(self) -> str:
+        """Walk a shuffled order so tips feel random but don't repeat until the
+        whole set has been shown; reshuffle each pass."""
+        if not _TIPS:
+            return ""
+        order = getattr(self, "_tip_order", None)
+        if not order:
+            order = list(range(len(_TIPS)))
+            random.shuffle(order)
+            self._tip_order, self._tip_i = order, 0
+        idx = self._tip_order[self._tip_i]
+        self._tip_i += 1
+        if self._tip_i >= len(self._tip_order):
+            random.shuffle(self._tip_order)
+            self._tip_i = 0
+        return _TIPS[idx]
+
+    def _rotate_tip(self) -> None:
+        txt = self._next_tip()
+        if not txt:
+            return
+        try:
+            w = self.query_one("#tip", Static)
+        except NoMatches:
+            return
+        t = Text()
+        t.append("💡 ", style=_PAL["accent"])
+        t.append(txt, style=_PAL["muted"])
+        w.update(t)
 
     # ---- focus: a click anywhere (or re-entering the app) lands on the
     #      composer, so the user never has to aim at the box, and IME /
