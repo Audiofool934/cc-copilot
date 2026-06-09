@@ -38,6 +38,19 @@ class TestLastLook(unittest.TestCase):
         self.assertIsNone(LL.get("nope"))
         self.assertIsNone(LL.get(""))
 
+    def test_advance_is_forward_only(self):
+        LL.mark("s", 50, "t50", "l50")
+        LL.advance("s", 30, "t30", "l30")           # older → ignored (no rewind)
+        self.assertEqual(LL.get("s")["line"], 50)
+        self.assertEqual(LL.get("s")["ts"], "t50")  # untouched
+        LL.advance("s", 80, "t80", "l80")           # newer → moves forward
+        self.assertEqual(LL.get("s")["line"], 80)
+        self.assertEqual(LL.get("s")["ts"], "t80")
+
+    def test_advance_from_unset_sets_it(self):
+        LL.advance("fresh", 7)
+        self.assertEqual(LL.get("fresh")["line"], 7)
+
     def test_forget(self):
         LL.mark("x", 5)
         LL.forget("x")

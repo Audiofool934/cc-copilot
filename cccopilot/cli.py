@@ -496,9 +496,10 @@ def cmd_since(args) -> int:
         except Exception as e:
             sys.stderr.write(f"# recap failed ({e}); showing evidence\n")
             print(view.text)
-    # advance the marker so the next `since` is incremental (unless --peek)
+    # advance the marker so the next `since` is incremental (unless --peek);
+    # forward-only so a slow recap here can't rewind a concurrent cockpit's mark
     if when in ("last-look", "lastlook", "last") and not getattr(args, "peek", False):
-        LL.mark(key, cur_line, cur_ts, _now_iso())
+        LL.advance(key, cur_line, cur_ts, _now_iso())
     return 0
 
 

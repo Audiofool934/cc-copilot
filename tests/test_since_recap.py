@@ -113,6 +113,19 @@ class TestSinceRecap(unittest.TestCase):
         commit()
         self.assertGreater(int(LL.get(key)["line"]), 1)    # advanced once shown
 
+    def test_deferred_commit_never_rewinds_a_concurrent_advance(self):
+        """While a recap is pending, another /since (or a second cockpit) can move
+        the marker forward; the deferred commit must not rewind it to its older
+        captured tail and re-surface already-reviewed lines."""
+        from cccopilot import lastlook as LL
+        from cccopilot.chat import _now_iso
+        key = self.sess._lastlook_key()
+        LL.mark(key, 1, "", _now_iso())
+        view, raw, commit = self.sess._since_view("last-look")   # captures the tail (~9)
+        LL.mark(key, 100, "newer", _now_iso())    # a concurrent render advanced past it
+        commit()                                   # must NOT move it back to ~9
+        self.assertEqual(int(LL.get(key)["line"]), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

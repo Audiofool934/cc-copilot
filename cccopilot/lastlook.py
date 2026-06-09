@@ -121,6 +121,30 @@ def mark(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
         key, {"line": n, "ts": ts or "", "looked_at": looked_at or ""}))
 
 
+def advance(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
+    """Move the marker forward to ``line`` only if it is newer than what's stored.
+
+    A ``/since`` recap captures the tail when invoked but consumes the marker only
+    once it renders (possibly seconds later, on a worker thread). Meanwhile another
+    ``/since --raw`` or a second cockpit can advance the same key to a newer tail.
+    Writing the older captured line would rewind the marker and re-surface already
+    reviewed lines — so the compare-and-set happens here, atomically under the
+    writer lock, and never goes backward.
+    """
+    if not key or not enabled():
+        return
+    try:
+        n = int(line)
+    except (TypeError, ValueError):
+        return
+
+    def _mut(data):
+        cur = _sanitize(data.get(key)) or {"line": 0}
+        if n > cur["line"]:
+            data[key] = {"line": n, "ts": ts or "", "looked_at": looked_at or ""}
+    _update(_mut)
+
+
 def forget(key: str) -> None:
     """Drop the marker for ``key`` (best-effort)."""
     if not key or not enabled():

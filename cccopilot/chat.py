@@ -395,8 +395,8 @@ class ChatSession:
             view = SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
                             label="last look")
 
-            def commit():                          # consume only on render
-                LL.mark(key, line, ts, _now_iso())
+            def commit():                          # consume only on render; never
+                LL.advance(key, line, ts, _now_iso())   # rewind past a concurrent mark
         else:
             secs = SI.parse_duration(when)
             if secs is None:
