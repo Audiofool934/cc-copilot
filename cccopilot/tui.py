@@ -40,6 +40,7 @@ try:
                                  RichLog, Static, TextArea)
     from textual.widgets.option_list import Option
     from rich.text import Text
+    from rich.cells import cell_len as _cell_len
 except ImportError:
     raise SystemExit(
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
@@ -253,6 +254,36 @@ def _apply_session_selection(session, refs: list, selected_ids: list) -> str:
 
 def _busy_indicator(frame: int) -> str:
     return f"{_BUSY_FRAMES[frame % len(_BUSY_FRAMES)]} answering"
+
+
+def _assemble(segs) -> Text:
+    """Join ``(text, style|None)`` spans into one Text — style None = a raw
+    separator (no color). Used to build the status bar from atomic field spans so
+    nothing is ever split mid-field, and so the result can be measured (.cell_len)
+    to decide whether it fits the current width."""
+    t = Text()
+    for txt, sty in segs:
+        t.append(txt) if sty is None else t.append(txt, style=sty)
+    return t
+
+
+def _pack_rows(parts, w: int, sep: str = " · ") -> list:
+    """Greedy-pack ``sep``-joined parts into rows whose display width is <= ``w``,
+    so each rendered row is ONE visual line (no surprise soft-wrap that would push
+    a stacked status past its height cap and clip a field). A part wider than ``w``
+    gets its own row — the only place a soft-wrap can still happen, and only at
+    pathological widths."""
+    rows, cur = [], ""
+    for p in parts:
+        cand = p if not cur else cur + sep + p
+        if cur and _cell_len(cand) > w:
+            rows.append(cur)
+            cur = p
+        else:
+            cur = cand
+    if cur:
+        rows.append(cur)
+    return rows
 
 
 def _short_activity(text: str, limit: int = 70) -> str:
@@ -897,7 +928,15 @@ class Cockpit(App):
 
     /* status + composer flow at the bottom (above the docked Footer); no
        competing dock:bottom so the composer box is always visible. */
-    #status { height: 1; background: $boost; color: $text; padding: 0 1; }
+    /* height:auto so a narrow sidebar can reflow the status into stacked rows
+       (no field gets cropped); bounded so the long HUD can't starve #chat. The
+       rows are width-packed (see _pack_rows) so they don't soft-wrap, so the cap
+       only needs to clear the worst packed case (~9 rows at a 30-col sidebar with
+       a full HUD). text-wrap:wrap is the safety net for a single over-long field. */
+    #status {
+        height: auto; min-height: 1; max-height: 12;
+        background: $boost; color: $text; padding: 0 1; text-wrap: wrap;
+    }
     #composer {
         height: auto; min-height: 3; max-height: 8;
         border: round $accent; padding: 0 1; margin: 0 1;
@@ -1390,43 +1429,121 @@ class Cockpit(App):
             return _agent_hex(_agent_of(self.session))
         return _PAL["accent"]
 
+    def on_resize(self, event) -> None:
+        # The status bar reflows to the width: a single dense line when it fits,
+        # else stacked rows so a narrow sidebar still shows every field. Re-render
+        # on resize (cheap — a handful of Text appends; the poll timer is 2s).
+        self._update_status()
+
     def _update_status(self):
         status = self._status()
         if status is None:
             return
+        try:
+            w = max(8, self.size.width - 2)        # content width (padding: 0 1)
+        except Exception:
+            w = 90
+        status.update(self._status_text(w))
+
+    def _status_text(self, w: int) -> Text:
+        """The status bar, reflowed to width ``w``. Every field is an atomic styled
+        span; the renderer picks the widest layout that fits so a sidebar keeps all
+        of them (the inline line → a 2-row split → fully stacked rows)."""
         st = self.session.st
-        t = Text()
-        if st is None:                         # history-only (transcript gone)
-            t.append(" ⌁ history-only ", style="bold")
-            t.append(" transcript gone ", style=f"bold {_PAL['bg']} on {_PAL['warning']}")
-            t.append("  ")
-            be = N.backend_name(self.backend).split(" (")[0]
-            t.append("copilot " + be + (":" + self.model if self.model else ""),
-                     style=_PAL["secondary"])
-            t.append(f"   watching {self._evidence_label()}", style=self._watch_hex())
-            status.update(t)
-            return
-        a = A.assess(st)
-        t.append(f" {_STATUS_GLYPH.get(st.status, '·')} {st.status} ", style="bold")
-        t.append("  ")
-        t.append(f" {a.verdict.upper()} ",
-                 style=f"bold {_PAL['bg']} on {_VERDICT_HEX.get(a.verdict, _PAL['muted'])}")
-        t.append("  ")
         be = N.backend_name(self.backend).split(" (")[0]
-        t.append("copilot " + be + (":" + self.model if self.model else ""),
-                 style=_PAL["secondary"])
-        t.append(f"   watching {self._evidence_label()}", style=self._watch_hex())
-        t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
-                 style=_PAL["muted"])
+        copilot = ("copilot " + be + (":" + self.model if self.model else ""),
+                   _PAL["secondary"])
+        watch_lbl, watch_sty = self._evidence_label(), self._watch_hex()
+
+        if st is None:                              # history-only (transcript gone)
+            hist = (" ⌁ history-only ", "bold")
+            gone = (" transcript gone ", f"bold {_PAL['bg']} on {_PAL['warning']}")
+            inline = _assemble([hist, ("  ", None), gone, ("  ", None), copilot,
+                                ("   ", None), ("watching " + watch_lbl, watch_sty)])
+            if inline.cell_len <= w:
+                return inline
+            return _assemble([hist, ("  ", None), gone, ("\n", None), copilot,
+                              ("\n", None), ("↳ " + watch_lbl, watch_sty)])
+
+        a = A.assess(st)
+        chip = (f" {_STATUS_GLYPH.get(st.status, '·')} {st.status} ", "bold")
+        badge = (f" {a.verdict.upper()} ",
+                 f"bold {_PAL['bg']} on {_VERDICT_HEX.get(a.verdict, _PAL['muted'])}")
+        idle = f"idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev"
+        # HUD: reuse the canonical EC formatters as the single source of truth, and
+        # split their " · " output so the stacked layout can wrap on field bounds.
         if self._busy:
-            busy = _busy_indicator(self._busy_frame)
-            if self._ctx_stats is not None:
-                busy += " · " + EC.format_answering(self._ctx_stats, self._out_tokens)
-            t.append("   " + busy, style=_PAL["accent"])
+            ans = (EC.format_answering(self._ctx_stats, self._out_tokens)
+                   if self._ctx_stats is not None else "")
+            hud_str = _busy_indicator(self._busy_frame) + ((" · " + ans) if ans else "")
+            hud_parts, hud_sty = (ans.split(" · ") if ans else []), _PAL["accent"]
         elif self._ctx_stats is not None:
-            t.append("   " + EC.format_hud(self._ctx_stats, self._out_tokens),
-                     style=_PAL["muted"])
-        status.update(t)
+            hud_str = EC.format_hud(self._ctx_stats, self._out_tokens)
+            hud_parts, hud_sty = hud_str.split(" · "), _PAL["muted"]
+        else:
+            hud_str, hud_parts, hud_sty = "", [], _PAL["muted"]
+
+        watch_seg = ("watching " + watch_lbl, watch_sty)
+        idle_seg = (idle, _PAL["muted"])
+
+        # 1) inline — today's single dense line, when it fits.
+        segs = [chip, ("  ", None), badge, ("  ", None), copilot,
+                ("   ", None), watch_seg, ("   ", None), idle_seg]
+        if hud_str:
+            segs += [("   ", None), (hud_str, hud_sty)]
+        inline = _assemble(segs)
+        if inline.cell_len <= w:
+            return inline
+
+        # 2) medium — identity row + an activity/HUD row, when the identity fits.
+        id_row = _assemble([chip, ("  ", None), badge, ("  ", None), copilot,
+                            ("   ", None), watch_seg])
+        if id_row.cell_len <= w:
+            t = Text()
+            t.append_text(id_row)
+            t.append("\n")
+            t.append(idle, style=_PAL["muted"])
+            if hud_str:
+                t.append(" · ")
+                t.append(hud_str, style=hud_sty)   # soft-wraps on " · " (text-wrap)
+            return t
+
+        # 3) narrow stacked — author-controlled rows; complete and clean to ~30 cols.
+        t = Text()
+        pin = _assemble([chip, ("  ", None), badge])
+        if pin.cell_len <= w:                       # PIN: status + verdict share row 1
+            t.append_text(pin)
+        else:                                       # brutal width: badge to its own row
+            t.append(*chip)
+            t.append("\n")
+            t.append(*badge)
+        t.append("\n")
+        t.append(*copilot)
+        # watched session + idle: together if they fit, else one per row.
+        watch_txt = "↳ " + watch_lbl
+        t.append("\n")
+        t.append(watch_txt, style=watch_sty)
+        if _cell_len(watch_txt + " · " + idle) <= w:
+            t.append(" · " + idle, style=_PAL["muted"])
+        else:
+            t.append("\n")
+            t.append(idle, style=_PAL["muted"])
+        # HUD: greedy-pack the " · " parts so every row fits w (no soft-wrap →
+        # the rendered height equals the row count and stays under the cap, so
+        # nothing is clipped). trimmed keeps its own warning-colored row.
+        if self._busy:
+            for row in _pack_rows([_busy_indicator(self._busy_frame)] + hud_parts, w):
+                t.append("\n")
+                t.append(row, style=hud_sty)
+        elif hud_parts:
+            core = [p for p in hud_parts if p != "trimmed"]
+            for row in _pack_rows(core, w):
+                t.append("\n")
+                t.append(row, style=hud_sty)
+            if "trimmed" in hud_parts:
+                t.append("\n")
+                t.append("trimmed", style=_PAL["warning"])
+        return t
 
     def _tick_busy(self) -> None:
         if not self._busy:
