@@ -1260,6 +1260,7 @@ class Cockpit(App):
         self._stream_buf = ""            # chunks so far (re-mount + token estimate)
         self._answer_stop = threading.Event()
         self._answer_handle = None       # in-flight StreamHandle (cancel target)
+        self._answer_store = None        # the conversation the answer belongs to
         self._answer_abandoned = False   # /forget mid-stream: drop, don't persist
         self._slash_open = False
         self._watch_stop = threading.Event()
@@ -1934,6 +1935,7 @@ class Cockpit(App):
         self._stream_md = None
         self._stream_buf = ""
         self._answer_abandoned = False
+        self._answer_store = self.session.store
         self.session.last_context_stats = ctx.stats
         self.session.last_output_tokens = 0
         self._busy = True
@@ -1996,15 +1998,20 @@ class Cockpit(App):
 
     def _answer_chunk(self, store, chunk):
         """Paint one streamed chunk (UI thread). Faithfulness guards: chunks for
-        a conversation the user has switched away from are dropped (the full
-        turn still lands in ITS store via _answer_done), and a widget removed
-        mid-stream (/clear) is re-mounted with the accumulated text so the
-        visible answer never silently loses its head."""
-        if self._answer_abandoned or not self._same_conv(store, self.session.store):
+        a conversation the user has switched away from are not PAINTED (the
+        full turn still lands in ITS store via _answer_done) — but they always
+        accumulate in ``_stream_buf``, which belongs to the in-flight ANSWER,
+        not to the view: switching away and back mid-stream re-mounts from the
+        buffer, and a hidden-while-away gap must not leave a hole in the
+        visible text. A widget removed mid-stream (/clear) is likewise
+        re-mounted with the accumulated text."""
+        if self._answer_abandoned:
             return
         self._stream_buf += chunk
         self._out_tokens = EC.estimate_tokens(self._stream_buf)
         self.session.last_output_tokens = self._out_tokens
+        if not self._same_conv(store, self.session.store):
+            return                      # buffered, just not painted here
         md = self._stream_md
         if md is None or not md.is_attached:
             md = Markdown(self._stream_buf, classes="role-assistant")
@@ -2026,6 +2033,7 @@ class Cockpit(App):
     def _answer_done(self, text, ans, ok, st, store, usage=None):
         self._busy = False
         self._busy_frame = 0
+        self._answer_store = None
         md, buf = self._stream_md, self._stream_buf
         self._stream_md = None
         self._stream_buf = ""
@@ -2537,10 +2545,13 @@ class Cockpit(App):
         if not store.enabled:
             self.notify("history is off — nothing saved to forget", severity="warning")
             return
-        if self._busy:
-            # an in-flight answer must not keep painting into the cleared pane
-            # or re-create the files we are about to delete when it completes —
-            # abandon it (cancel the transport; _answer_done drops it silently).
+        if self._busy and self._same_conv(self._answer_store, store):
+            # an in-flight answer FOR THIS conversation must not keep painting
+            # into the cleared pane or re-create the files we are about to
+            # delete when it completes — abandon it (cancel the transport;
+            # _answer_done drops it silently). An answer running for a
+            # DIFFERENT conversation is left alone: forgetting B must not
+            # discard A's unrelated turn.
             self._answer_abandoned = True
             h = self._answer_handle
             if h is not None:

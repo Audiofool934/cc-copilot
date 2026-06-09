@@ -1576,7 +1576,7 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.history, [])               # partial never recorded
         self.assertEqual(sess.store._load_turns(), [])
 
-    async def test_chunks_for_switched_store_are_dropped(self):
+    async def test_chunks_for_switched_store_buffer_but_do_not_paint(self):
         from textual.widgets import Markdown
         sess = self._session()
         app = tui.Cockpit(sess, poll=999, alerts=False)
@@ -1586,8 +1586,11 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
             before = len(app.query_one("#chat").query(Markdown))
             app._answer_chunk(other_store, "ghost chunk")
             await pilot.pause()
+            # nothing painted into the conversation the user is looking at…
             self.assertEqual(len(app.query_one("#chat").query(Markdown)), before)
-            self.assertEqual(app._stream_buf, "")
+            self.assertIsNone(app._stream_md)
+            # …but the answer's own buffer keeps the text (switch-back repaints)
+            self.assertEqual(app._stream_buf, "ghost chunk")
 
     async def test_clear_midstream_remounts_with_accumulated_text(self):
         sess = self._session()
@@ -1646,6 +1649,7 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.pause()
             app._busy = True                             # mid-answer
+            app._answer_store = sess.store               # …for THIS conversation
             app._answer_chunk(sess.store, "doomed partial ")
             await pilot.pause()
             app.action_forget()                          # deletes the conv dir
@@ -1664,6 +1668,52 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.history, [])
         # the completed turn must NOT re-create the files /forget removed
         self.assertFalse(os.path.exists(sess.store.turns_path))
+
+    async def test_forget_other_conv_leaves_inflight_answer_alone(self):
+        # answer running for conversation A; user switches to B and /forgets B —
+        # A's unrelated turn must NOT be cancelled or dropped
+        from cccopilot import store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            store_a = sess.store
+            app._busy = True
+            app._answer_store = store_a                  # in-flight: conv A
+            store_b = ST.Store("conv-b-to-forget-000", enabled=True)
+            store_b.record_turn("old q", "old a")        # so /forget has files
+            sess.store = store_b                         # user is now viewing B
+            app.action_forget()
+            await pilot.pause()
+            self.assertFalse(app._answer_abandoned)      # A's answer untouched
+            app._answer_done("q for A", "answer for A", True, sess.st, store_a)
+            await pilot.pause()
+        self.assertEqual(store_a._load_turns()[-1]["a"], "answer for A")
+        self.assertFalse(os.path.exists(store_b.turns_path))   # B stayed deleted
+
+    async def test_chunks_while_hidden_buffer_and_repaint_on_return(self):
+        # streaming for conv A; user switches away (chunks arrive unseen) and
+        # returns mid-stream — the re-mounted widget must carry ALL the text,
+        # not just what streamed while A was visible
+        from cccopilot import store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin = sess.store
+            app._busy = True
+            app._answer_store = origin
+            app._answer_chunk(origin, "seen ")
+            await pilot.pause()
+            sess.store = ST.Store("conv-elsewhere-0001", enabled=False)
+            app._rebuild_chat()                          # switch detaches widget
+            await pilot.pause()
+            app._answer_chunk(origin, "hidden ")         # buffered, not painted
+            self.assertEqual(app._stream_buf, "seen hidden ")
+            sess.store = origin                          # user comes back
+            app._answer_chunk(origin, "back")
+            await pilot.pause()
+            self.assertEqual(app._stream_md.source, "seen hidden back")
 
 
 if __name__ == "__main__":
