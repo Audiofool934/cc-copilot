@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.12.1 — 2026-06-09
+
+**Flat (30,30,30) ground — the neutral background is now what you actually see.**
+v0.12.0 set `background` to `#1e1e1e`, but the main panes (header / timeline /
+chat) paint with `$panel`, which was a lighter `#2d2d2d` (45,45,45) — so a
+low-contrast layer floated over the asked-for color and that lighter grey is what
+filled the screen. `$panel` now equals `background`, so the panes sit flush on
+the (30,30,30) ground and separation comes from the borders. A test pins
+`panel == background` so the layer can't creep back.
+
 ## 0.12.0 — 2026-06-09
 
 **A neutral cockpit, and each agent shown in its own color.** The default theme

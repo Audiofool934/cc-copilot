@@ -319,6 +319,10 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         color is literally the Claude×Codex blend it supervises."""
         spec = tui.COCKPIT_THEME_SPECS["cockpit"]
         self.assertEqual(spec["background"], "#1e1e1e")        # rgb(30,30,30)
+        # the main panes (header/timeline/chat) paint with $panel; keep it flush
+        # with the ground so what fills the screen IS the asked-for color, not a
+        # lighter layer floating over it.
+        self.assertEqual(spec["panel"], spec["background"])
 
         def _rgb(h):
             h = h.lstrip("#")

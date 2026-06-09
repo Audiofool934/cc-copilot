@@ -60,8 +60,14 @@ COCKPIT_THEME_SPECS = {
         # color is literally the blend of the two agents it watches.
         "description": "graphite, apricot, blue, and the Claude×Codex blend",
         "primary": "#fab283", "secondary": "#5c9cf5", "accent": "#807ea6",
+        # panel == background: the main panes (header/timeline/chat) sit FLUSH on
+        # the #1e1e1e (30,30,30) ground instead of floating a lighter #2d2d2d
+        # layer over it — so what fills the screen is the asked-for color, and
+        # separation comes from the borders, not a low-contrast filled rectangle.
+        # surface gives the composer a subtle lift; $boost is translucent in
+        # Textual so the status strip just blends (which suits the flat ground).
         "foreground": "#c0caf5", "background": "#1e1e1e",
-        "surface": "#262626", "panel": "#2d2d2d", "boost": "#353535",
+        "surface": "#262626", "panel": "#1e1e1e", "boost": "#353535",
         "success": "#9ece6a", "warning": "#e0af68", "error": "#f7768e",
         "muted": "#6c7086", "dark": True,
     },
