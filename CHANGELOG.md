@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.14.0 — 2026-06-09
+## 0.14.0 — 2026-06-10
 
 **First-run onboarding — pick your model once, instead of silently defaulting.**
 The first time you launch the cockpit (no `~/.cc-copilot.toml` yet), a branded
@@ -24,6 +24,16 @@ config's existence is the "already set up" sentinel.
   and `CC_COPILOT_NO_ONBOARD=1` opts out entirely.
 - The shared, UI-agnostic core lives in `cccopilot.onboard` (zero-dep, fully
   unit-tested), so the TUI screen and the terminal wizard can't drift.
+
+**Cockpit chrome: slimmer footer + a rotating tip line.** The footer now shows
+only the few highest-value keys (`model · select · palette · quit`); refresh,
+clear, and the `Shift+↑/↓` timeline-resize keys are still bound but no longer
+crowd the bar. Their discoverability moves into a new **subtle, rotating tip
+line** above the composer — one muted `💡 …` line that cycles a curated set of
+20 feature tips (shuffled, non-repeating), each ≤64 chars so it survives a narrow
+sidebar, ordered "most useful when you just got back" first. The composer hint is
+trimmed to `Enter send · Ctrl+J newline · / commands`, and the welcome modal was
+widened so API rows don't clip.
 
 ## 0.13.3 — 2026-06-09
 
