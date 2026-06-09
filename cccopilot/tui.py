@@ -1254,6 +1254,11 @@ class Cockpit(App):
         self._busy_frame = 0
         self._ctx_stats = None
         self._out_tokens = 0
+        self._out_exact = False          # backend-reported (no ~) vs chars/4 estimate
+        self._last_cost = None           # USD for the last turn, when reported
+        self._stream_md = None           # live-streaming Markdown widget (if any)
+        self._stream_buf = ""            # chunks so far (re-mount + token estimate)
+        self._answer_stop = threading.Event()
         self._slash_open = False
         self._watch_stop = threading.Event()
         self._watch_path = None
@@ -1356,6 +1361,8 @@ class Cockpit(App):
     def on_unmount(self):
         self._busy = False
         self._watch_stop.set()
+        self._answer_stop.set()         # abandons a live stream; the generator
+                                        # teardown kills the backend subprocess
         # stamp last-look so the next launch's /since shows what happened while away
         try:
             self.session.mark_lastlook()
@@ -1805,7 +1812,9 @@ class Cockpit(App):
             hud_str = _busy_indicator(self._busy_frame) + ((" · " + ans) if ans else "")
             hud_parts, hud_sty = (ans.split(" · ") if ans else []), _PAL["accent"]
         elif self._ctx_stats is not None:
-            hud_str = EC.format_hud(self._ctx_stats, self._out_tokens)
+            hud_str = EC.format_hud(self._ctx_stats, self._out_tokens,
+                                    out_exact=self._out_exact,
+                                    cost_usd=self._last_cost)
             hud_parts, hud_sty = hud_str.split(" · "), _PAL["muted"]
         else:
             hud_str, hud_parts, hud_sty = "", [], _PAL["muted"]
@@ -1911,6 +1920,10 @@ class Cockpit(App):
         ctx = self.session.answer_context(text, history=list(self.session.history))
         self._ctx_stats = ctx.stats
         self._out_tokens = 0
+        self._out_exact = False
+        self._last_cost = None
+        self._stream_md = None
+        self._stream_buf = ""
         self.session.last_context_stats = ctx.stats
         self.session.last_output_tokens = 0
         self._busy = True
@@ -1924,34 +1937,104 @@ class Cockpit(App):
 
     @work(thread=True)
     def _answer(self, text, brief_text, st, history, store):
+        import time as _time
+        h = None
         try:
-            ans = N.chat_brief(brief_text, [], text, model=self.model, backend=self.backend)
-            ok = True
+            h = N.chat_brief_stream(brief_text, [], text, model=self.model,
+                                    backend=self.backend)
+            # coalesce: claude emits token-level deltas (can be > 20/s); batch
+            # anything that arrives within 50ms into one UI update so the loop
+            # paints words, not keystrokes. Chunks slower than that flush as-is.
+            pending = ""
+            last_flush = 0.0
+            for chunk in h:
+                if self._answer_stop.is_set():
+                    return              # app is closing; generator teardown
+                                        # (GeneratorExit) kills the subprocess
+                pending += chunk
+                now = _time.monotonic()
+                if now - last_flush >= 0.05:
+                    self.call_from_thread(self._answer_chunk, store, pending)
+                    pending = ""
+                    last_flush = now
+            if pending and not self._answer_stop.is_set():
+                self.call_from_thread(self._answer_chunk, store, pending)
+            ans, ok = (h.text or ""), True
+            if not ans:
+                ans, ok = "# error: backend returned no output", False
         except Exception as e:
             ans, ok = f"# error: {e}", False
-        self.call_from_thread(self._answer_done, text, ans, ok, st, store)
+        try:
+            self.call_from_thread(self._answer_done, text, ans, ok, st, store,
+                                  h.usage if h is not None else None)
+        except Exception:
+            pass                        # app already shut down mid-answer
 
-    def _answer_done(self, text, ans, ok, st, store):
+    def _answer_chunk(self, store, chunk):
+        """Paint one streamed chunk (UI thread). Faithfulness guards: chunks for
+        a conversation the user has switched away from are dropped (the full
+        turn still lands in ITS store via _answer_done), and a widget removed
+        mid-stream (/clear) is re-mounted with the accumulated text so the
+        visible answer never silently loses its head."""
+        if store is not self.session.store:
+            return
+        self._stream_buf += chunk
+        self._out_tokens = EC.estimate_tokens(self._stream_buf)
+        self.session.last_output_tokens = self._out_tokens
+        md = self._stream_md
+        if md is None or not md.is_attached:
+            md = Markdown(self._stream_buf, classes="role-assistant")
+            self._stream_md = md
+            chat = self.query_one("#chat", VerticalScroll)
+            chat.mount(md)
+            if hasattr(chat, "anchor"):
+                chat.anchor()           # follow growth; released by user scroll
+            else:
+                chat.scroll_end(animate=False)
+            return
+        if hasattr(md, "append"):
+            # incremental: re-parses only the trailing block, and the returned
+            # AwaitComplete schedules itself (fire-and-forget is the contract)
+            md.append(chunk)
+        else:                           # very old Textual: full re-render
+            md.update(self._stream_buf)
+
+    def _answer_done(self, text, ans, ok, st, store, usage=None):
         self._busy = False
         self._busy_frame = 0
-        self._out_tokens = EC.estimate_tokens(ans) if ok else 0
+        md, buf = self._stream_md, self._stream_buf
+        self._stream_md = None
+        self._stream_buf = ""
+        exact = bool(ok and usage and getattr(usage, "exact", False)
+                     and getattr(usage, "output_tokens", 0))
+        self._out_exact = exact
+        self._last_cost = getattr(usage, "cost_usd", None) if (ok and usage) else None
+        self._out_tokens = (usage.output_tokens if exact
+                            else (EC.estimate_tokens(ans) if ok else self._out_tokens))
         self.session.last_output_tokens = self._out_tokens
+        self.session.last_usage = usage if ok else None
         same = store is self.session.store     # still on the originating conversation?
+        live = md is not None and md.is_attached
         if ok:
             # the cockpit's single durable write-site (the REPL has its own in
-            # ChatSession.answer); _answer runs on a worker thread, hence here.
+            # ChatSession._finalize_turn); _answer runs on a worker thread, hence here.
             # Persist to the originating store, even if the user has switched away.
             store.scope = self.session.scope
             store.scope_sessions = list(self.session.scope_sessions)
-            store.record_turn(text, ans, st=st, backend=self.backend, model=self.model)
+            store.record_turn(text, ans, st=st, backend=self.backend, model=self.model,
+                              usage=(usage.as_dict() if usage else None))
             if same:
                 self.session.history.append(("user", text))
                 self.session.history.append(("assistant", ans))
-                self._chat(Markdown(ans, classes="role-assistant"))
+                if not live:            # nothing streamed live (fallback path)
+                    self._chat(Markdown(ans, classes="role-assistant"))
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
         elif same:
-            self._chat(self._role(Text(ans, style=_PAL["error"]), "role-alert"))
+            # keep any partial text the user already saw; the error goes beneath
+            # it. The partial is NOT recorded — only completed answers persist.
+            note = " — partial answer above was not saved" if (live and buf) else ""
+            self._chat(self._role(Text(ans + note, style=_PAL["error"]), "role-alert"))
         self._update_header()
         self._update_status()
 

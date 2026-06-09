@@ -332,12 +332,29 @@ def cmd_brief(args) -> int:
         else:
             sys.stderr.write(f"# narrating via {N.backend_name(be)} …\n")
             try:
-                txt = N.narrate_brief(ev.text, model=getattr(args, "model", None), backend=be)
-                print("\n## 🗣 Narration  _(LLM, grounded in the cited facts above)_\n")
-                print(txt)
+                _stream_out(N.narrate_brief_stream(ev.text,
+                                                   model=getattr(args, "model", None),
+                                                   backend=be),
+                            header="\n## 🗣 Narration  _(LLM, grounded in the "
+                                   "cited facts above)_\n\n")
             except Exception as e:
                 sys.stderr.write(f"# narration failed: {e}\n")
     return 0
+
+
+def _stream_out(handle, header: str = None) -> None:
+    """Print a narrate StreamHandle's chunks to stdout as they arrive.
+    ``header`` is printed just before the first chunk — so a stream that dies
+    before producing anything doesn't leave an orphaned heading."""
+    first = True
+    for chunk in handle:
+        if first and header:
+            sys.stdout.write(header)
+            first = False
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def cmd_ask(args) -> int:
@@ -358,7 +375,8 @@ def cmd_ask(args) -> int:
         return 2
     sys.stderr.write(f"# {N.backend_name(be)} (grounded in expanded evidence context) …\n")
     try:
-        print(N.ask_brief(ctx.text, args.question, model=getattr(args, "model", None), backend=be))
+        _stream_out(N.ask_brief_stream(ctx.text, args.question,
+                                       model=getattr(args, "model", None), backend=be))
     except Exception as e:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 1

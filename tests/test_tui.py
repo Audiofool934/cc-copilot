@@ -1477,5 +1477,136 @@ class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(t in content for t in tui._TIPS))
 
 
+class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
+    """Streamed answers paint progressively, finalize once, and never persist
+    a partial; exact backend usage replaces the chars/4 estimate in the HUD."""
+
+    def setUp(self):
+        import tempfile
+        from cccopilot import narrate as N
+        self.home = tempfile.mkdtemp(prefix="cctui-stream-")
+        self._env = {k: os.environ.get(k) for k in
+                     ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY", "CC_COPILOT_CONFIG")}
+        os.environ["CC_COPILOT_STATE_DIR"] = self.home
+        os.environ["CC_COPILOT_HISTORY"] = "1"
+        os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.home, "none.toml")
+        self._realavail = N.available
+        self._realstream = N.chat_brief_stream
+        N.available = lambda b=None: True
+
+    def tearDown(self):
+        from cccopilot import narrate as N
+        N.available = self._realavail
+        N.chat_brief_stream = self._realstream
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _session(self, sid="sess-A"):
+        from cccopilot.chat import ChatSession
+        p = write([user("task", 100, sessionId=sid), asst("ok", 50), asst("done", 5)],
+                  dir=self.home)
+        s = ChatSession(p, backend="codex", alerts=False)
+        s.refresh()
+        return s
+
+    def _stub_stream(self, chunks, usage=None, fail_after=None):
+        """Patch narrate.chat_brief_stream with a StreamHandle over a stub."""
+        from cccopilot import narrate as N
+        from cccopilot import backends as BK
+
+        class _Stub:
+            last_usage = None
+
+        stub = _Stub()
+
+        def gen():
+            for i, c in enumerate(chunks):
+                if fail_after is not None and i >= fail_after:
+                    raise BK.BackendError("stream died")
+                yield c
+            stub.last_usage = usage
+
+        N.chat_brief_stream = (lambda brief, hist, q, model=None, backend=None:
+                               N.StreamHandle(stub, gen()))
+
+    async def test_streamed_answer_finalizes_with_exact_usage(self):
+        from cccopilot import backends as BK
+        from textual.widgets import Markdown
+        self._stub_stream(["streamed ", "answer [L1]"],
+                          usage=BK.Usage(100, 42, cost_usd=0.05))
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted("what happened?"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            mds = app.query_one("#chat").query(Markdown)
+            self.assertEqual(len(mds), 1)
+            # the APPENDED chunks must actually land in the widget (append is
+            # async under the hood — a silent no-op here means broken streaming)
+            self.assertEqual(mds[0].source, "streamed answer [L1]")
+        self.assertEqual(sess.history[-1], ("assistant", "streamed answer [L1]"))
+        self.assertEqual(app._out_tokens, 42)            # exact, not chars/4
+        self.assertTrue(app._out_exact)
+        self.assertEqual(app._last_cost, 0.05)
+        turns = sess.store._load_turns()
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["usage"]["output_tokens"], 42)
+
+    async def test_midstream_error_keeps_partial_persists_nothing(self):
+        self._stub_stream(["partial text ", "never arrives"], fail_after=1)
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted("q?"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            alerts = [w for w in app.query_one("#chat").children
+                      if "role-alert" in w.classes]
+            self.assertTrue(alerts)
+            self.assertIn("not saved", str(alerts[-1].render()))
+        self.assertEqual(sess.history, [])               # partial never recorded
+        self.assertEqual(sess.store._load_turns(), [])
+
+    async def test_chunks_for_switched_store_are_dropped(self):
+        from textual.widgets import Markdown
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            other_store = object()                       # not the current store
+            before = len(app.query_one("#chat").query(Markdown))
+            app._answer_chunk(other_store, "ghost chunk")
+            await pilot.pause()
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), before)
+            self.assertEqual(app._stream_buf, "")
+
+    async def test_clear_midstream_remounts_with_accumulated_text(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._answer_chunk(sess.store, "first half ")
+            await pilot.pause()
+            first_md = app._stream_md
+            self.assertTrue(first_md.is_attached)
+            app.action_clear_chat()                      # user clears mid-stream
+            await pilot.pause()
+            self.assertFalse(first_md.is_attached)
+            app._answer_chunk(sess.store, "second half")
+            await pilot.pause()
+            # a NEW widget carries the FULL accumulated text, not just the tail
+            self.assertIsNot(app._stream_md, first_md)
+            self.assertTrue(app._stream_md.is_attached)
+            self.assertEqual(app._stream_buf, "first half second half")
+
+
 if __name__ == "__main__":
     unittest.main()

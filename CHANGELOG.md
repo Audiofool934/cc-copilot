@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+**Streaming answers — the copilot talks while it thinks.** Chat answers in the
+cockpit and the REPL, `cc-copilot ask`, and `brief --narrate` now render
+incrementally as the model produces them instead of blocking on a spinner until
+the full answer lands. Every backend streams through one new seam
+(`Backend.stream()` with a blocking single-chunk fallback, so custom CLIs and
+older agent builds keep working unchanged):
+
+- **claude** — true token-level deltas via `claude -p --output-format
+  stream-json --verbose --include-partial-messages`, gated on a one-time
+  `--help` capability probe so older CLIs fall back cleanly.
+- **codex** — `codex exec --json` lifecycle events (codex emits the message
+  whole; the win is exact usage below). `stdin` is now closed for CLI backends
+  so a piped stdin can never hang `codex exec`.
+- **OpenAI-compatible HTTP** (deepseek/openai/openrouter/ollama/custom) —
+  stdlib-only SSE (`stream: true`), with a one-shot retry without
+  `stream_options` for servers that reject it, and a tolerant fallback when a
+  server ignores `stream: true` and answers with one JSON body.
+
+**Exact token usage replaces the chars/4 guess where the backend reports it.**
+The claude result event (tokens + real `$` cost), the codex `turn.completed`
+event, and the SSE/blocking `usage` object now flow into the HUD — `out 1.2k`
+(no `~`) when exact, plus the turn's cost for claude — and into each persisted
+turn in `turns.jsonl` (`"usage": {...}`).
+
+Faithfulness holds under streaming, by construction:
+
+- a partial answer is **never persisted** — history and `turns.jsonl` are
+  written only after a stream completes; a mid-stream error keeps the partial
+  text visible with an explicit "partial answer above was not saved" note;
+- chunks for a conversation you switched away from are dropped on screen while
+  the completed turn still lands in **its own** store (unchanged contract);
+- `/clear` mid-stream re-mounts the answer with the full accumulated text, so
+  the visible answer never silently loses its head;
+- the REPL holds its print lock for the whole stream, so background alerts
+  queue and print after the answer instead of splicing into it.
+
+Cockpit rendering uses `Markdown.append` (trailing-block re-parse) with 50 ms
+worker-side coalescing — claude's token deltas paint as words, not keystrokes —
+and the chat pane anchors to the bottom while streaming, released the moment
+you scroll up. `CC_COPILOT_STREAM=0` opts out (everything then behaves exactly
+as before). 33 new tests (357 total).
+
 ## 0.14.1 — 2026-06-10
 
 **Fix: switching to an API provider via `/model` now prompts for its key.** The

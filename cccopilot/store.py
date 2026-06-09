@@ -200,12 +200,13 @@ class Store:
         return os.path.join(self.dir, "memory.json")
 
     # ---- write (best-effort) ----
-    def record_turn(self, q: str, a: str, st=None, backend=None, model=None) -> bool:
+    def record_turn(self, q: str, a: str, st=None, backend=None, model=None,
+                    usage=None) -> bool:
         if not self.enabled:
             return False
         try:
             self._refresh_from(st)
-            self._write(q, a, st, backend, model)
+            self._write(q, a, st, backend, model, usage)
             return True
         except Exception as e:        # best-effort: a storage error never breaks an answer
             _warn_once(f"cc-copilot: history write failed ({e}); continuing in-memory only")
@@ -244,7 +245,7 @@ class Store:
             self.cwd = self.cwd or (getattr(tr, "cwd", "") or "")
             self.title = (getattr(tr, "title", "") or "") or self.title
 
-    def _write(self, q, a, st, backend, model):
+    def _write(self, q, a, st, backend, model, usage=None):
         os.makedirs(self.dir, mode=0o700, exist_ok=True)
         _chmod(self.dir, 0o700)
         _chmod(_conv_root(), 0o700)
@@ -263,7 +264,7 @@ class Store:
                     prefix = "\n"          # close a torn final line so the new turn
                                            # is its own parseable line, not glued on
                 fh.seek(0, os.SEEK_END)
-                fh.write(prefix + json.dumps(self._turn(q, a, st, backend, model),
+                fh.write(prefix + json.dumps(self._turn(q, a, st, backend, model, usage),
                                              ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -286,9 +287,9 @@ class Store:
                 "transcript": self.transcript, "created": time.time(),
                 "scope": self.scope, "scope_sessions": list(self.scope_sessions or [])}
 
-    def _turn(self, q, a, st, backend, model) -> dict:
+    def _turn(self, q, a, st, backend, model, usage=None) -> dict:
         tr = getattr(st, "tr", None)
-        return {
+        rec = {
             "kind": "turn", "id": "%020d" % time.time_ns(), "ts": time.time(),
             "q": q, "a": a, "backend": backend, "model": model,
             "obs": "%s:%d" % (_host(), os.getpid()),
@@ -302,6 +303,9 @@ class Store:
                 "scope_sessions": list(self.scope_sessions or []),
             },
         }
+        if usage:
+            rec["usage"] = dict(usage)
+        return rec
 
     def _write_meta(self, n, q, a, backend, model):
         prev = _read_json(self.meta_path) or {}
