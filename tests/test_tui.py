@@ -313,6 +313,52 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
                         "warning", "error", "muted"):
                 self.assertIn(key, spec)
 
+    async def test_neutral_ground_and_agent_blend_accent(self):
+        """The cockpit ground is neutral grey (not the old blue-ink), and its
+        accent IS the midpoint of the two agents' brand colors — the copilot's
+        color is literally the Claude×Codex blend it supervises."""
+        spec = tui.COCKPIT_THEME_SPECS["cockpit"]
+        self.assertEqual(spec["background"], "#1e1e1e")        # rgb(30,30,30)
+
+        def _rgb(h):
+            h = h.lstrip("#")
+            return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+        claude, codex = _rgb(tui._AGENT_HEX["claude"]), _rgb(tui._AGENT_HEX["codex"])
+        mid = tuple(round((a + b) / 2) for a, b in zip(claude, codex))
+        self.assertEqual(_rgb(spec["accent"]), mid)            # #807ea6 = blend
+
+    async def test_agent_hex_maps_brands_and_falls_back_to_accent(self):
+        self.assertEqual(tui._agent_hex("claude"), "#cb7d5b")
+        self.assertEqual(tui._agent_hex("Codex"), "#347ff2")   # case-insensitive
+        # unknown / missing agent shows the copilot's own accent, not a stray hue
+        self.assertEqual(tui._agent_hex("gemini"), tui._PAL["accent"])
+        self.assertEqual(tui._agent_hex(""), tui._PAL["accent"])
+
+    async def test_activity_line_paints_agent_label_in_brand_hue(self):
+        """The timeline `agent` label is styled with the passed-in brand hue, so a
+        Codex row glows blue and a Claude row rust even in a mixed multi-session
+        view (each row carries its own session's color)."""
+        rec = types.SimpleNamespace(
+            kind="agent_text", hhmm="10:00", text="done", housekeeping=False,
+            tool_name=None, tool_input=None, is_error=False)
+        line = tui._activity_line(rec, "#347ff2")
+        agent_span = next(s for s in line.spans if line.plain[s.start:s.end] == "agent")
+        self.assertEqual(agent_span.style, "#347ff2")
+
+    async def test_scoped_prefix_preserves_agent_brand_span(self):
+        """In a multi-session timeline the sid-prefixed row must keep its
+        per-agent `agent` hue — `_prefixed_activity_line` preserves the spans
+        instead of flattening the row to one muted color."""
+        rec = types.SimpleNamespace(
+            kind="agent_text", hhmm="10:00", text="done", housekeeping=False,
+            tool_name=None, tool_input=None, is_error=False)
+        line = tui._activity_line(rec, "#347ff2")          # Codex blue
+        prefixed = tui._prefixed_activity_line("ab12cd34", line)
+        agent_span = next(s for s in prefixed.spans
+                          if prefixed.plain[s.start:s.end] == "agent")
+        self.assertEqual(agent_span.style, "#347ff2")
+
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
@@ -370,6 +416,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("agent", joined)
         self.assertIn("done", joined)
         self.assertNotIn("window-1", joined)
+
+    async def test_watched_agent_label_uses_brand_color(self):
+        """End to end: watching a Claude session paints its identity spans (the
+        header's "<agent> session" and the status-line `watching …`) in Claude's
+        brand rust, not the generic accent."""
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        self.assertEqual(tui._agent_of(sess), "claude")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(92, 30)) as pilot:
+            await pilot.pause()
+            head = app.query_one("#status-header", Static).content
+            hspan = next(s for s in head.spans
+                         if head.plain[s.start:s.end] == "claude session")
+            self.assertEqual(hspan.style, "#cb7d5b")
+            status = app.query_one("#status", Static).content
+            wspan = next(s for s in status.spans
+                         if "watching claude session" in status.plain[s.start:s.end])
+            self.assertEqual(wspan.style, "#cb7d5b")
 
     async def test_chat_and_timeline_panes_align(self):
         """Chat and timeline are the same (full) width so their right-edge
