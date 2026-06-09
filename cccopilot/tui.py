@@ -1175,6 +1175,10 @@ class Cockpit(App):
             else:
                 rl.scroll_to(y=prev_y, animate=False, force=True)   # x left untouched
         else:
+            # evidence switch / first build: land on the newest line at column 0.
+            # rl.clear() already reset x→0, and scroll_end lands at (x=0, y=max) —
+            # NOT the far right — so a new session shows line starts (timestamps,
+            # tool names), never the tail of a long row.
             rl.scroll_end(animate=False)
 
     def _evidence_sig(self):
