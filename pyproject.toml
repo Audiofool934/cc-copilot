@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-copilot"
-version = "0.13.2"
+dynamic = ["version"]                  # single-sourced from cccopilot/__init__.__version__
 description = "Read-only shadow-memory sidecar for coding agents: faithful, evidence-cited recap + safety judgment + grounded chat."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,6 +39,9 @@ Issues = "https://github.com/Audiofool934/cc-copilot/issues"
 
 [project.scripts]
 cc-copilot = "cccopilot.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "cccopilot.__version__" }   # the one place to bump for a release
 
 [tool.setuptools.packages.find]
 include = ["cccopilot*"]               # cccopilot AND cccopilot.sources (the adapters)

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.13.3 — 2026-06-09
+
+**Maintenance: the version is single-sourced.** `pyproject.toml` now reads the
+version dynamically from `cccopilot/__init__.__version__`, so cutting a release
+is a **one-line** bump (no more keeping two files in lockstep). The release
+workflow's guard validates the *built wheel's* version against the tag, so a
+mismatch still can't publish. No runtime changes.
+
 ## 0.13.2 — 2026-06-09
 
 **Installable in one command — published to PyPI.** No more cloning the repo:

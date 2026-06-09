@@ -48,9 +48,9 @@ supply-chain control, swap that ref and bump it manually on each action release.
 Make sure the `tests` workflow is green on `main` first — the publish workflow
 builds and validates but does **not** run the test matrix.
 
-1. Bump the version in **both** `pyproject.toml` and `cccopilot/__init__.py` in
-   one commit (the workflow fails if the tag doesn't match *either* — they must
-   be in lockstep).
+1. Bump the version in **one place** — `cccopilot/__init__.py` (`__version__`).
+   `pyproject.toml` reads it dynamically, so there's nothing else to edit. The
+   workflow fails if the tag doesn't match the built wheel's version.
 2. Add a `CHANGELOG.md` entry.
 3. Commit, then tag and push:
    ```bash

@@ -29,16 +29,17 @@ jobs:
       - name: Metadata renders on PyPI (twine check)
         run: python -m twine check dist/*
 
-      - name: Tag must match the package version (both sources)
+      - name: Tag must match the built version
         run: |
           TAG="${GITHUB_REF_NAME#v}"
+          # the version is single-sourced from cccopilot/__init__.py; validate the
+          # ACTUAL built artifact (its filename carries the resolved version) so a
+          # wrong tag->version pair — unrecoverable on PyPI — can't slip through.
           INIT="$(python -c 'import cccopilot; print(cccopilot.__version__)')"
-          PROJ="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          echo "tag=$TAG  __init__=$INIT  pyproject=$PROJ"
-          # check BOTH — the published wheel's version comes from pyproject, and a
-          # wrong tag->version pair can't be re-uploaded to PyPI.
-          if [ "$TAG" != "$INIT" ] || [ "$TAG" != "$PROJ" ]; then
-            echo "::error::version mismatch — tag v$TAG, __init__ $INIT, pyproject $PROJ. Bump both in lockstep."
+          BUILT="$(basename dist/*.whl | sed -E 's/^cc_copilot-([^-]+)-.*/\1/')"
+          echo "tag=$TAG  __init__=$INIT  built-wheel=$BUILT"
+          if [ "$TAG" != "$BUILT" ]; then
+            echo "::error::tag v$TAG does not match the built wheel $BUILT (single source: cccopilot/__init__.py = $INIT). Bump cccopilot/__init__.py to match the tag."
             exit 1
           fi
 
