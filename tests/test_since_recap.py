@@ -28,6 +28,8 @@ class TestSinceRecap(unittest.TestCase):
     def setUp(self):
         self._real_recap = N.recap_since
         self._real_avail = N.available
+        self._saved_state = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="ccsincestate-")
         self.calls = []
 
         def fake_recap(text, model=None, backend=None):
@@ -41,6 +43,10 @@ class TestSinceRecap(unittest.TestCase):
     def tearDown(self):
         N.recap_since = self._real_recap
         N.available = self._real_avail
+        if self._saved_state is None:
+            os.environ.pop("CC_COPILOT_STATE_DIR", None)
+        else:
+            os.environ["CC_COPILOT_STATE_DIR"] = self._saved_state
 
     def test_recap_by_default_with_evidence_beneath(self):
         out = self.sess._since("30m")
@@ -80,18 +86,32 @@ class TestSinceRecap(unittest.TestCase):
         self.assertIn("recap unavailable", out)
         self.assertIn("[L", out)                               # evidence still shown
 
-    def test_since_view_parses_raw_and_returns_tuple(self):
+    def test_since_view_parses_raw_and_returns_triple(self):
         res = self.sess._since_view("30m --raw")
         self.assertIsInstance(res, tuple)
-        view, raw = res
+        view, raw, commit = res
         self.assertTrue(raw)
         self.assertTrue(view.has_changes)
+        self.assertTrue(callable(commit))
 
     def test_since_view_edge_message_is_str(self):
-        # an unknown duration is an edge-case string, not a (view, raw) tuple
+        # an unknown duration is an edge-case string, not a (view, raw, commit) tuple
         res = self.sess._since_view("banana")
         self.assertIsInstance(res, str)
         self.assertIn("unknown time", res)
+
+    def test_last_look_marker_consumed_only_on_commit(self):
+        """The marker must advance only when the recap is actually shown — so a
+        dropped async recap (after an evidence switch) doesn't lose the delta."""
+        from cccopilot import lastlook as LL
+        from cccopilot.chat import _now_iso
+        key = self.sess._lastlook_key()
+        LL.mark(key, 1, "", _now_iso())           # an early mark → a real delta
+        view, raw, commit = self.sess._since_view("last-look")
+        self.assertTrue(view.has_changes)
+        self.assertEqual(int(LL.get(key)["line"]), 1)      # NOT advanced yet
+        commit()
+        self.assertGreater(int(LL.get(key)["line"]), 1)    # advanced once shown
 
 
 if __name__ == "__main__":

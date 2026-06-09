@@ -413,13 +413,16 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
     async def test_cockpit_since_recap_dropped_after_evidence_switch(self):
         """If the user switches evidence while a /since recap runs, the result —
         whose citations are about the OLD session — must be dropped, not rendered
-        under the new transcript."""
+        under the new transcript, AND the last-look marker must NOT advance (else
+        the dropped delta is lost forever)."""
         import json
         import tempfile
         from textual.widgets import Static
-        from cccopilot import narrate as N
-        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N, lastlook as LL
+        from cccopilot.chat import ChatSession, _now_iso
         real_recap, real_avail = N.recap_since, N.available
+        saved_state = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="cctswstate-")
         try:
             d = tempfile.mkdtemp(prefix="cctswitch-")
             p = os.path.join(d, "s.jsonl")
@@ -431,6 +434,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                             "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
                             "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
             sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+            key = sess._lastlook_key()
+            LL.mark(key, 1, "", _now_iso())                  # early mark → real delta
             app = tui.Cockpit(sess, poll=999, alerts=False)
             N.available = lambda be=None: True
             # the model call "takes a while" during which the user switches evidence
@@ -440,15 +445,20 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             N.recap_since = recap_then_switch
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app._meta("/since 30m")
+                app._meta("/since")                          # last-look path
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 blob = "\n".join(str(getattr(s, "content", "") or "")
                                  for s in app.query("#chat Static"))
                 self.assertNotIn("STALE_RECAP", blob)         # dropped, not mis-rendered
                 self.assertFalse(app._busy)                   # spinner still cleared
+                self.assertEqual(int(LL.get(key)["line"]), 1)  # marker preserved (delta survives)
         finally:
             N.recap_since, N.available = real_recap, real_avail
+            if saved_state is None:
+                os.environ.pop("CC_COPILOT_STATE_DIR", None)
+            else:
+                os.environ["CC_COPILOT_STATE_DIR"] = saved_state
 
     async def test_status_header_shows_session_mode(self):
         from textual.widgets import Static

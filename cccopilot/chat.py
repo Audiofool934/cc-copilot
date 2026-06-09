@@ -362,13 +362,18 @@ class ChatSession:
         res = self._since_view(arg)
         if isinstance(res, str):
             return res
-        view, raw = res
-        return self._since_finish(view, raw)
+        view, raw, commit = res
+        out = self._since_finish(view, raw)
+        commit()                                   # shown now → advance the marker
+        return out
 
     def _since_view(self, arg: str):
-        """Deterministic half: parse ``arg``, build the SinceView, and advance the
-        last-look marker. Returns ``(view, raw)`` or an edge-case message string.
-        ``--raw`` forces the cited delta with no model call."""
+        """Deterministic half: parse ``arg`` and build the SinceView. Returns
+        ``(view, raw, commit)`` or an edge-case message string. ``--raw`` forces
+        the cited delta with no model call. ``commit`` advances the last-look
+        marker and MUST be called only once the recap/evidence is actually shown —
+        the TUI may drop an async recap after an evidence switch, and consuming the
+        marker before that would silently lose the delta."""
         if self.st is None:
             return "(no live session — transcript gone; nothing to diff)"
         toks = [t for t in (arg or "").split() if t]
@@ -377,6 +382,7 @@ class ChatSession:
         when = " ".join(toks).strip().lower() or "last-look"
         line, ts = self._cur_line()
         key = self._lastlook_key()
+        commit = lambda: None                      # durations don't move the marker
         if when in ("last-look", "lastlook", "last"):
             if not LL.enabled():
                 return ("last-look tracking is off (persistence disabled). "
@@ -388,13 +394,15 @@ class ChatSession:
                         f"Run /since again after the agent works, or `/since 30m` for a window.")
             view = SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
                             label="last look")
-            LL.mark(key, line, ts, _now_iso())     # consume: next /since is incremental
+
+            def commit():                          # consume only on render
+                LL.mark(key, line, ts, _now_iso())
         else:
             secs = SI.parse_duration(when)
             if secs is None:
                 return f"unknown time {when!r} — use 'last-look' or a duration like 30m / 2h / 1d"
             view = SI.build(self.st.tr, self.st, seconds=secs, label=when)
-        return (view, raw)
+        return (view, raw, commit)
 
     def _since_finish(self, view, raw: bool) -> str:
         """Recap-by-default: an LLM recap grounded in the delta with the cited

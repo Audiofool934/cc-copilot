@@ -1468,9 +1468,10 @@ class Cockpit(App):
         if isinstance(res, str):                 # edge-case message (no mark, etc.)
             self._collapsible(title, res)
             return
-        view, raw = res
+        view, raw, commit = res
         if raw or not view.has_changes or not N.available(self.backend) or self._busy:
             self._collapsible(title, view.text)  # deterministic, instant
+            commit()                             # shown → advance the marker
             return
         self._busy = True
         self._busy_frame = 0
@@ -1480,27 +1481,28 @@ class Cockpit(App):
         self._update_status()
         # capture which evidence this recap is ABOUT — if the user switches
         # (/use, /sessions, /here, /resume, /new) while it runs, its citations no
-        # longer match the current session, so we drop it instead of rendering it
-        # under the wrong transcript.
-        self._since_recap(title, view, self._evidence_sig())
+        # longer match the current session, so we drop it (and leave the last-look
+        # marker un-consumed) instead of rendering it under the wrong transcript.
+        self._since_recap(title, view, self._evidence_sig(), commit)
 
     @work(thread=True)
-    def _since_recap(self, title, view, origin):
+    def _since_recap(self, title, view, origin, commit):
         try:
             recap = N.recap_since(view.text, model=self.model, backend=self.backend)
             out = self.session._compose_since(recap, view)
         except Exception as e:
             out = view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
-        self.call_from_thread(self._since_done, title, out, origin)
+        self.call_from_thread(self._since_done, title, out, origin, commit)
 
-    def _since_done(self, title, out, origin):
+    def _since_done(self, title, out, origin, commit):
         self._busy = False
         self._busy_frame = 0
         if self._evidence_sig() == origin:
             self._collapsible(title, out)
+            commit()                             # rendered → advance the marker
         else:
             self.notify(f"dropped {title} recap — you switched evidence while it ran",
-                        severity="warning")
+                        severity="warning")      # not committed → delta survives
         self._update_status()
 
     # ---- background watcher ----
