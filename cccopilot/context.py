@@ -84,8 +84,13 @@ def estimate_tokens(text: str) -> int:
     return max(1, (len(text or "") + 3) // 4)
 
 
-def format_hud(stats: ContextStats, output_tokens: int = None) -> str:
-    """Compact context usage line for TUI/CLI surfaces."""
+def format_hud(stats: ContextStats, output_tokens: int = None,
+               out_exact: bool = False, cost_usd: float = None) -> str:
+    """Compact context usage line for TUI/CLI surfaces.
+
+    ``out_exact`` means ``output_tokens`` is backend-reported, not the local
+    chars/4 estimate — shown without the ``~``. ``cost_usd`` is appended when
+    the backend reported it (the claude CLI does)."""
     parts = [
         f"ctx ~{_tok(stats.estimated_tokens)} / {_tok(stats.budget_tokens)}",
         f"raw {_tok(stats.raw_tokens)}",
@@ -95,15 +100,20 @@ def format_hud(stats: ContextStats, output_tokens: int = None) -> str:
         f"index {_tok(stats.index_tokens)}",
     ]
     if output_tokens is not None:
-        parts.insert(1, f"out ~{_tok(output_tokens)}")
+        mark = "" if out_exact else "~"
+        parts.insert(1, f"out {mark}{_tok(output_tokens)}")
+    if cost_usd is not None:
+        parts.append("$<0.01" if 0 < cost_usd < 0.005 else f"${cost_usd:.2f}")
     if stats.truncated:
         parts.append("trimmed")
     return " · ".join(parts)
 
 
-def format_answering(stats: ContextStats, output_tokens: int = 0) -> str:
+def format_answering(stats: ContextStats, output_tokens: int = 0,
+                     out_exact: bool = False) -> str:
     raw_pct = int(round(100 * stats.raw_tokens / max(1, stats.estimated_tokens)))
-    return (f"in ~{_tok(stats.estimated_tokens)} · out ~{_tok(output_tokens)} · "
+    mark = "" if out_exact else "~"
+    return (f"in ~{_tok(stats.estimated_tokens)} · out {mark}{_tok(output_tokens)} · "
             f"window {_tok(stats.budget_tokens)} · raw {raw_pct}%")
 
 

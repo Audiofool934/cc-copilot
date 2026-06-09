@@ -1477,5 +1477,244 @@ class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(t in content for t in tui._TIPS))
 
 
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
+    """Streamed answers paint progressively, finalize once, and never persist
+    a partial; exact backend usage replaces the chars/4 estimate in the HUD."""
+
+    def setUp(self):
+        import tempfile
+        from cccopilot import narrate as N
+        self.home = tempfile.mkdtemp(prefix="cctui-stream-")
+        self._env = {k: os.environ.get(k) for k in
+                     ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY", "CC_COPILOT_CONFIG")}
+        os.environ["CC_COPILOT_STATE_DIR"] = self.home
+        os.environ["CC_COPILOT_HISTORY"] = "1"
+        os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.home, "none.toml")
+        self._realavail = N.available
+        self._realstream = N.chat_brief_stream
+        N.available = lambda b=None: True
+
+    def tearDown(self):
+        from cccopilot import narrate as N
+        N.available = self._realavail
+        N.chat_brief_stream = self._realstream
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _session(self, sid="sess-A"):
+        from cccopilot.chat import ChatSession
+        p = write([user("task", 100, sessionId=sid), asst("ok", 50), asst("done", 5)],
+                  dir=self.home)
+        s = ChatSession(p, backend="codex", alerts=False)
+        s.refresh()
+        return s
+
+    def _stub_stream(self, chunks, usage=None, fail_after=None):
+        """Patch narrate.chat_brief_stream with a StreamHandle over a stub."""
+        from cccopilot import narrate as N
+        from cccopilot import backends as BK
+
+        class _Stub:
+            last_usage = None
+
+        stub = _Stub()
+
+        def gen():
+            for i, c in enumerate(chunks):
+                if fail_after is not None and i >= fail_after:
+                    raise BK.BackendError("stream died")
+                yield c
+            stub.last_usage = usage
+
+        N.chat_brief_stream = (lambda brief, hist, q, model=None, backend=None:
+                               N.StreamHandle(stub, gen()))
+
+    async def test_streamed_answer_finalizes_with_exact_usage(self):
+        from cccopilot import backends as BK
+        from textual.widgets import Markdown
+        self._stub_stream(["streamed ", "answer [L1]"],
+                          usage=BK.Usage(100, 42, cost_usd=0.05))
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted("what happened?"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            mds = app.query_one("#chat").query(Markdown)
+            self.assertEqual(len(mds), 1)
+            # the APPENDED chunks must actually land in the widget (append is
+            # async under the hood — a silent no-op here means broken streaming)
+            self.assertEqual(mds[0].source, "streamed answer [L1]")
+        self.assertEqual(sess.history[-1], ("assistant", "streamed answer [L1]"))
+        self.assertEqual(app._out_tokens, 42)            # exact, not chars/4
+        self.assertTrue(app._out_exact)
+        self.assertEqual(app._last_cost, 0.05)
+        turns = sess.store._load_turns()
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["usage"]["output_tokens"], 42)
+
+    async def test_midstream_error_keeps_partial_persists_nothing(self):
+        self._stub_stream(["partial text ", "never arrives"], fail_after=1)
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted("q?"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            alerts = [w for w in app.query_one("#chat").children
+                      if "role-alert" in w.classes]
+            self.assertTrue(alerts)
+            self.assertIn("not saved", str(alerts[-1].render()))
+        self.assertEqual(sess.history, [])               # partial never recorded
+        self.assertEqual(sess.store._load_turns(), [])
+
+    async def test_chunks_for_switched_store_buffer_but_do_not_paint(self):
+        from textual.widgets import Markdown
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            other_store = object()                       # not the current store
+            before = len(app.query_one("#chat").query(Markdown))
+            app._answer_chunk(other_store, "ghost chunk")
+            await pilot.pause()
+            # nothing painted into the conversation the user is looking at…
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), before)
+            self.assertIsNone(app._stream_md)
+            # …but the answer's own buffer keeps the text (switch-back repaints)
+            self.assertEqual(app._stream_buf, "ghost chunk")
+
+    async def test_clear_midstream_remounts_with_accumulated_text(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._answer_chunk(sess.store, "first half ")
+            await pilot.pause()
+            first_md = app._stream_md
+            self.assertTrue(first_md.is_attached)
+            app.action_clear_chat()                      # user clears mid-stream
+            await pilot.pause()
+            self.assertFalse(first_md.is_attached)
+            app._answer_chunk(sess.store, "second half")
+            await pilot.pause()
+            # a NEW widget carries the FULL accumulated text, not just the tail
+            self.assertIsNot(app._stream_md, first_md)
+            self.assertTrue(app._stream_md.is_attached)
+            self.assertEqual(app._stream_buf, "first half second half")
+
+    async def test_switch_away_and_back_still_renders_completed_answer(self):
+        # /resume back to the SAME conversation builds a NEW Store object for
+        # the same conv_id — the finished answer must render and join history,
+        # not vanish until the next reattach (store identity ≠ conv identity)
+        from cccopilot import store as ST
+        from textual.widgets import Markdown
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin = sess.store
+            sess.store = ST.Store(origin.conv_id, enabled=True)  # "came back"
+            before = len(app.query_one("#chat").query(Markdown))
+            app._answer_done("q", "late answer [L1]", True, sess.st, origin)
+            await pilot.pause()
+            self.assertEqual(sess.history[-1], ("assistant", "late answer [L1]"))
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), before + 1)
+
+    async def test_usage_of_switched_conv_does_not_leak_into_hud(self):
+        from cccopilot import backends as BK, store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            other = ST.Store("conv-elsewhere-0000", enabled=False)
+            app._answer_done("q", "a [L1]", True, sess.st, other,
+                             BK.Usage(100, 42, cost_usd=0.30))
+            await pilot.pause()
+            self.assertFalse(app._out_exact)             # turn A's exact usage…
+            self.assertIsNone(app._last_cost)            # …never paints conv B's HUD
+
+    async def test_forget_midstream_aborts_and_does_not_resurrect(self):
+        from cccopilot import backends as BK
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True                             # mid-answer
+            app._answer_store = sess.store               # …for THIS conversation
+            app._answer_chunk(sess.store, "doomed partial ")
+            await pilot.pause()
+            app.action_forget()                          # deletes the conv dir
+            await pilot.pause()
+            self.assertTrue(app._answer_abandoned)
+            from textual.widgets import Markdown
+            app._answer_chunk(sess.store, "more")        # late chunk: dropped
+            await pilot.pause()
+            self.assertEqual(app._stream_buf, "doomed partial ")   # unchanged
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), 0)
+            app._answer_done("q", "doomed partial more", True, sess.st,
+                             sess.store, BK.Usage(10, 5))
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            self.assertFalse(app._answer_abandoned)      # consumed
+        self.assertEqual(sess.history, [])
+        # the completed turn must NOT re-create the files /forget removed
+        self.assertFalse(os.path.exists(sess.store.turns_path))
+
+    async def test_forget_other_conv_leaves_inflight_answer_alone(self):
+        # answer running for conversation A; user switches to B and /forgets B —
+        # A's unrelated turn must NOT be cancelled or dropped
+        from cccopilot import store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            store_a = sess.store
+            app._busy = True
+            app._answer_store = store_a                  # in-flight: conv A
+            store_b = ST.Store("conv-b-to-forget-000", enabled=True)
+            store_b.record_turn("old q", "old a")        # so /forget has files
+            sess.store = store_b                         # user is now viewing B
+            app.action_forget()
+            await pilot.pause()
+            self.assertFalse(app._answer_abandoned)      # A's answer untouched
+            app._answer_done("q for A", "answer for A", True, sess.st, store_a)
+            await pilot.pause()
+        self.assertEqual(store_a._load_turns()[-1]["a"], "answer for A")
+        self.assertFalse(os.path.exists(store_b.turns_path))   # B stayed deleted
+
+    async def test_chunks_while_hidden_buffer_and_repaint_on_return(self):
+        # streaming for conv A; user switches away (chunks arrive unseen) and
+        # returns mid-stream — the re-mounted widget must carry ALL the text,
+        # not just what streamed while A was visible
+        from cccopilot import store as ST
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin = sess.store
+            app._busy = True
+            app._answer_store = origin
+            app._answer_chunk(origin, "seen ")
+            await pilot.pause()
+            sess.store = ST.Store("conv-elsewhere-0001", enabled=False)
+            app._rebuild_chat()                          # switch detaches widget
+            await pilot.pause()
+            app._answer_chunk(origin, "hidden ")         # buffered, not painted
+            self.assertEqual(app._stream_buf, "seen hidden ")
+            sess.store = origin                          # user comes back
+            app._answer_chunk(origin, "back")
+            await pilot.pause()
+            self.assertEqual(app._stream_md.source, "seen hidden back")
+
+
 if __name__ == "__main__":
     unittest.main()

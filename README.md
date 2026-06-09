@@ -271,6 +271,11 @@ Supported backend families:
 | `ollama` | none | local server at `http://localhost:11434` |
 | `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
 
+Answers **stream** as the model produces them (claude: token deltas; the HTTP
+backends: SSE; codex: whole message + exact usage), and when the backend
+reports exact token usage it replaces the HUD's `~` estimate — including the
+turn's real cost for claude. `CC_COPILOT_STREAM=0` opts out of streaming.
+
 Set defaults once — the guided way (pick a model, capture an API key):
 
 ```bash
@@ -414,7 +419,6 @@ Releases publish to PyPI automatically on a `v*` tag — see
 
 - Homebrew tap + a `curl | sh` one-line installer
 - deeper project evidence retrieval and file ranking
-- streaming responses and exact backend token usage
 - additional transcript parsers beyond Claude Code
 - hook-driven push alerts for unattended runs
 

@@ -15,6 +15,8 @@ available, callers fall back to the deterministic brief.
 
 from __future__ import annotations
 
+import os
+
 from .brief import render
 from .backends import resolve, Backend, BackendError
 
@@ -105,12 +107,75 @@ def run_brief(brief_text: str, task: str, model: str = None,
     return be.complete(_prompt(brief_text, task), model=model, timeout=timeout)
 
 
+class StreamHandle:
+    """Iterable wrapper around a backend stream.
+
+    Iterate it to receive answer chunks; when iteration finishes (or aborts),
+    ``text`` holds everything emitted so far (stripped) and ``usage`` holds the
+    backend's exact :class:`~cccopilot.backends.Usage` if it reported one.
+    Construction is non-blocking — all backend work happens during iteration,
+    so it is safe to build on the UI thread and consume on a worker."""
+
+    def __init__(self, be: Backend, gen):
+        self._be = be
+        self._gen = gen
+        self.text = ""
+        self.usage = None
+        self.done = False
+
+    def __iter__(self):
+        parts = []
+        try:
+            for chunk in self._gen:
+                parts.append(chunk)
+                yield chunk
+        finally:
+            self.text = "".join(parts).strip()
+            self.usage = getattr(self._be, "last_usage", None)
+            self.done = True
+
+    def cancel(self):
+        """Best-effort, thread-safe abort. The consuming thread is usually
+        blocked INSIDE the backend read — this kills the transport so that
+        read returns and the stream unwinds immediately (see Backend.cancel)."""
+        try:
+            getattr(self._be, "cancel", lambda: None)()
+        except Exception:
+            pass
+
+
+def stream_enabled() -> bool:
+    return os.environ.get("CC_COPILOT_STREAM", "").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def run_brief_stream(brief_text: str, task: str, model: str = None,
+                     backend=None, timeout: int = 180) -> StreamHandle:
+    """Streaming sibling of :func:`run_brief` — same grounding contract, the
+    answer just arrives in chunks. ``CC_COPILOT_STREAM=0`` forces the blocking
+    single-chunk path."""
+    be = _be(backend)
+    if not be.available():
+        raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
+                           f"Try `cc-copilot backends` to see your options.")
+    prompt = _prompt(brief_text, task)
+    if not stream_enabled():
+        def _one():
+            yield be.complete(prompt, model=model, timeout=timeout)
+        return StreamHandle(be, _one())
+    return StreamHandle(be, be.stream(prompt, model=model, timeout=timeout))
+
+
 def narrate(state, model: str = None, backend=None) -> str:
     return run(state, _NARRATE_TASK, model=model, backend=backend)
 
 
 def narrate_brief(brief_text: str, model: str = None, backend=None) -> str:
     return run_brief(brief_text, _NARRATE_TASK, model=model, backend=backend)
+
+
+def narrate_brief_stream(brief_text: str, model: str = None, backend=None) -> StreamHandle:
+    return run_brief_stream(brief_text, _NARRATE_TASK, model=model, backend=backend)
 
 
 _SINCE_RECAP_TASK = (
@@ -136,12 +201,20 @@ def ask(state, question: str, model: str = None, backend=None) -> str:
     return ask_brief(render(state), question, model=model, backend=backend)
 
 
-def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -> str:
-    task = ('The returning human asks: "' + question.strip() + '"\n'
+def _ask_task(question: str) -> str:
+    return ('The returning human asks: "' + question.strip() + '"\n'
             "Answer as cc-copilot. Use cited evidence for observed facts. "
             "Synthesize or recommend when grounded; label inference. "
             "If the answer needs unavailable evidence, name what is missing.")
-    return run_brief(brief_text, task, model=model, backend=backend)
+
+
+def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -> str:
+    return run_brief(brief_text, _ask_task(question), model=model, backend=backend)
+
+
+def ask_brief_stream(brief_text: str, question: str, model: str = None,
+                     backend=None) -> StreamHandle:
+    return run_brief_stream(brief_text, _ask_task(question), model=model, backend=backend)
 
 
 def _history_by_budget(history, max_chars: int = _HISTORY_CHARS) -> str:
@@ -172,6 +245,21 @@ def chat(state, history, question: str, model: str = None, backend=None) -> str:
     return chat_brief(render(state), history, question, model=model, backend=backend)
 
 
+def _chat_task(history, question: str) -> str:
+    convo = ""
+    if history:
+        convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
+                 "continuity, but the current evidence context above is the "
+                 "source of new observed facts):\n"
+                 + _history_by_budget(history) + "\n\n")
+    return (convo + 'Current question from the returning human: "'
+            + question.strip() + '"\n'
+            "Answer as cc-copilot. Use the current evidence context for "
+            "observed facts and keep citations. Synthesize or recommend when "
+            "grounded; label inference. If the answer needs unavailable "
+            "evidence, name what is missing.")
+
+
 def chat_brief(brief_text: str, history, question: str, model: str = None, backend=None) -> str:
     """Multi-turn sibling of :func:`ask` for the live chat sidecar.
 
@@ -181,16 +269,11 @@ def chat_brief(brief_text: str, history, question: str, model: str = None, backe
     treated as fresh evidence — so a later answer cannot launder an un-cited
     claim from an earlier one.
     """
-    convo = ""
-    if history:
-        convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
-                 "continuity, but the current evidence context above is the "
-                 "source of new observed facts):\n"
-                 + _history_by_budget(history) + "\n\n")
-    task = (convo + 'Current question from the returning human: "'
-            + question.strip() + '"\n'
-            "Answer as cc-copilot. Use the current evidence context for "
-            "observed facts and keep citations. Synthesize or recommend when "
-            "grounded; label inference. If the answer needs unavailable "
-            "evidence, name what is missing.")
-    return run_brief(brief_text, task, model=model, backend=backend)
+    return run_brief(brief_text, _chat_task(history, question), model=model, backend=backend)
+
+
+def chat_brief_stream(brief_text: str, history, question: str, model: str = None,
+                      backend=None) -> StreamHandle:
+    """Streaming :func:`chat_brief` — identical grounding, chunked delivery."""
+    return run_brief_stream(brief_text, _chat_task(history, question),
+                            model=model, backend=backend)

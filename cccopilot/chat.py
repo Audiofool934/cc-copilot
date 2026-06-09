@@ -131,6 +131,7 @@ class ChatSession:
         self.last_size = -1
         self.last_context_stats = None
         self.last_output_tokens = 0
+        self.last_usage = None          # exact backend Usage for the last turn
         self._alerts = alerts
         self._persist = persist and ST.enabled()
         self.store = ST.Store.open_for(path, enabled=self._persist)
@@ -194,20 +195,46 @@ class ChatSession:
                         history=hist, project_context=True,
                         memory_text=memory_text)
 
+    def _finalize_turn(self, q: str, txt: str, usage=None):
+        """Single completion site for a turn: tokens, in-memory history, and the
+        durable store write. Only ever called with a COMPLETE answer — a stream
+        that dies mid-way must not reach here (partials are never persisted)."""
+        self.last_usage = usage
+        exact_out = getattr(usage, "exact", False) and getattr(usage, "output_tokens", 0)
+        self.last_output_tokens = (usage.output_tokens if exact_out
+                                   else EC.estimate_tokens(txt))
+        self.history.append(("user", q))
+        self.history.append(("assistant", txt))
+        # durable copilot history (best-effort; never breaks the answer)
+        self.store.scope = self.scope
+        self.store.scope_sessions = list(self.scope_sessions)
+        self.store.record_turn(q, txt, st=self.st, backend=self.backend,
+                               model=self.model,
+                               usage=(usage.as_dict() if usage else None))
+
     def answer(self, q: str) -> str:
         self.refresh()
         ctx = self.answer_context(q, history=self.history)
         self.last_context_stats = ctx.stats
         self.last_output_tokens = 0
         txt = N.chat_brief(ctx.text, [], q, model=self.model, backend=self.backend)
-        self.last_output_tokens = EC.estimate_tokens(txt)
-        self.history.append(("user", q))
-        self.history.append(("assistant", txt))
-        # durable copilot history (best-effort; never breaks the answer)
-        self.store.scope = self.scope
-        self.store.scope_sessions = list(self.scope_sessions)
-        self.store.record_turn(q, txt, st=self.st, backend=self.backend, model=self.model)
+        self._finalize_turn(q, txt)
         return txt
+
+    def answer_stream(self, q: str):
+        """Generator sibling of :func:`answer`: yields answer chunks as the
+        backend produces them, then finalizes (history + durable store + exact
+        usage) only after the stream completed. An error mid-stream propagates
+        out of the loop and nothing is recorded."""
+        self.refresh()
+        ctx = self.answer_context(q, history=self.history)
+        self.last_context_stats = ctx.stats
+        self.last_output_tokens = 0
+        h = N.chat_brief_stream(ctx.text, [], q, model=self.model, backend=self.backend)
+        for chunk in h:
+            yield chunk
+        if h.text:
+            self._finalize_turn(q, h.text, h.usage)
 
     def meta(self, cmd: str):
         """Handle a /command. Returns text to print, or False to exit."""
@@ -667,14 +694,24 @@ class ChatSession:
                     continue
                 with self._lock:
                     print("…", flush=True)
+                # stream the answer as it arrives; the lock is held for the whole
+                # stream so background alerts queue up and print after, never
+                # splicing into the middle of the answer text.
+                got_any = False
                 try:
-                    ans = self.answer(line)
+                    with self._lock:
+                        for chunk in self.answer_stream(line):
+                            if not got_any:
+                                sys.stdout.write(self.banner() + "\n")
+                                got_any = True
+                            sys.stdout.write(chunk)
+                            sys.stdout.flush()
+                        if got_any:
+                            sys.stdout.write("\n\n")
+                            sys.stdout.flush()
                 except Exception as e:
                     with self._lock:
-                        print(f"# error: {e}\n")
+                        print(("\n" if got_any else "") + f"# error: {e}\n")
                     continue
-                with self._lock:
-                    print(self.banner())
-                    print(ans + "\n")
         finally:
             self._stop.set()
