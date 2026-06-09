@@ -515,6 +515,41 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)   # followed exactly to bottom
 
+    async def test_evidence_switch_lands_on_newest_refresh_preserves(self):
+        """A rebuild for an evidence/scope switch (default keep_scroll=False) lands
+        on the newest line — restoring a stale offset would open a freshly-selected
+        session scrolled into the middle. A same-session refresh (keep_scroll=True)
+        instead holds the reader's position."""
+        import json
+        import tempfile
+        from cccopilot.chat import ChatSession
+        from textual.widgets import RichLog
+        d = tempfile.mkdtemp(prefix="ccswitch-")
+        p = os.path.join(d, "s.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                "message": {"role": "user", "content": "go"}}) + "\n")
+            for i in range(60):
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                        "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+        sess = ChatSession(p, alerts=False, persist=False)
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            rl = app.query_one("#timeline-log", RichLog)
+            self.assertGreater(rl.max_scroll_y, 3)
+            rl.scroll_to(y=2, animate=False)
+            await pilot.pause()
+            app._rebuild_timeline()                              # evidence switch (default)
+            await pilot.pause()
+            self.assertGreaterEqual(rl.scroll_offset.y, rl.max_scroll_y)  # landed on newest
+            rl.scroll_to(y=2, animate=False)
+            await pilot.pause()
+            app._rebuild_timeline(keep_scroll=True)              # same-session refresh
+            await pilot.pause()
+            self.assertLessEqual(rl.scroll_offset.y, 3)          # held the reader's place
+
     async def test_timeline_height_clamped_to_small_screen(self):
         import tempfile
         from cccopilot import prefs as PREFS

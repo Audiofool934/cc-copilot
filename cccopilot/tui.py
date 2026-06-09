@@ -841,7 +841,8 @@ class Cockpit(App):
     #timeline-title { color: $accent; text-style: bold; height: 1; }
     #timeline-log {
         height: 1fr; background: $panel;
-        overflow-x: hidden;            /* wrap=True handles width; no sideways scroll */
+        overflow-x: auto;              /* long lines (wrap=False) stay scrollable… */
+        scrollbar-size-horizontal: 0;  /* …but draw NO horizontal bar (pan by wheel/trackpad) */
         scrollbar-size-vertical: 1;    /* thin vertical bar */
     }
     #chat { height: 1fr; background: $surface; padding: 0 1; }
@@ -928,11 +929,12 @@ class Cockpit(App):
         # The activity log is a RichLog (not one widget per line) so it can hold
         # the *entire* session history efficiently and scroll through all of it;
         # the title stays pinned above it.
-        # min_width=1 so wrapping measures at the panel's real content width
-        # (RichLog defaults to 78, which on an 80-col terminal forces a 1-column
-        # horizontal overflow); with wrap=True we never want a sideways scrollbar.
+        # wrap=False: each event stays on one row and long lines pan with a (thin)
+        # horizontal scrollbar instead of folding. min_width=1 so that bar appears
+        # ONLY when a line truly exceeds the panel width — the default 78 would
+        # force a spurious 1-column scroll even for short lines on an 80-col term.
         timeline_log = RichLog(id="timeline-log", markup=False, highlight=False,
-                               wrap=True, auto_scroll=False, min_width=1)
+                               wrap=False, auto_scroll=False, min_width=1)
         timeline_log.can_focus = False
         timeline = Vertical(
             Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
@@ -1150,19 +1152,20 @@ class Cockpit(App):
             follow = rl.scroll_offset.y >= rl.max_scroll_y - 1
         rl.write(_timeline_gutter(renderable, cls), scroll_end=follow)
 
-    def _land_timeline(self, rl, prev_y, was_bottom):
-        """After a full rebuild, restore the reader's view: follow the newest
-        line only if they were already at the bottom, otherwise put them back
-        where they were. A bare scroll_end would yank a scrolled-up reader to the
-        bottom on every rebuild (an alerts=False growth tick, or *any* non-SESSION
-        scope, which rebuilds each poll) — defeating tail-follow. The content is
-        the same re-seeded history, so the prior offset stays meaningful."""
-        if was_bottom:
-            rl.scroll_end(animate=False)
-        else:
+    def _land_timeline(self, rl, prev_y, was_bottom, keep_scroll):
+        """Land the viewport after a full rebuild. ``keep_scroll`` (a *same-session*
+        refresh — poll tick, theme change, manual refresh) holds the reader's
+        position, following only if they were already at the bottom, so a
+        timer-driven rebuild can't yank a scrolled-up reader down. Otherwise (first
+        build, or an evidence/scope switch where the rebuilt content is a
+        *different* history) land on the newest line — restoring a stale offset
+        would open a freshly-selected session scrolled into the middle."""
+        if keep_scroll and not was_bottom:
             rl.scroll_to(y=prev_y, animate=False, force=True)
+        else:
+            rl.scroll_end(animate=False)
 
-    def _rebuild_timeline(self):
+    def _rebuild_timeline(self, keep_scroll=False):
         rl = self.query_one("#timeline-log", RichLog)
         prev_y = rl.scroll_offset.y
         # "at the bottom" is EXACT here — NOT the append path's `- 1` slack.
@@ -1187,7 +1190,7 @@ class Cockpit(App):
             self._timeline(_timeline_status_line(self.session.st), follow=False)
             for line in _recent_activity_lines(self.session.st):   # the *entire* history
                 self._timeline(line, follow=False)
-            self._land_timeline(rl, prev_y, was_bottom)
+            self._land_timeline(rl, prev_y, was_bottom, keep_scroll)
             return
         if self.session.scope == SC.PROJECT:
             root = _project_cwd(self.session)
@@ -1198,7 +1201,7 @@ class Cockpit(App):
         self._timeline(_scope_timeline_summary(self.session, snap), follow=False)
         for line in _scoped_recent_activity_lines(snap.get("items", [])):
             self._timeline(line, follow=False)
-        self._land_timeline(rl, prev_y, was_bottom)
+        self._land_timeline(rl, prev_y, was_bottom, keep_scroll)
 
     def _rebuild_chat(self, clear=True):
         """Repaint the chat pane from the session's (possibly restored) history,
@@ -1353,7 +1356,7 @@ class Cockpit(App):
         # keeps the cockpit reactive when alert toasts are disabled.
         changed = self.session.refresh() if not self.alerts else False
         if changed or self.session.scope != SC.SESSION:
-            self._rebuild_timeline()
+            self._rebuild_timeline(keep_scroll=True)   # same session — don't yank scroll
         self._update_header()
         self._update_status()
 
@@ -1736,7 +1739,7 @@ class Cockpit(App):
             return
         self.theme = name
         self._sync_rich_palette()
-        self._rebuild_timeline()
+        self._rebuild_timeline(keep_scroll=True)       # same session — keep reading position
         self._update_header()
         self._update_status()
         label = COCKPIT_THEME_SPECS[name]["label"]
@@ -1753,7 +1756,7 @@ class Cockpit(App):
 
     def action_refresh_now(self):
         self.session.refresh()
-        self._rebuild_timeline()
+        self._rebuild_timeline(keep_scroll=True)       # same session — keep reading position
         self._update_header()
         self._update_status()
         self.notify("history-only — no live session" if self.session.st is None

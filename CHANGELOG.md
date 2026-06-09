@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.10.5 — 2026-06-09
+
+**Timeline horizontal panning + a scroll-position fix.**
+- **Long lines pan sideways with no scrollbar.** Activity lines no longer wrap;
+  a long line (a deep path, a long error) stays on one row and you pan across it
+  with the trackpad / shift-wheel. The horizontal scrollbar is drawn at
+  zero thickness, so there's no chunky bar eating a row — scrolling without the
+  gutter. (The vertical history scrollbar stays a thin 1 cell.)
+- **Evidence switches land on the newest line again.** The 0.10.4 scroll-preserve
+  was applied to *every* rebuild, so switching evidence (`/sessions`, `/use`,
+  `/here`, `/resume`) restored the previous view's scroll offset — opening a
+  freshly-selected session scrolled into the middle with the latest activity
+  off-screen. Scroll position is now preserved only on *same-session* refreshes
+  (poll tick, theme change, manual refresh); an evidence/scope switch lands on
+  the newest line. (Caught by a Codex cross-model review.)
+
 ## 0.10.4 — 2026-06-08
 
 **Activity-timeline review fixes.** A multi-pass self-review of the 0.10.3
