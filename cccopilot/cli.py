@@ -447,7 +447,7 @@ def _now_iso() -> str:
 
 
 def cmd_since(args) -> int:
-    from . import lastlook as LL, since as SI
+    from . import lastlook as LL, since as SI, narrate as N
     path = _resolve_or_die(args)
     if getattr(args, "path", False):
         sys.stderr.write(f"# transcript: {path}\n")
@@ -480,10 +480,26 @@ def cmd_since(args) -> int:
             return 2
         view = SI.build(tr, st, seconds=secs, label=when)
 
-    print(view.text)
-    # advance the marker so the next `since` is incremental (unless --peek)
+    # Recap by default (LLM narration grounded in the cited delta) with the
+    # evidence kept beneath it; `--raw`, no backend, or an empty delta print the
+    # deterministic view alone.
+    be = getattr(args, "backend", None)
+    if getattr(args, "raw", False) or view.nothing_new or not N.available(be):
+        print(view.text)
+    else:
+        sys.stderr.write(f"# recapping via {N.backend_name(be)} …\n")
+        try:
+            recap = N.recap_since(view.text, model=getattr(args, "model", None), backend=be)
+            body = view.text.split("\n", 1)[1] if view.text.startswith("#") else view.text
+            print(f"# 🛰  recap — since {view.label}\n\n{recap.strip()}\n\n"
+                  f"---\n_evidence — every [L…] is a transcript line:_\n{body}")
+        except Exception as e:
+            sys.stderr.write(f"# recap failed ({e}); showing evidence\n")
+            print(view.text)
+    # advance the marker so the next `since` is incremental (unless --peek);
+    # forward-only so a slow recap here can't rewind a concurrent cockpit's mark
     if when in ("last-look", "lastlook", "last") and not getattr(args, "peek", False):
-        LL.mark(key, cur_line, cur_ts, _now_iso())
+        LL.advance(key, cur_line, cur_ts, _now_iso())
     return 0
 
 
@@ -665,6 +681,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also print the resolved transcript path to stderr")
     sp.add_argument("--peek", action="store_true",
                     help="don't advance the last-look marker after showing")
+    sp.add_argument("--raw", action="store_true",
+                    help="deterministic cited delta only — no LLM recap")
+    sp.add_argument("--model", help="model for the recap (passed to the backend)")
+    sp.add_argument("--backend",
+                    help="LLM backend for the recap (claude/codex/deepseek/ollama/…; see `backends`)")
     sp.set_defaults(func=cmd_since)
 
     sp = sub.add_parser("handoff",

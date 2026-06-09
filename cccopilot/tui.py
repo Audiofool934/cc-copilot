@@ -147,7 +147,7 @@ _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
-    "  /since [30m]            what changed since you last looked\n"
+    "  /since [30m] [--raw]    recap since you last looked (--raw = cited delta)\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /sessions               choose evidence sessions\n"
@@ -163,7 +163,7 @@ _HELP_TEXT = (
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
-    ("/since", "what changed since you last looked (or 30m / 2h)", True),
+    ("/since", "recap since you last looked (or 30m / 2h; --raw = cited delta)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
@@ -1458,6 +1458,55 @@ class Cockpit(App):
         self._update_header()
         self._update_status()
 
+    # ---- /since: deterministic delta, narrated into a grounded recap ----
+    def _since_cmd(self, arg: str):
+        """Recap by default (grounded in the cited delta), with the deterministic
+        evidence beneath it; instant deterministic view for `--raw`, no backend,
+        nothing-new, or while busy. The model call runs off the UI thread."""
+        title = (f"/since {arg}").strip()
+        res = self.session._since_view(arg)
+        if isinstance(res, str):                 # edge-case message (no mark, etc.)
+            self._collapsible(title, res)
+            return
+        view, raw, commit = res
+        if raw or view.nothing_new or not N.available(self.backend) or self._busy:
+            self._collapsible(title, view.text)  # deterministic, instant
+            commit()                             # shown → advance the marker
+            return
+        self._busy = True
+        self._busy_frame = 0
+        self._chat(self._role(
+            Text(f"🛰  recapping {title} — grounded in the evidence…",
+                 style=_PAL["muted"]), "role-event"))
+        self._update_status()
+        # capture both what this recap is ABOUT and the conversation it was asked
+        # in: an evidence switch (/use, /sessions, /here) changes the signature,
+        # while /new or /resume on the same transcript swaps the conversation store
+        # but not the signature. Either makes the result stale, so we drop it (and
+        # leave the last-look marker un-consumed) rather than mis-render it.
+        self._since_recap(title, view, (self._evidence_sig(), self.session.store), commit)
+
+    @work(thread=True)
+    def _since_recap(self, title, view, origin, commit):
+        try:
+            recap = N.recap_since(view.text, model=self.model, backend=self.backend)
+            out = self.session._compose_since(recap, view)
+        except Exception as e:
+            out = view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
+        self.call_from_thread(self._since_done, title, out, origin, commit)
+
+    def _since_done(self, title, out, origin, commit):
+        self._busy = False
+        self._busy_frame = 0
+        sig, store = origin
+        if self._evidence_sig() == sig and self.session.store is store:
+            self._collapsible(title, out)
+            commit()                             # rendered → advance the marker
+        else:
+            self.notify(f"dropped {title} recap — you switched while it ran",
+                        severity="warning")      # not committed → delta survives
+        self._update_status()
+
     # ---- background watcher ----
     def _reset_watch_baseline(self):
         self._watch_path = self.session.path
@@ -1579,7 +1628,7 @@ class Cockpit(App):
             if self._no_live():
                 return
             arg = cmd.strip()[6:].strip()
-            self._collapsible((f"/since {arg}").strip(), self.session._since(arg))
+            self._since_cmd(arg)
             return
         if low == "/handoff" or low.startswith("/handoff "):
             if self._no_live():

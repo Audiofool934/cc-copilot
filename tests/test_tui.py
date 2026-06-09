@@ -371,6 +371,114 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("done", joined)
         self.assertNotIn("window-1", joined)
 
+    async def test_cockpit_since_renders_grounded_recap_async(self):
+        """/since in the cockpit narrates the cited delta on a worker thread (no UI
+        freeze) and renders the recap + evidence; --raw stays the instant delta."""
+        import json
+        import tempfile
+        from textual.widgets import Collapsible, Static
+        from cccopilot import narrate as N
+        from cccopilot.chat import ChatSession
+        real_recap, real_avail = N.recap_since, N.available
+        N.available = lambda be=None: True
+        N.recap_since = lambda text, model=None, backend=None: "RECAP_NARRATIVE [L4]"
+        try:
+            d = tempfile.mkdtemp(prefix="cctsince-")
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                    "message": {"role": "user", "content": "go"}}) + "\n")
+                for i in range(4):
+                    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                            "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                            "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+                    f.write(json.dumps({"type": "user", "message": {"role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": f"t{i}",
+                                         "content": "ok"}]}}) + "\n")
+            sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/since 30m")                       # starts the recap worker
+                await app.workers.wait_for_complete()         # let the thread finish
+                await pilot.pause()                           # process call_from_thread
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertIn("RECAP_NARRATIVE", blob)        # the narrative landed
+                self.assertIn("evidence", blob)               # cited delta beneath it
+                self.assertFalse(app._busy)                   # spinner cleared
+        finally:
+            N.recap_since, N.available = real_recap, real_avail
+
+    async def test_cockpit_since_recap_dropped_after_evidence_switch(self):
+        """If the user switches evidence while a /since recap runs, the result —
+        whose citations are about the OLD session — must be dropped, not rendered
+        under the new transcript, AND the last-look marker must NOT advance (else
+        the dropped delta is lost forever)."""
+        import json
+        import tempfile
+        from textual.widgets import Static
+        from cccopilot import narrate as N, lastlook as LL
+        from cccopilot.chat import ChatSession, _now_iso
+        real_recap, real_avail = N.recap_since, N.available
+        saved_state = os.environ.get("CC_COPILOT_STATE_DIR")
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="cctswstate-")
+        try:
+            d = tempfile.mkdtemp(prefix="cctswitch-")
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                    "message": {"role": "user", "content": "go"}}) + "\n")
+                for i in range(4):
+                    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                            "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                            "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+            sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+            key = sess._lastlook_key()
+            LL.mark(key, 1, "", _now_iso())                  # early mark → real delta
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            N.available = lambda be=None: True
+            # the model call "takes a while" during which the user switches evidence
+            def recap_then_switch(text, model=None, backend=None):
+                app.session.path = "/some/other/session.jsonl"   # evidence changed
+                return "STALE_RECAP [L4]"
+            N.recap_since = recap_then_switch
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/since")                          # last-look path
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertNotIn("STALE_RECAP", blob)         # dropped, not mis-rendered
+                self.assertFalse(app._busy)                   # spinner still cleared
+                self.assertEqual(int(LL.get(key)["line"]), 1)  # marker preserved (delta survives)
+        finally:
+            N.recap_since, N.available = real_recap, real_avail
+            if saved_state is None:
+                os.environ.pop("CC_COPILOT_STATE_DIR", None)
+            else:
+                os.environ["CC_COPILOT_STATE_DIR"] = saved_state
+
+    async def test_since_recap_dropped_when_conversation_changed(self):
+        """/new or /resume keeps the same transcript (same evidence signature) but a
+        fresh conversation store; a pending recap must drop, not render into the new
+        chat — the origin captures the store, not just the evidence."""
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # origin: current evidence, but a DIFFERENT conversation store (as if the
+            # user ran /new while the recap was on the worker thread)
+            stale_origin = (app._evidence_sig(), object())
+            app._busy = True
+            app._since_done("/since 30m", "STALE_RECAP [L4]", stale_origin, lambda: None)
+            await pilot.pause()
+            blob = "\n".join(str(getattr(s, "content", "") or "")
+                             for s in app.query("#chat Static"))
+            self.assertNotIn("STALE_RECAP", blob)          # dropped on store change
+            self.assertFalse(app._busy)                    # spinner cleared either way
+
     async def test_status_header_shows_session_mode(self):
         from textual.widgets import Static
         sess = self._session("sess-A")
