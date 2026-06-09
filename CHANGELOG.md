@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.1 — 2026-06-09
+
+**The chat gutter bars now match the timeline's.** The activity timeline draws a
+left half-block `▌` gutter, but the chat message blocks (and the `/since` etc.
+collapsibles) used a heavier full-block border that read as too wide. They now
+use the same `▌` glyph (`border-left: outer`), so the two panes line up.
+
 ## 0.11.0 — 2026-06-09
 
 **`/since` is now a grounded LLM recap.** Re-entering after the agent worked, you

@@ -866,11 +866,13 @@ class Cockpit(App):
     #slash { height: auto; max-height: 7; margin: 0 1; padding: 0;
              border: round $secondary; background: $panel; }
 
-    .role-user      { border-left: thick $secondary; padding-left: 1; }
-    .role-assistant { border-left: thick $primary;   padding-left: 1; }
-    .role-event     { border-left: tall  $accent;    padding-left: 1; }
-    .role-alert     { border-left: thick $warning;   padding-left: 1; }
-    Collapsible { border-left: thick $accent; }
+    /* `outer` renders a left half-block ▌ — same glyph as the timeline gutter,
+       so the chat bars match its width (thick/█ and tall/▊ read heavier). */
+    .role-user      { border-left: outer $secondary; padding-left: 1; }
+    .role-assistant { border-left: outer $primary;   padding-left: 1; }
+    .role-event     { border-left: outer $accent;    padding-left: 1; }
+    .role-alert     { border-left: outer $warning;   padding-left: 1; }
+    Collapsible { border-left: outer $accent; }
 
     Picker { align: center middle; }
     MultiPicker { align: center middle; }
