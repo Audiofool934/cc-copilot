@@ -371,6 +371,27 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("done", joined)
         self.assertNotIn("window-1", joined)
 
+    async def test_chat_and_timeline_panes_align(self):
+        """Chat and timeline are the same (full) width so their right-edge
+        scrollbars line up, both use a thin 1-cell vertical bar, and the chat
+        shares the timeline's $panel background (one continuous surface, not a
+        separate color block)."""
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(92, 30)) as pilot:
+            await pilot.pause()
+            chat = app.query_one("#chat")
+            timeline = app.query_one("#timeline")
+            tlog = app.query_one("#timeline-log")
+            # full-width parity → right edges (and the scrollbars on them) align
+            self.assertEqual(chat.outer_size.width, timeline.outer_size.width)
+            self.assertEqual(chat.outer_size.width, app.size.width)
+            # a thin 1-cell vertical scrollbar on both panes
+            self.assertEqual(chat.styles.scrollbar_size_vertical, 1)
+            self.assertEqual(tlog.styles.scrollbar_size_vertical, 1)
+            # chat blends with the timeline (same panel background)
+            self.assertEqual(chat.styles.background, tlog.styles.background)
+
     async def test_cockpit_since_renders_grounded_recap_async(self):
         """/since in the cockpit narrates the cited delta on a worker thread (no UI
         freeze) and renders the recap + evidence; --raw stays the instant delta."""
