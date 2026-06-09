@@ -16,9 +16,12 @@ older agent builds keep working unchanged):
   whole; the win is exact usage below). `stdin` is now closed for CLI backends
   so a piped stdin can never hang `codex exec`.
 - **OpenAI-compatible HTTP** (deepseek/openai/openrouter/ollama/custom) —
-  stdlib-only SSE (`stream: true`), with a one-shot retry without
-  `stream_options` for servers that reject it, and a tolerant fallback when a
-  server ignores `stream: true` and answers with one JSON body.
+  stdlib-only SSE (`stream: true`) with a graceful degrade ladder: a 400/422
+  retries once without `stream_options`, a second 400/422 falls back to the
+  blocking request (providers that never supported streaming keep working
+  unchanged), a server that ignores `stream: true` and answers with one JSON
+  body is parsed anyway, and auth/server errors (401/403/404/5xx) surface
+  immediately with no retries.
 
 **Exact token usage replaces the chars/4 guess where the backend reports it.**
 The claude result event (tokens + real `$` cost), the codex `turn.completed`

@@ -455,8 +455,11 @@ class OpenAICompatBackend(Backend):
         base = {"model": model or self.default_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True}
-        # first attempt asks for the exact-usage final chunk; some servers
-        # reject the stream_options field (HTTP 400/422) — retry once without.
+        # degrade in two steps: a 400/422 on the first attempt usually means the
+        # server rejects the stream_options field — retry once without it; a
+        # 400/422 again means it rejects streaming itself — fall back to the
+        # blocking complete() so providers that worked before keep working.
+        # Anything else (401/403/404/5xx) is a real error and raises as-is.
         attempts = [dict(base, stream_options={"include_usage": True}), base]
         resp = None
         for i, body in enumerate(attempts):
@@ -467,8 +470,11 @@ class OpenAICompatBackend(Backend):
                 resp = urllib.request.urlopen(req, timeout=timeout)
                 break
             except urllib.error.HTTPError as e:
-                if i == 0 and e.code in (400, 422):
-                    continue
+                if e.code in (400, 422):
+                    if i == 0:
+                        continue
+                    yield self.complete(prompt, model=model, timeout=timeout)
+                    return
                 detail = ""
                 try:
                     detail = e.read().decode("utf-8")[:300]

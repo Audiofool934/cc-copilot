@@ -297,6 +297,60 @@ class TestHttpStream(unittest.TestCase):
         self.assertEqual(len(_SseHandler.saw_bodies), 2)
         self.assertNotIn("stream_options", _SseHandler.saw_bodies[1])
 
+    def test_streaming_unsupported_falls_back_to_blocking(self):
+        # a provider that 400s ANY stream:true body must degrade to the
+        # blocking complete() path (it worked before streaming existed)
+        class H(http.server.BaseHTTPRequestHandler):
+            saw_bodies = []
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n))
+                type(self).saw_bodies.append(body)
+                if body.get("stream"):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "streaming not supported"}')
+                    return
+                out = _j({"choices": [{"message": {"content": "blocking works"}}],
+                          "usage": {"prompt_tokens": 5, "completion_tokens": 2}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+        H.saw_bodies = []
+        be = BK.OpenAICompatBackend("t", self._serve(H), "NOKEY", "m", needs_key=False)
+        chunks = list(be.stream("hi"))
+        self.assertEqual(chunks, ["blocking works"])
+        self.assertEqual(len(H.saw_bodies), 3)           # stream+opts, stream, blocking
+        self.assertFalse(H.saw_bodies[2].get("stream"))
+        self.assertEqual(be.last_usage.input_tokens, 5)  # usage still captured
+
+    def test_auth_error_raises_immediately_no_blocking_fallback(self):
+        # a 401 must surface as-is — NOT trigger the degrade ladder
+        class H(http.server.BaseHTTPRequestHandler):
+            calls = 0
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                type(self).calls += 1
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error": "bad key"}')
+
+        H.calls = 0
+        be = BK.OpenAICompatBackend("t", self._serve(H), "NOKEY", "m", needs_key=False)
+        with self.assertRaises(BK.BackendError) as cm:
+            list(be.stream("hi"))
+        self.assertIn("401", str(cm.exception))
+        self.assertEqual(H.calls, 1)                     # no retries on auth errors
+
     def test_blocking_complete_captures_usage(self):
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
