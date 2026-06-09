@@ -1479,11 +1479,12 @@ class Cockpit(App):
             Text(f"🛰  recapping {title} — grounded in the evidence…",
                  style=_PAL["muted"]), "role-event"))
         self._update_status()
-        # capture which evidence this recap is ABOUT — if the user switches
-        # (/use, /sessions, /here, /resume, /new) while it runs, its citations no
-        # longer match the current session, so we drop it (and leave the last-look
-        # marker un-consumed) instead of rendering it under the wrong transcript.
-        self._since_recap(title, view, self._evidence_sig(), commit)
+        # capture both what this recap is ABOUT and the conversation it was asked
+        # in: an evidence switch (/use, /sessions, /here) changes the signature,
+        # while /new or /resume on the same transcript swaps the conversation store
+        # but not the signature. Either makes the result stale, so we drop it (and
+        # leave the last-look marker un-consumed) rather than mis-render it.
+        self._since_recap(title, view, (self._evidence_sig(), self.session.store), commit)
 
     @work(thread=True)
     def _since_recap(self, title, view, origin, commit):
@@ -1497,11 +1498,12 @@ class Cockpit(App):
     def _since_done(self, title, out, origin, commit):
         self._busy = False
         self._busy_frame = 0
-        if self._evidence_sig() == origin:
+        sig, store = origin
+        if self._evidence_sig() == sig and self.session.store is store:
             self._collapsible(title, out)
             commit()                             # rendered → advance the marker
         else:
-            self.notify(f"dropped {title} recap — you switched evidence while it ran",
+            self.notify(f"dropped {title} recap — you switched while it ran",
                         severity="warning")      # not committed → delta survives
         self._update_status()
 

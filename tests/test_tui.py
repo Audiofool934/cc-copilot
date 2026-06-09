@@ -460,6 +460,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["CC_COPILOT_STATE_DIR"] = saved_state
 
+    async def test_since_recap_dropped_when_conversation_changed(self):
+        """/new or /resume keeps the same transcript (same evidence signature) but a
+        fresh conversation store; a pending recap must drop, not render into the new
+        chat — the origin captures the store, not just the evidence."""
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # origin: current evidence, but a DIFFERENT conversation store (as if the
+            # user ran /new while the recap was on the worker thread)
+            stale_origin = (app._evidence_sig(), object())
+            app._busy = True
+            app._since_done("/since 30m", "STALE_RECAP [L4]", stale_origin, lambda: None)
+            await pilot.pause()
+            blob = "\n".join(str(getattr(s, "content", "") or "")
+                             for s in app.query("#chat Static"))
+            self.assertNotIn("STALE_RECAP", blob)          # dropped on store change
+            self.assertFalse(app._busy)                    # spinner cleared either way
+
     async def test_status_header_shows_session_mode(self):
         from textual.widgets import Static
         sess = self._session("sess-A")
