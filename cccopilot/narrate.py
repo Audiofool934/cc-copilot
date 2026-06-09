@@ -110,6 +110,25 @@ def narrate_brief(brief_text: str, model: str = None, backend=None) -> str:
     return run_brief(brief_text, _NARRATE_TASK, model=model, backend=backend)
 
 
+_SINCE_RECAP_TASK = (
+    "The evidence below is the DELTA of everything that changed since the "
+    "returning human last looked at this agent. Recap it for them in 3–5 "
+    "sentences: what the agent did (asks answered, commands run, failures, files "
+    "changed), whether it looks safe to let it keep running (use any Safety "
+    "transition shown), and the single most important thing to look at next. Use "
+    "ONLY this evidence; keep the [L…] citations for specific observed claims. If "
+    "the evidence shows nothing changed, say so in one line."
+)
+
+
+def recap_since(since_text: str, model: str = None, backend=None) -> str:
+    """Narrate a deterministic ``/since`` delta into a grounded re-entry recap.
+
+    Same faithful contract as :func:`narrate` — the model sees only the cited
+    delta and keeps its ``[L…]`` citations; it does not invent."""
+    return run_brief(since_text, _SINCE_RECAP_TASK, model=model, backend=backend)
+
+
 def ask(state, question: str, model: str = None, backend=None) -> str:
     return ask_brief(render(state), question, model=model, backend=backend)
 

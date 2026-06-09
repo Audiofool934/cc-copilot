@@ -33,7 +33,7 @@ def _now_iso() -> str:
 _HELP = """commands (all but questions are LLM-free):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
-  /since [when]     what changed since you last looked (or 30m / 2h / 1d)
+  /since [when]     recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
@@ -356,12 +356,28 @@ class ChatSession:
                         label="last look")
 
     def _since(self, arg: str):
+        """Sync entry (REPL / CLI): the recap-or-raw result as one string. The TUI
+        uses :meth:`_since_view` + :meth:`_compose_since` so the model call can run
+        off the UI thread."""
+        res = self._since_view(arg)
+        if isinstance(res, str):
+            return res
+        view, raw = res
+        return self._since_finish(view, raw)
+
+    def _since_view(self, arg: str):
+        """Deterministic half: parse ``arg``, build the SinceView, and advance the
+        last-look marker. Returns ``(view, raw)`` or an edge-case message string.
+        ``--raw`` forces the cited delta with no model call."""
         if self.st is None:
             return "(no live session — transcript gone; nothing to diff)"
-        when = (arg or "last-look").strip().lower()
+        toks = [t for t in (arg or "").split() if t]
+        raw = "--raw" in toks
+        toks = [t for t in toks if t != "--raw"]
+        when = " ".join(toks).strip().lower() or "last-look"
         line, ts = self._cur_line()
         key = self._lastlook_key()
-        if when in ("", "last-look", "lastlook", "last"):
+        if when in ("last-look", "lastlook", "last"):
             if not LL.enabled():
                 return ("last-look tracking is off (persistence disabled). "
                         "Try `/since 30m` for a time window.")
@@ -373,11 +389,33 @@ class ChatSession:
             view = SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
                             label="last look")
             LL.mark(key, line, ts, _now_iso())     # consume: next /since is incremental
+        else:
+            secs = SI.parse_duration(when)
+            if secs is None:
+                return f"unknown time {when!r} — use 'last-look' or a duration like 30m / 2h / 1d"
+            view = SI.build(self.st.tr, self.st, seconds=secs, label=when)
+        return (view, raw)
+
+    def _since_finish(self, view, raw: bool) -> str:
+        """Recap-by-default: an LLM recap grounded in the delta with the cited
+        evidence kept beneath it. The deterministic delta is returned verbatim
+        when ``--raw``, when no backend is available, or when nothing changed
+        (no point spending a model call to recap an empty delta)."""
+        if raw or not view.has_changes or not N.available(self.backend):
             return view.text
-        secs = SI.parse_duration(when)
-        if secs is None:
-            return f"unknown time {when!r} — use 'last-look' or a duration like 30m / 2h / 1d"
-        return SI.build(self.st.tr, self.st, seconds=secs, label=when).text
+        try:
+            recap = N.recap_since(view.text, model=self.model, backend=self.backend)
+        except Exception as e:
+            return view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
+        return self._compose_since(recap, view)
+
+    @staticmethod
+    def _compose_since(recap: str, view) -> str:
+        """Narrative on top, the deterministic cited delta beneath it (minus its
+        own title, since the recap heading replaces it)."""
+        body = view.text.split("\n", 1)[1] if view.text.startswith("#") else view.text
+        return (f"# 🛰  recap — since {view.label}\n\n{recap.strip()}\n\n"
+                f"---\n_evidence — every `[L…]` is a transcript line:_\n{body}")
 
     def _handoff(self, arg: str):
         if self.st is None:

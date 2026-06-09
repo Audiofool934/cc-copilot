@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.11.0 — 2026-06-09
+
+**`/since` is now a grounded LLM recap.** Re-entering after the agent worked, you
+get a short natural-language recap of what changed — *narrated by the model from
+the deterministic, `[L…]`-cited delta*, not free-associated. It stays true to
+cc-copilot's non-hallucinating identity: the model sees only the cited delta (the
+same evidence `/since --raw` prints) and keeps its citations.
+
+- **Recap on top, cited evidence beneath** — read the narrative for speed, drop
+  to the `[L…]` lines to verify.
+- **Recap by default when a backend is available; deterministic fallback when
+  not** — with `--no-backend`, or `/since --raw`, you get the instant cited delta
+  and no model call. The model is also skipped when nothing changed.
+- In the cockpit, `/since` runs the narration on a worker thread (spinner, no UI
+  freeze); the re-entry "N new since you last looked" banner stays instant.
+- CLI: `cc-copilot since [when] [--raw] [--model …] [--backend …]`.
+
 ## 0.10.5 — 2026-06-09
 
 **Timeline horizontal panning + a scroll-position fix.**

@@ -371,6 +371,45 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("done", joined)
         self.assertNotIn("window-1", joined)
 
+    async def test_cockpit_since_renders_grounded_recap_async(self):
+        """/since in the cockpit narrates the cited delta on a worker thread (no UI
+        freeze) and renders the recap + evidence; --raw stays the instant delta."""
+        import json
+        import tempfile
+        from textual.widgets import Collapsible, Static
+        from cccopilot import narrate as N
+        from cccopilot.chat import ChatSession
+        real_recap, real_avail = N.recap_since, N.available
+        N.available = lambda be=None: True
+        N.recap_since = lambda text, model=None, backend=None: "RECAP_NARRATIVE [L4]"
+        try:
+            d = tempfile.mkdtemp(prefix="cctsince-")
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                    "message": {"role": "user", "content": "go"}}) + "\n")
+                for i in range(4):
+                    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                            "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                            "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+                    f.write(json.dumps({"type": "user", "message": {"role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": f"t{i}",
+                                         "content": "ok"}]}}) + "\n")
+            sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/since 30m")                       # starts the recap worker
+                await app.workers.wait_for_complete()         # let the thread finish
+                await pilot.pause()                           # process call_from_thread
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertIn("RECAP_NARRATIVE", blob)        # the narrative landed
+                self.assertIn("evidence", blob)               # cited delta beneath it
+                self.assertFalse(app._busy)                   # spinner cleared
+        finally:
+            N.recap_since, N.available = real_recap, real_avail
+
     async def test_status_header_shows_session_mode(self):
         from textual.widgets import Static
         sess = self._session("sess-A")

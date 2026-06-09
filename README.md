@@ -23,7 +23,7 @@ Inside Cockpit:
 /sessions   choose one or more agent sessions (incl. your own live session)
 /here       observe the session you're running inside of
 /observe    attention queue and next human decision
-/since      what changed since you last looked (or 30m / 2h)
+/since      recap since you last looked (or 30m / 2h; --raw = cited delta)
 /handoff    shareable Markdown handoff (brief + what changed)
 /brief      deterministic recap with citations
 /check      safety / off-track verdict
@@ -118,8 +118,9 @@ cc-copilot status                  # fleet board, neediest first
 cc-copilot observe                 # attention queue
 cc-copilot brief                   # deterministic recap
 cc-copilot check                   # safety verdict
-cc-copilot since                   # what changed since you last looked
+cc-copilot since                   # grounded LLM recap since you last looked
 cc-copilot since 30m               # …or within a time window
+cc-copilot since --raw             # the deterministic cited delta, no model call
 cc-copilot handoff --out h.md      # shareable Markdown handoff
 cc-copilot watch --notify          # desktop alert when the agent needs you
 cc-copilot ask "what changed?"     # one-shot grounded Q&A
@@ -183,9 +184,12 @@ launches.
 The hardest part of supervising long-running agents is *re-entry*: you stepped
 away, the agent kept working, and now you have to reconstruct what happened.
 
-- **`since`** answers "what changed since I last looked" — a deterministic,
-  cited diff of new asks, agent messages, commands, failures, changed files, and
-  any status/safety transition. cc-copilot remembers where you last looked (a
+- **`since`** answers "what changed since I last looked" — by default a short
+  **LLM recap narrated from** the deterministic, cited diff of new asks, agent
+  messages, commands, failures, changed files, and any status/safety transition
+  (the model sees only that cited delta and keeps its `[L…]` citations; `--raw`
+  or no backend gives the deterministic delta itself). cc-copilot remembers where
+  you last looked (a
   small marker under `$CC_COPILOT_STATE_DIR`, never under `~/.claude`/`~/.codex`);
   the cockpit stamps it when you leave and greets you with "⟳ N new since you last
   looked" when you return. Or scope by time: `since 30m`, `since 2h`.
