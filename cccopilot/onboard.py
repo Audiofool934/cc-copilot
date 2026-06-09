@@ -131,7 +131,29 @@ def _esc(v: str) -> str:
     return str(v).replace("\\", "\\\\").replace('"', '\\"')
 
 
-def render_config(backend, model="", env=None, history_enabled=True) -> str:
+def _existing_agents(existing: dict):
+    """The user's ``[agents] enabled`` list from a parsed config, or None.
+    Accepts a TOML array (tomllib) or a comma/space string (fallback parser)."""
+    a = existing.get("agents")
+    if not isinstance(a, dict) or a.get("enabled") is None:
+        return None
+    v = a["enabled"]
+    if isinstance(v, (list, tuple)):
+        names = [str(x).strip() for x in v if str(x).strip()]
+    else:
+        # the no-tomllib fallback parser hands back the raw array text
+        # (e.g. '["claude", "codex"]') as a string — unwrap it ourselves.
+        s = str(v).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        names = [t.strip().strip('"').strip("'")
+                 for t in s.replace(",", " ").split()]
+        names = [n for n in names if n]
+    return names or None
+
+
+def render_config(backend, model="", env=None, history_enabled=True,
+                  history_dir="", agents_enabled=None) -> str:
     """Produce a clean, commented ``~/.cc-copilot.toml`` reflecting a choice.
 
     ``backend`` is a backend name, or None for "skip" (the default applies and a
@@ -182,12 +204,19 @@ def render_config(backend, model="", env=None, history_enabled=True) -> str:
         "# locally under $CC_COPILOT_STATE_DIR (0700/0600), never under ~/.claude.",
         "[history]",
         f"enabled = {'true' if history_enabled else 'false'}",
+    ]
+    if history_dir:
+        lines.append(f'dir = "{_esc(history_dir)}"')
+    lines += [
         "",
         "# Which coding agents to observe (default: every one found on this machine).",
-        "# [agents]",
-        '# enabled = ["claude", "codex"]',
-        "",
     ]
+    if agents_enabled:
+        arr = ", ".join(f'"{_esc(a)}"' for a in agents_enabled)
+        lines += ["[agents]", f"enabled = [{arr}]"]
+    else:
+        lines += ["# [agents]", '# enabled = ["claude", "codex"]']
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -200,18 +229,37 @@ def write_choice(name, model="", key_value="", path=None) -> str:
     env = dict(existing.get("env") or {})
     if c.kind == "api" and key_value:
         env[c.key_env] = key_value
-    hist = existing.get("history")
-    hist_enabled = bool(hist.get("enabled", True)) if isinstance(hist, dict) else True
+    # Preserve every non-model setting the user may have curated, so changing
+    # provider via `init --force` never silently moves their saved history or
+    # re-enables agents they had turned off.
+    hist = existing.get("history") if isinstance(existing.get("history"), dict) else {}
+    hist_enabled = bool(hist.get("enabled", True))
+    hist_dir = str(hist.get("dir") or "")
+    agents_enabled = _existing_agents(existing)
     text = render_config(backend=(c.name or None), model=model, env=env,
-                         history_enabled=hist_enabled)
-    tmp = f"{p}.tmp-{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, p)
+                         history_enabled=hist_enabled, history_dir=hist_dir,
+                         agents_enabled=agents_enabled)
+    # Create the temp file 0600 from the start (mkstemp honors that, ignoring
+    # umask) so an API key never lands in a world-readable file — not even in the
+    # window before chmod, and not if we crash mid-write. Same dir as the target
+    # so os.replace stays atomic (same filesystem).
+    import tempfile
+    d = os.path.dirname(p) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".cc-copilot-", suffix=".tmp")
     try:
-        os.chmod(p, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(p, 0o600)        # also tighten if an older file was looser
     except OSError:
         pass
     return p

@@ -187,6 +187,17 @@ class TestInitCli(unittest.TestCase):
         data = CFG._load_simple(self.p)
         self.assertEqual(data["env"]["OPENAI_API_KEY"], "sk-keep")  # key preserved
 
+    def test_terminal_wizard_propagates_choice_into_args(self):
+        # a first-run plain `chat` builds the ChatSession right after the wizard;
+        # the chosen backend must land on args so it's used now, not next launch.
+        import argparse
+        ns = argparse.Namespace(backend=None, model=None)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli._run_terminal_onboard(ns)
+        self.assertEqual(rc, 0)
+        self.assertEqual(ns.backend, "claude")           # first row / first ready CLI
+
 
 if __name__ == "__main__":
     unittest.main()

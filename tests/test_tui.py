@@ -1304,6 +1304,24 @@ class TestWelcomeScreen(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.backend, "claude")
             self.assertEqual(app.session.backend, "claude")
 
+    async def test_switching_to_cli_via_init_clears_stale_api_model(self):
+        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N, onboard as OB
+        real = N.available
+        N.available = lambda b=None: True
+        self.addCleanup(lambda: setattr(N, "available", real))
+        p = write([user("x", 30), asst("y", 10)])
+        # cockpit launched from an existing API config: model = gpt-4o
+        sess = ChatSession(p, backend="openai", model="gpt-4o")
+        sess.refresh()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._after_onboard(("claude", OB.choice_for("claude")))   # /init → Claude
+            self.assertEqual(app.backend, "claude")
+            self.assertIsNone(app.session.model)        # stale gpt-4o dropped
+            self.assertIsNone(app.model)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -106,6 +106,24 @@ class TestWriteChoice(_Base):
         self.assertEqual(data.get("backend"), "claude")
         self.assertEqual(data.get("env", {}), {})    # CLIs need no secret
 
+    def test_rerun_preserves_history_dir_and_agents_list(self):
+        from pathlib import Path
+        with open(self.p, "w") as f:
+            f.write('backend = "openai"\n[env]\nOPENAI_API_KEY = "sk-o"\n'
+                    '[history]\nenabled = true\ndir = "/tmp/ccstate"\n'
+                    '[agents]\nenabled = ["claude"]\n')
+        OB.write_choice("claude")                    # change backend only
+        txt = Path(self.p).read_text()
+        self.assertIn('dir = "/tmp/ccstate"', txt)   # custom state dir survives
+        self.assertIn('enabled = ["claude"]', txt)   # agent allow-list survives
+
+    def test_no_secret_temp_file_left_behind_and_mode_is_600(self):
+        OB.write_choice("openai", key_value="sk-secret")
+        mode = stat.S_IMODE(os.stat(self.p).st_mode)
+        self.assertEqual(mode, 0o600)
+        leftovers = [f for f in os.listdir(self.dir) if f.startswith(".cc-copilot-")]
+        self.assertEqual(leftovers, [])              # temp file cleaned up
+
 
 class TestApplyToEnv(_Base):
     def test_api_sets_backend_and_key(self):

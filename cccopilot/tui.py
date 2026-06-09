@@ -1231,8 +1231,12 @@ class Cockpit(App):
             self._update_status()
             return
         self._set_backend(name)                 # applies to the live session + UI
-        if choice.kind == "api" and choice.default_model:
-            self.model = self.session.model = choice.default_model
+        if choice.kind == "api":
+            self.model = self.session.model = choice.default_model or self.model
+        else:
+            # a CLI backend uses its own default — drop any stale API model
+            # (e.g. a prior gpt-4o) so we don't pass it to `claude --model …`.
+            self.model = self.session.model = None
         self._update_header()
         self._update_status()
         self.notify(f"model ready · {choice.label}", severity="information")

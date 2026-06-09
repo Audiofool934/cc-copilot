@@ -170,6 +170,14 @@ def _run_terminal_onboard(args=None) -> int:
     name = c.name or "skip"
     OB.write_choice(name, model=model, key_value=key_value)
     OB.apply_to_env(name, model=model, key_value=key_value)
+    # Propagate into the caller's args so a session built right after (first-run
+    # `chat`) uses the choice now — the named API backends don't read
+    # CC_COPILOT_MODEL, so writing config/env alone wouldn't take until relaunch.
+    if args is not None and c.kind != "skip":
+        if hasattr(args, "backend") and getattr(args, "backend") is None:
+            args.backend = name
+        if hasattr(args, "model") and getattr(args, "model") is None and model:
+            args.model = model
     if c.kind == "skip":
         print(f"\n  ✓ saved {CFG.path()} — no model set; the default ({N.backend_name()}) "
               f"applies.\n    Run `cc-copilot init` anytime to choose one.")
