@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.13.0 — 2026-06-09
+
+**The status bar reflows to width — a narrow sidebar keeps every field.** Before,
+the bottom status bar was a single `height: 1` line that got cropped on the right
+when the window was narrow, so in a sidebar the verdict, watched session, idle
+counters, and context HUD simply disappeared. It now adapts:
+- **Wide** (fits): unchanged single dense line.
+- **Medium**: an identity row (status · verdict · copilot · watching) + an
+  activity/HUD row.
+- **Narrow** (sidebar): author-controlled stacked rows — status + verdict pinned
+  to row 1, then copilot, `↳ <session> · idle`, and the context HUD split onto its
+  own rows. Nothing is dropped; `watching` abbreviates to `↳`. At brutal widths
+  the verdict badge demotes to its own row rather than clip.
+
+The layout is **measurement-driven** (it picks the widest layout whose content
+actually fits `self.size.width`, re-rendered on resize), and the HUD rows are
+**split from `format_hud`/`format_answering`'s own output**, so the CLI formatters
+stay the single source of truth and a future HUD field flows in for free. Growth
+is bounded (`max-height: 8`) so the HUD can't starve the chat pane. A regression
+test asserts every datum on the wide line survives into the narrow stack.
+
 ## 0.12.1 — 2026-06-09
 
 **Flat (30,30,30) ground — the neutral background is now what you actually see.**

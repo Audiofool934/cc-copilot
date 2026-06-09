@@ -902,6 +902,60 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.theme, "signal")
 
+    async def test_status_bar_reflows_to_narrow_keeping_every_field(self):
+        """In a narrow sidebar the status bar stacks into rows instead of cropping
+        — every datum that's on the wide single line survives into the narrow
+        stack (the user's hard requirement: all details stay visible)."""
+        from cccopilot import context as EC, assess as A
+        sess = self._session("sess-A")
+        sess.model = "gpt-5"
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(120, 26)) as pilot:
+            await pilot.pause()
+            app._ctx_stats = EC.ContextStats(
+                estimated_tokens=1200, raw_tokens=1100, project_tokens=4000,
+                chat_tokens=800, memory_tokens=120, index_tokens=90,
+                budget_tokens=200000, truncated=True)
+            app._out_tokens = 300
+            verdict = A.assess(sess.st).verdict.upper()
+
+            wide = app._status_text(200).plain
+            narrow = app._status_text(42).plain
+            brutal = app._status_text(30).plain
+
+            # wide is one dense line; narrow reflows to several rows
+            self.assertNotIn("\n", wide)
+            self.assertGreaterEqual(narrow.count("\n"), 4)
+
+            # every datum on the wide line must survive into the narrow stack —
+            # the HUD parts (split from EC.format_hud) are the easiest to lose.
+            data = ["copilot codex:gpt-5", "claude session", "idle", verdict,
+                    "ctx ~1.2k / 200k", "out ~300", "raw 1.1k", "project 4k",
+                    "chat 800", "memory 120", "index 90", "trimmed"]
+            for tok in data:
+                self.assertIn(tok, wide, f"{tok} missing from wide line")
+                self.assertIn(tok, narrow, f"{tok} dropped when narrow")
+
+            # PIN invariant: even at a brutal width the verdict badge and the full
+            # HUD are still present (badge just demotes to its own row).
+            self.assertIn(verdict, brutal)
+            self.assertIn("index 90", brutal)
+
+    async def test_status_bar_history_only_stacks_when_narrow(self):
+        from cccopilot import context as EC  # noqa
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(100, 26)) as pilot:
+            await pilot.pause()
+            app.session.st = None                       # transcript gone
+            wide = app._status_text(200).plain
+            narrow = app._status_text(40).plain
+            self.assertNotIn("\n", wide)
+            self.assertGreaterEqual(narrow.count("\n"), 2)
+            for tok in ("history-only", "transcript gone", "copilot codex",
+                        "claude session"):
+                self.assertIn(tok, narrow, f"{tok} dropped when narrow")
+
     async def test_scope_command_updates_status(self):
         from textual.widgets import Static
         sess = self._session("sess-A")
