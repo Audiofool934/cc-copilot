@@ -562,7 +562,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
     async def test_keep_scroll_preserves_horizontal_pan_at_bottom(self):
         """A same-session refresh while tailing must keep a horizontal pan — a bare
         scroll_end (x_axis=True) would snap a panned-across long line to column 0
-        every poll. An evidence switch instead resets the pan to the start."""
+        every poll. An evidence switch instead resets the pan to the start. The long
+        rows live in the EVIDENCE (JSONL), so they survive _rebuild_timeline's
+        clear-and-reseed and the pan assertion is real (not a deferred-clamp fluke)."""
         import json
         import tempfile
         from cccopilot.chat import ChatSession
@@ -572,22 +574,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         with open(p, "w", encoding="utf-8") as f:
             f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
                                 "message": {"role": "user", "content": "go"}}) + "\n")
+            for i in range(40):                                  # long commands in the evidence
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                        "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                        "name": "Bash", "input": {"command": f"echo row {i} " + ("y" * 120),
+                                                  "description": ""}}]}}) + "\n")
         sess = ChatSession(p, alerts=False, persist=False)
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             rl = app.query_one("#timeline-log", RichLog)
-            for i in range(40):                                  # long unwrapped lines
-                app._timeline(tui.Text(f"line {i} " + ("y" * 120)))
-            await pilot.pause()
-            self.assertGreater(rl.max_scroll_x, 30)              # genuinely pannable
+            self.assertGreater(rl.max_scroll_x, 30)              # pannable from the evidence
             rl.scroll_to(x=30, y=rl.max_scroll_y, animate=False)  # at bottom AND panned
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.x, 30)
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)
             app._rebuild_timeline()                              # same evidence: poll/theme/refresh
             await pilot.pause()
-            self.assertEqual(rl.scroll_offset.x, 30)             # pan KEPT (x_axis=False)
+            self.assertGreater(rl.max_scroll_x, 30)             # long rows survived the reseed
+            self.assertEqual(rl.scroll_offset.x, 30)            # pan KEPT (x_axis=False)
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)  # still tailing
             # an evidence switch resets the horizontal pan to the start
             rl.scroll_to(x=30, y=rl.max_scroll_y, animate=False)
