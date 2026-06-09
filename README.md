@@ -29,6 +29,8 @@ OpenRouter, key captured inline). It only shows once; reopen it anytime with
 `/init`, or run `cc-copilot init` in a plain terminal (handy over SSH). The
 deterministic core (`brief` / `check` / `observe`) needs no model at all.
 
+![CC-Copilot first-run welcome screen](docs/welcome.png)
+
 Inside Cockpit:
 
 ```text
