@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.11.2 — 2026-06-09
+
+**The chat and timeline panes now line up.** Two theme/layout nits:
+- **Scrollbars match and align.** The chat used a thicker (2-cell) scrollbar that
+  floated a couple columns short of the screen edge, while the timeline's was a
+  thin 1-cell bar at the edge. The chat now uses a 1-cell bar at the same column
+  (`VerticalScroll`'s default `width: 1fr` was reserving gutter and leaving the
+  pane 2 columns narrow — pinned to `width: 100%`; both panes drop their right
+  padding so the bars reach the edge).
+- **One continuous surface.** The chat was `$surface` while the timeline/header
+  are `$panel`, so it read as a separate color block; it's now `$panel` too, so
+  the panes blend.
+
 ## 0.11.1 — 2026-06-09
 
 **The chat gutter bars now match the timeline's.** The activity timeline draws a

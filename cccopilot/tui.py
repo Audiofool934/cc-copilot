@@ -843,7 +843,9 @@ class Cockpit(App):
     #timeline {
         height: 6;
         border-bottom: solid $accent;
-        background: $panel; padding: 0 1;
+        /* left pad only — no RIGHT pad, so the log's scrollbar reaches the screen
+           edge and lines up with #chat's (which sits at the edge too). */
+        background: $panel; padding: 0 0 0 1;
     }
     #timeline-title { color: $accent; text-style: bold; height: 1; }
     #timeline-log {
@@ -852,7 +854,17 @@ class Cockpit(App):
         scrollbar-size-horizontal: 0;  /* …but draw NO horizontal bar (pan by wheel/trackpad) */
         scrollbar-size-vertical: 1;    /* thin vertical bar */
     }
-    #chat { height: 1fr; background: $surface; padding: 0 1; }
+    /* same $panel as the timeline so the two panes read as one surface (not a
+       separate block), and a 1-cell scrollbar that aligns with the timeline's. */
+    #chat {
+        /* width:100% — VerticalScroll defaults to width:1fr, which reserves the
+           scrollbar gutter and leaves the pane 2 cols short of its siblings, so
+           its scrollbar floated off the edge; 100% fills the width and lands the
+           scrollbar at the screen edge, aligned with the timeline's. Left pad
+           only (no right pad) so nothing sits between content and that edge. */
+        width: 100%; height: 1fr; background: $panel; padding: 0 0 0 1;
+        scrollbar-size-vertical: 1;
+    }
 
     /* status + composer flow at the bottom (above the docked Footer); no
        competing dock:bottom so the composer box is always visible. */
