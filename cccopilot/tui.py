@@ -1478,21 +1478,29 @@ class Cockpit(App):
             Text(f"🛰  recapping {title} — grounded in the evidence…",
                  style=_PAL["muted"]), "role-event"))
         self._update_status()
-        self._since_recap(title, view)
+        # capture which evidence this recap is ABOUT — if the user switches
+        # (/use, /sessions, /here, /resume, /new) while it runs, its citations no
+        # longer match the current session, so we drop it instead of rendering it
+        # under the wrong transcript.
+        self._since_recap(title, view, self._evidence_sig())
 
     @work(thread=True)
-    def _since_recap(self, title, view):
+    def _since_recap(self, title, view, origin):
         try:
             recap = N.recap_since(view.text, model=self.model, backend=self.backend)
             out = self.session._compose_since(recap, view)
         except Exception as e:
             out = view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
-        self.call_from_thread(self._since_done, title, out)
+        self.call_from_thread(self._since_done, title, out, origin)
 
-    def _since_done(self, title, out):
+    def _since_done(self, title, out, origin):
         self._busy = False
         self._busy_frame = 0
-        self._collapsible(title, out)
+        if self._evidence_sig() == origin:
+            self._collapsible(title, out)
+        else:
+            self.notify(f"dropped {title} recap — you switched evidence while it ran",
+                        severity="warning")
         self._update_status()
 
     # ---- background watcher ----

@@ -410,6 +410,46 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.recap_since, N.available = real_recap, real_avail
 
+    async def test_cockpit_since_recap_dropped_after_evidence_switch(self):
+        """If the user switches evidence while a /since recap runs, the result —
+        whose citations are about the OLD session — must be dropped, not rendered
+        under the new transcript."""
+        import json
+        import tempfile
+        from textual.widgets import Static
+        from cccopilot import narrate as N
+        from cccopilot.chat import ChatSession
+        real_recap, real_avail = N.recap_since, N.available
+        try:
+            d = tempfile.mkdtemp(prefix="cctswitch-")
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x",
+                                    "message": {"role": "user", "content": "go"}}) + "\n")
+                for i in range(4):
+                    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                            "model": "c", "content": [{"type": "tool_use", "id": f"t{i}",
+                            "name": "Bash", "input": {"command": f"cmd-{i}", "description": ""}}]}}) + "\n")
+            sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            N.available = lambda be=None: True
+            # the model call "takes a while" during which the user switches evidence
+            def recap_then_switch(text, model=None, backend=None):
+                app.session.path = "/some/other/session.jsonl"   # evidence changed
+                return "STALE_RECAP [L4]"
+            N.recap_since = recap_then_switch
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/since 30m")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertNotIn("STALE_RECAP", blob)         # dropped, not mis-rendered
+                self.assertFalse(app._busy)                   # spinner still cleared
+        finally:
+            N.recap_since, N.available = real_recap, real_avail
+
     async def test_status_header_shows_session_mode(self):
         from textual.widgets import Static
         sess = self._session("sess-A")

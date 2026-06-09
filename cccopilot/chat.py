@@ -30,7 +30,7 @@ def _now_iso() -> str:
     import datetime
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
-_HELP = """commands (all but questions are LLM-free):
+_HELP = """commands (LLM-free except questions and the /since recap — /since --raw stays deterministic):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
   /since [when]     recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
