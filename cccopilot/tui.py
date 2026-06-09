@@ -240,6 +240,13 @@ def _short_activity(text: str, limit: int = 70) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# Timeline rows are unwrapped and pan horizontally, so they keep far more than
+# the compact status-line summaries — a long path / command / error stays
+# readable by scrolling sideways. Still capped so one pathological multi-KB blob
+# can't make the virtual width (and the pan distance) absurd.
+_TIMELINE_LINE_MAX = 200
+
+
 def _tool_activity_target(record) -> str:
     inp = record.tool_input if isinstance(record.tool_input, dict) else {}
     if record.tool_name == "Bash":
@@ -253,17 +260,17 @@ def _activity_line(record):
     if record.kind == "human" and not record.housekeeping:
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("user", style=_PAL["secondary"])
-        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     if record.kind == "agent_text":
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("agent", style=_PAL["primary"])
-        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     if record.kind == "agent_thinking":
         return Text(f"{record.hhmm} agent thinking", style=_PAL["muted"])
     if record.kind == "tool_call":
-        target = _short_activity(_tool_activity_target(record), 58)
+        target = _short_activity(_tool_activity_target(record), _TIMELINE_LINE_MAX)
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append(record.tool_name or "tool", style=_PAL["accent"])
         if target:
@@ -273,7 +280,7 @@ def _activity_line(record):
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("tool error", style=_PAL["error"])
         if record.text:
-            t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+            t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     return None
 
@@ -841,7 +848,8 @@ class Cockpit(App):
     #timeline-title { color: $accent; text-style: bold; height: 1; }
     #timeline-log {
         height: 1fr; background: $panel;
-        overflow-x: hidden;            /* wrap=True handles width; no sideways scroll */
+        overflow-x: auto;              /* long lines (wrap=False) stay scrollable… */
+        scrollbar-size-horizontal: 0;  /* …but draw NO horizontal bar (pan by wheel/trackpad) */
         scrollbar-size-vertical: 1;    /* thin vertical bar */
     }
     #chat { height: 1fr; background: $surface; padding: 0 1; }
@@ -921,6 +929,7 @@ class Cockpit(App):
         self._watch_path = None
         self._watch_size = -1
         self._watch_state = None
+        self._timeline_sig = None       # evidence identity of the last rebuild
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -928,11 +937,12 @@ class Cockpit(App):
         # The activity log is a RichLog (not one widget per line) so it can hold
         # the *entire* session history efficiently and scroll through all of it;
         # the title stays pinned above it.
-        # min_width=1 so wrapping measures at the panel's real content width
-        # (RichLog defaults to 78, which on an 80-col terminal forces a 1-column
-        # horizontal overflow); with wrap=True we never want a sideways scrollbar.
+        # wrap=False: each event stays on one row and long lines pan with a (thin)
+        # horizontal scrollbar instead of folding. min_width=1 so that bar appears
+        # ONLY when a line truly exceeds the panel width — the default 78 would
+        # force a spurious 1-column scroll even for short lines on an 80-col term.
         timeline_log = RichLog(id="timeline-log", markup=False, highlight=False,
-                               wrap=True, auto_scroll=False, min_width=1)
+                               wrap=False, auto_scroll=False, min_width=1)
         timeline_log.can_focus = False
         timeline = Vertical(
             Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
@@ -1150,17 +1160,35 @@ class Cockpit(App):
             follow = rl.scroll_offset.y >= rl.max_scroll_y - 1
         rl.write(_timeline_gutter(renderable, cls), scroll_end=follow)
 
-    def _land_timeline(self, rl, prev_y, was_bottom):
-        """After a full rebuild, restore the reader's view: follow the newest
-        line only if they were already at the bottom, otherwise put them back
-        where they were. A bare scroll_end would yank a scrolled-up reader to the
-        bottom on every rebuild (an alerts=False growth tick, or *any* non-SESSION
-        scope, which rebuilds each poll) — defeating tail-follow. The content is
-        the same re-seeded history, so the prior offset stays meaningful."""
-        if was_bottom:
-            rl.scroll_end(animate=False)
+    def _land_timeline(self, rl, prev_y, was_bottom, keep_scroll):
+        """Land the viewport after a full rebuild. ``keep_scroll`` (a *same-session*
+        refresh — poll tick, theme change, manual refresh) holds the reader's
+        position: follow the newest line only if they were already at the bottom,
+        and keep the horizontal pan either way — scroll_end defaults to x_axis=True,
+        which would snap a panned-across long line back to column 0 every tick.
+        Otherwise (first build, or an evidence/scope switch into a *different*
+        history) land on the newest line and reset the pan — a stale offset would
+        open a freshly-selected session scrolled into the middle."""
+        if keep_scroll:
+            if was_bottom:
+                rl.scroll_end(animate=False, x_axis=False)   # follow y, keep x pan
+            else:
+                rl.scroll_to(y=prev_y, animate=False, force=True)   # x left untouched
         else:
-            rl.scroll_to(y=prev_y, animate=False, force=True)
+            # evidence switch / first build: land on the newest line at column 0.
+            # rl.clear() already reset x→0, and scroll_end lands at (x=0, y=max) —
+            # NOT the far right — so a new session shows line starts (timestamps,
+            # tool names), never the tail of a long row.
+            rl.scroll_end(animate=False)
+
+    def _evidence_sig(self):
+        """Identity of *what* the timeline is showing — scope, the session, and the
+        multi-session set. A rebuild whose signature is unchanged is a same-session
+        refresh (poll tick, theme, /refresh, re-observe, a no-op /scope); a changed
+        signature is an evidence switch (/sessions, /use, /here, /scope, /resume)."""
+        s = self.session
+        return (s.scope, s.path,
+                tuple(sorted(str(x) for x in (getattr(s, "scope_sessions", None) or []))))
 
     def _rebuild_timeline(self):
         rl = self.query_one("#timeline-log", RichLog)
@@ -1169,6 +1197,12 @@ class Cockpit(App):
         # When the log overflows by a single line (max_scroll_y == 1) that slack
         # would treat a top reader (y == 0) as at-bottom and yank them down.
         was_bottom = prev_y >= rl.max_scroll_y         # capture BEFORE clear
+        # Keep the reader's scroll only when the evidence is unchanged; an evidence
+        # switch (or the first build) lands on the newest line. Derived, not passed
+        # by callers — _refresh_scope_view has both same-evidence and switch callers.
+        sig = self._evidence_sig()
+        keep_scroll = (sig == self._timeline_sig)
+        self._timeline_sig = sig
         snap = _scope_snapshot(self.session)
         title = _scope_activity_title(self.session, snap)
         try:
@@ -1187,7 +1221,7 @@ class Cockpit(App):
             self._timeline(_timeline_status_line(self.session.st), follow=False)
             for line in _recent_activity_lines(self.session.st):   # the *entire* history
                 self._timeline(line, follow=False)
-            self._land_timeline(rl, prev_y, was_bottom)
+            self._land_timeline(rl, prev_y, was_bottom, keep_scroll)
             return
         if self.session.scope == SC.PROJECT:
             root = _project_cwd(self.session)
@@ -1198,7 +1232,7 @@ class Cockpit(App):
         self._timeline(_scope_timeline_summary(self.session, snap), follow=False)
         for line in _scoped_recent_activity_lines(snap.get("items", [])):
             self._timeline(line, follow=False)
-        self._land_timeline(rl, prev_y, was_bottom)
+        self._land_timeline(rl, prev_y, was_bottom, keep_scroll)
 
     def _rebuild_chat(self, clear=True):
         """Repaint the chat pane from the session's (possibly restored) history,
