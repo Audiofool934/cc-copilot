@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-copilot"
-version = "0.13.1"
+version = "0.13.2"
 description = "Read-only shadow-memory sidecar for coding agents: faithful, evidence-cited recap + safety judgment + grounded chat."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,9 +14,16 @@ authors = [{ name = "audiofool" }]
 keywords = ["claude-code", "codex", "tui", "observability", "agent", "cli", "sidecar"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Topic :: Software Development",
+    "Topic :: Terminals",
     "Topic :: Utilities",
 ]
 dependencies = []                      # the core + CLI are zero-dependency, on purpose
@@ -24,8 +31,14 @@ dependencies = []                      # the core + CLI are zero-dependency, on 
 [project.optional-dependencies]
 tui = ["textual>=2.0"]                 # the full-screen cockpit only (themes, palette, anchor)
 
+[project.urls]
+Homepage = "https://github.com/Audiofool934/cc-copilot"
+Repository = "https://github.com/Audiofool934/cc-copilot"
+Changelog = "https://github.com/Audiofool934/cc-copilot/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Audiofool934/cc-copilot/issues"
+
 [project.scripts]
 cc-copilot = "cccopilot.cli:main"
 
-[tool.setuptools]
-packages = ["cccopilot"]
+[tool.setuptools.packages.find]
+include = ["cccopilot*"]               # cccopilot AND cccopilot.sources (the adapters)

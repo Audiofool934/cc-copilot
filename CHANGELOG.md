@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.13.2 — 2026-06-09
+
+**Installable in one command — published to PyPI.** No more cloning the repo:
+
+```
+uv tool install "cc-copilot[tui]"      # or: pipx install "cc-copilot[tui]"
+uvx --from "cc-copilot[tui]" cc-copilot cockpit   # run without installing
+```
+
+- **Packaging fix (was ship-blocking):** the wheel listed `packages = ["cccopilot"]`,
+  which silently dropped the `cccopilot/sources/` subpackage (the Claude/Codex
+  adapters) — a plain `pip install` would have import-errored. Now uses
+  `packages.find` so every subpackage ships; verified by a clean-venv install.
+- **`cockpit` no longer writes a `.venv` into an installed package.** The
+  one-time TUI bootstrap was a *clone* convenience; when cc-copilot is installed
+  via pip/uv/pipx it now detects that and points you at the `[tui]` extra instead
+  of trying to build a `.venv` inside site-packages (which would pollute a
+  writable tool env and fail a read-only one).
+- **Release automation:** a GitHub Actions workflow publishes to PyPI via
+  Trusted Publishing (OIDC, no API tokens) on every `v*` tag, with a build that
+  runs `twine check`, a tag↔version guard (both `pyproject.toml` and
+  `__init__.py`), and a wheel install smoke test. See `docs/RELEASING.md`.
+- Added `[project.urls]`, Python-version/OS classifiers, and README install
+  badges.
+
 ## 0.13.1 — 2026-06-09
 
 **You can copy out of the cockpit now (`Ctrl+N` / `/select`).** Textual captures

@@ -108,5 +108,29 @@ class TestSinceHandoffCli(unittest.TestCase):
         self.assertIn("# Handoff —", out)
 
 
+class TestTuiRuntimeBootstrapGate(unittest.TestCase):
+    """An installed (non-clone) package must NEVER write a .venv into its install
+    dir (it may be read-only under uv/pipx) — it points at the [tui] extra."""
+
+    def test_source_checkout_detected_from_repo(self):
+        # the suite runs from the cloned repo (pyproject.toml + .git present)
+        self.assertTrue(cli._is_source_checkout())
+
+    def test_installed_without_textual_points_to_extra_not_bootstrap(self):
+        d = tempfile.mkdtemp(prefix="ccinstall-")   # bare dir = like site-packages
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d                  # pretend we're the installed package
+        cli._tui_importable = lambda: False         # textual absent
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                vpy = cli._ensure_tui_runtime(quiet=False)
+            self.assertIsNone(vpy)                              # no runtime built
+            self.assertIn("cc-copilot[tui]", err.getvalue())   # directs to the extra
+            self.assertFalse(os.path.isdir(os.path.join(d, ".venv")))  # nothing written
+        finally:
+            cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+
 if __name__ == "__main__":
     unittest.main()
