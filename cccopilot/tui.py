@@ -499,8 +499,11 @@ def _scope_activity_title(session, snap=None) -> str:
 
 
 def _prefixed_activity_line(sid: str, line) -> Text:
+    # append_text (not append(str(line), …)) — preserve the line's own spans,
+    # incl. the per-agent `agent` hue, instead of flattening the whole row to one
+    # muted color. Without this a mixed-agent scoped timeline loses its brand tints.
     t = Text(f"{sid} · ", style=_PAL["muted"])
-    t.append(str(line), style=_PAL["text"])
+    t.append_text(line if isinstance(line, Text) else Text(str(line)))
     return t
 
 

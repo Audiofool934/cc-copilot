@@ -346,6 +346,19 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         agent_span = next(s for s in line.spans if line.plain[s.start:s.end] == "agent")
         self.assertEqual(agent_span.style, "#347ff2")
 
+    async def test_scoped_prefix_preserves_agent_brand_span(self):
+        """In a multi-session timeline the sid-prefixed row must keep its
+        per-agent `agent` hue — `_prefixed_activity_line` preserves the spans
+        instead of flattening the row to one muted color."""
+        rec = types.SimpleNamespace(
+            kind="agent_text", hhmm="10:00", text="done", housekeeping=False,
+            tool_name=None, tool_input=None, is_error=False)
+        line = tui._activity_line(rec, "#347ff2")          # Codex blue
+        prefixed = tui._prefixed_activity_line("ab12cd34", line)
+        agent_span = next(s for s in prefixed.spans
+                          if prefixed.plain[s.start:s.end] == "agent")
+        self.assertEqual(agent_span.style, "#347ff2")
+
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
