@@ -147,6 +147,16 @@ class TestChoiceFor(_Base):
         with self.assertRaises(ValueError):
             OB.choice_for("not-a-backend")
 
+    def test_choice_for_or_none(self):
+        # curated API/CLI providers resolve to a Choice…
+        self.assertEqual(OB.choice_for_or_none("deepseek").kind, "api")
+        self.assertEqual(OB.choice_for_or_none("claude").kind, "cli")
+        # …while non-curated backends and skip/empty return None (no key logic).
+        self.assertIsNone(OB.choice_for_or_none("ollama"))
+        self.assertIsNone(OB.choice_for_or_none("gemini"))
+        self.assertIsNone(OB.choice_for_or_none("skip"))
+        self.assertIsNone(OB.choice_for_or_none(""))
+
 
 if __name__ == "__main__":
     unittest.main()

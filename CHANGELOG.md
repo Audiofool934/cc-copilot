@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.14.1 — 2026-06-10
+
+**Fix: switching to an API provider via `/model` now prompts for its key.** The
+quick backend switch (`/model deepseek`, `/model` picker, or `Ctrl+T`) used to
+set an API provider silently even with no key on file — `resolve()` succeeds
+without one, so the switch "worked" but the next chat failed with `set
+DEEPSEEK_API_KEY`. It now opens a focused key prompt (the same persistence as
+onboarding: written to the chmod-600 `[env]` table, a real env var still wins),
+and **Cancel** keeps your current backend. Switching also keeps the active model
+coherent with the new backend's kind — an API provider adopts its default (e.g.
+`deepseek-chat`); a CLI backend drops any stale API model so a
+claude→deepseek→claude round-trip never runs `claude --model deepseek-chat`.
+
 ## 0.14.0 — 2026-06-10
 
 **First-run onboarding — pick your model once, instead of silently defaulting.**
