@@ -987,9 +987,11 @@ class Cockpit(App):
         Binding("ctrl+t", "model", "model"),
         # release the mouse so the TERMINAL does native selection + copy (⌘C):
         # Textual captures the mouse for scroll/click, which blocks the terminal's
-        # own click-drag selection. priority so it works while the composer is
-        # focused. ctrl+n (not ctrl+s — that's XOFF; not ctrl+b — tmux prefix).
-        Binding("ctrl+n", "toggle_select_mode", "select", priority=True),
+        # own click-drag selection. ctrl+n (not ctrl+s — XOFF; not ctrl+b — tmux
+        # prefix). NOT priority: an open Picker/MultiPicker uses ctrl+n to move to
+        # the next row and stops the event, so it keeps nav; with no modal open
+        # the composer lets ctrl+n bubble here to toggle select mode.
+        Binding("ctrl+n", "toggle_select_mode", "select"),
         # resize the activity timeline (the chat fills the rest); persisted.
         # priority so it works while the composer is focused. Shift+arrows are
         # the primary keys — macOS grabs Ctrl+Up/Down for Mission Control, so

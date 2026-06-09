@@ -1005,6 +1005,42 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("SELECT MODE",
                              str(app.query_one("#status", Static).content))
 
+    async def test_ctrl_n_toggles_select_mode_from_composer(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(92, 30)) as pilot:
+            await pilot.pause()
+            app._driver._enable_mouse_support = lambda: None
+            app._driver._disable_mouse_support = lambda: None
+            app.query_one("#composer").focus()
+            await pilot.pause()
+            self.assertFalse(app._select_mode)
+            await pilot.press("ctrl+n")               # bubbles past the composer
+            await pilot.pause()
+            self.assertTrue(app._select_mode)
+
+    async def test_ctrl_n_navigates_open_picker_not_select_mode(self):
+        """Codex regression: when a modal picker is open, Ctrl+N must move the
+        highlight (the picker stops the event) — NOT toggle select mode. The
+        select-mode binding is non-priority precisely so the focused picker wins."""
+        from textual.widgets import OptionList
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(92, 30)) as pilot:
+            await pilot.pause()
+            app._driver._enable_mouse_support = lambda: None
+            app._driver._disable_mouse_support = lambda: None
+            picker = tui.Picker("pick", [("Alpha", "a"), ("Beta", "b"), ("Gamma", "g")])
+            await app.push_screen(picker)
+            await pilot.pause()
+            ol = picker.query_one("#picker-list", OptionList)
+            self.assertEqual(ol.highlighted, 0)
+            before = app._select_mode
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            self.assertEqual(ol.highlighted, 1)        # picker navigated
+            self.assertEqual(app._select_mode, before)  # select mode NOT toggled
+
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa
         sess = self._session("sess-A")
