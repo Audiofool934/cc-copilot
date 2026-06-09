@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.14.0 — 2026-06-10
+
+**First-run onboarding — pick your model once, instead of silently defaulting.**
+The first time you launch the cockpit (no `~/.cc-copilot.toml` yet), a branded
+**welcome screen** asks which model should power recaps, chat, and `since`
+summaries — **Claude** or **Codex** (uses the agent's own login, no key) or an
+**API provider** (OpenAI / DeepSeek / OpenRouter, with the key captured inline
+and written to the chmod-600 `[env]` table). It shows only on the first run; the
+config's existence is the "already set up" sentinel.
+
+- **`cc-copilot init`** — the same wizard in a plain terminal (line-based menu +
+  hidden key prompt), for headless / SSH setup or to reconfigure later
+  (`--force` to rewrite; other providers' keys and your `[history]` setting are
+  preserved across a re-run).
+- **`/init` in the cockpit** reopens the picker anytime.
+- Picking a model **takes effect immediately** in the running cockpit — no
+  relaunch. Non-cockpit LLM commands (`ask` / `since` / `brief --narrate`) print
+  a one-line first-run nudge until you choose. Everything stays scriptable:
+  onboarding never fires on a non-TTY (hooks/CI) or when `--backend` is explicit,
+  and `CC_COPILOT_NO_ONBOARD=1` opts out entirely.
+- The shared, UI-agnostic core lives in `cccopilot.onboard` (zero-dep, fully
+  unit-tested), so the TUI screen and the terminal wizard can't drift.
+
+**Cockpit chrome: slimmer footer + a rotating tip line.** The footer now shows
+only the few highest-value keys (`model · select · palette · quit`); refresh,
+clear, and the `Shift+↑/↓` timeline-resize keys are still bound but no longer
+crowd the bar. Their discoverability moves into a new **subtle, rotating tip
+line** above the composer — one muted `💡 …` line that cycles a curated set of
+20 feature tips (shuffled, non-repeating), each ≤64 chars so it survives a narrow
+sidebar, ordered "most useful when you just got back" first. The composer hint is
+trimmed to `Enter send · Ctrl+J newline · / commands`, and the welcome modal was
+widened so API rows don't clip.
+
 ## 0.13.3 — 2026-06-09
 
 **Maintenance: the version is single-sourced.** `pyproject.toml` now reads the

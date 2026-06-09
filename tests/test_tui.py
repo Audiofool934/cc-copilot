@@ -1183,5 +1183,187 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app._busy_frame, (start + 1) % len(tui._BUSY_FRAMES))
 
 
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestWelcomeScreen(unittest.IsolatedAsyncioTestCase):
+    """First-run onboarding: pick a model, capture a key, write the config —
+    and apply it to the live cockpit without a relaunch."""
+
+    def setUp(self):
+        import tempfile
+        from cccopilot import onboard as OB  # noqa: F401
+        self._saved = {k: os.environ.pop(k, None) for k in
+                       ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                        "CC_COPILOT_BACKEND", "OPENAI_API_KEY")}
+        self.dir = tempfile.mkdtemp()
+        os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.dir, "cc.toml")  # absent → first run
+
+    def tearDown(self):
+        for k in ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                  "CC_COPILOT_BACKEND", "OPENAI_API_KEY"):
+            os.environ.pop(k, None)
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    async def _push(self, app):
+        from cccopilot import onboard as OB
+        result = []
+        app.push_screen(tui.WelcomeScreen(OB.detect()), result.append)
+        return result
+
+    async def test_api_row_reveals_key_field_and_save_writes_config(self):
+        from textual.widgets import RadioSet, RadioButton, Input
+        from cccopilot import onboard as OB
+
+        class Host(App):
+            def compose(self):
+                from textual.widgets import Static
+                yield Static("host")
+
+        app = Host()
+        async with app.run_test() as pilot:
+            result = await self._push(app)
+            await pilot.pause()
+            scr = app.screen
+            # default highlight is a CLI (no key needed) → key field hidden
+            self.assertFalse(scr.query_one("#welcome-key", Input).display)
+            # choose OpenAI (an API provider)
+            buttons = list(scr.query_one("#welcome-choices", RadioSet).query(RadioButton))
+            oi = next(i for i, d in enumerate(OB.detect()) if d.choice.name == "openai")
+            buttons[oi].value = True
+            await pilot.pause()
+            keyin = scr.query_one("#welcome-key", Input)
+            self.assertTrue(keyin.display)             # API row reveals the key field
+            keyin.value = "sk-typed-key"
+            scr._save()
+            await pilot.pause()
+        # config persisted with backend + the typed key, and we won't ask again
+        from cccopilot import config as CFG
+        data = CFG._load_simple(os.environ["CC_COPILOT_CONFIG"])
+        self.assertEqual(data.get("backend"), "openai")
+        self.assertEqual(data["env"]["OPENAI_API_KEY"], "sk-typed-key")
+        self.assertFalse(OB.needs_onboarding())
+        self.assertEqual(result[0][0], "openai")
+
+    async def test_api_row_blocks_save_without_a_key(self):
+        from textual.widgets import RadioSet, RadioButton, Input
+        from cccopilot import onboard as OB
+
+        class Host(App):
+            def compose(self):
+                from textual.widgets import Static
+                yield Static("host")
+
+        app = Host()
+        async with app.run_test() as pilot:
+            result = await self._push(app)
+            await pilot.pause()
+            scr = app.screen
+            buttons = list(scr.query_one("#welcome-choices", RadioSet).query(RadioButton))
+            di = next(i for i, d in enumerate(OB.detect()) if d.choice.name == "deepseek")
+            buttons[di].value = True
+            await pilot.pause()
+            scr._save()                                 # empty key → must NOT save
+            await pilot.pause()
+            self.assertEqual(result, [])                # screen still open
+        self.assertTrue(OB.needs_onboarding())          # no config written
+
+    async def test_skip_still_writes_config_so_it_stops_asking(self):
+        from cccopilot import onboard as OB
+
+        class Host(App):
+            def compose(self):
+                from textual.widgets import Static
+                yield Static("host")
+
+        app = Host()
+        async with app.run_test() as pilot:
+            result = await self._push(app)
+            await pilot.pause()
+            app.screen.action_skip()
+            await pilot.pause()
+        self.assertFalse(OB.needs_onboarding())
+        self.assertEqual(result[0], ("skip", None))
+
+    async def test_cockpit_auto_opens_welcome_on_first_run(self):
+        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N
+        real = N.available
+        N.available = lambda b=None: True
+        self.addCleanup(lambda: setattr(N, "available", real))
+        p = write([user("do it", 90), asst("ok", 30)])
+        sess = ChatSession(p)                            # backend=None → eligible
+        sess.refresh()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()                          # call_after_refresh lands
+            self.assertIsInstance(app.screen, tui.WelcomeScreen)
+            # picking a CLI backend applies it to the live session
+            app._after_onboard(("claude", tui.OB.choice_for("claude")))
+            self.assertEqual(app.backend, "claude")
+            self.assertEqual(app.session.backend, "claude")
+
+    async def test_switching_to_cli_via_init_clears_stale_api_model(self):
+        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N, onboard as OB
+        real = N.available
+        N.available = lambda b=None: True
+        self.addCleanup(lambda: setattr(N, "available", real))
+        p = write([user("x", 30), asst("y", 10)])
+        # cockpit launched from an existing API config: model = gpt-4o
+        sess = ChatSession(p, backend="openai", model="gpt-4o")
+        sess.refresh()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._after_onboard(("claude", OB.choice_for("claude")))   # /init → Claude
+            self.assertEqual(app.backend, "claude")
+            self.assertIsNone(app.session.model)        # stale gpt-4o dropped
+            self.assertIsNone(app.model)
+
+
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
+    """The slimmed footer's discoverability moved into a rotating tip line."""
+
+    def _session(self):
+        from cccopilot.chat import ChatSession
+        from cccopilot import narrate as N
+        real = N.available
+        N.available = lambda b=None: True
+        self.addCleanup(lambda: setattr(N, "available", real))
+        p = write([user("go", 60), asst("ok", 20)])
+        s = ChatSession(p, backend="codex")
+        s.refresh()
+        return s
+
+    def test_tips_exist_and_fit_a_narrow_cockpit(self):
+        self.assertGreaterEqual(len(tui._TIPS), 12)
+        for t in tui._TIPS:
+            self.assertLessEqual(len(t), 64, t)          # narrow-sidebar contract
+            self.assertNotIn("`", t)                     # rendered as plain Text, no md
+
+    def test_resize_keys_hidden_from_footer_essentials_kept(self):
+        show = {b.key: b.show for b in tui.Cockpit.BINDINGS}
+        for hidden in ("shift+up", "shift+down", "ctrl+r", "ctrl+l"):
+            self.assertFalse(show.get(hidden), hidden)   # decluttered (the user's ask)
+        for kept in ("ctrl+t", "ctrl+n", "ctrl+c"):
+            self.assertTrue(show.get(kept), kept)        # the few high-value keys stay
+
+    def test_next_tip_covers_every_tip_before_repeating(self):
+        app = tui.Cockpit(self._session(), poll=999, alerts=False)
+        seen = [app._next_tip() for _ in range(len(tui._TIPS))]
+        self.assertEqual(set(seen), set(tui._TIPS))      # a full non-repeating pass
+
+    async def test_rotate_tip_renders_a_line(self):
+        from textual.widgets import Static
+        app = tui.Cockpit(self._session(), poll=999, alerts=False)
+        async with app.run_test():
+            content = str(app.query_one("#tip", Static).content)
+            self.assertIn("💡", content)                  # the subtle marker
+            self.assertTrue(any(t in content for t in tui._TIPS))
+
+
 if __name__ == "__main__":
     unittest.main()

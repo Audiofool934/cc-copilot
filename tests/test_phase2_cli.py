@@ -132,5 +132,72 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
             cli._repo_root, cli._tui_importable = orig_root, orig_imp
 
 
+class TestInitCli(unittest.TestCase):
+    """`cc-copilot init` writes the config; in a non-interactive run it falls
+    back to a safe default (the first ready CLI / Claude) without prompting."""
+
+    def setUp(self):
+        from cccopilot import onboard as OB  # noqa: F401
+        self._saved = {k: os.environ.pop(k, None) for k in
+                       ("CC_COPILOT_CONFIG", "CC_COPILOT_NO_ONBOARD",
+                        "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL", "OPENAI_API_KEY")}
+        self.dir = tempfile.mkdtemp(prefix="ccinit-")
+        self.p = os.path.join(self.dir, "cc.toml")
+        os.environ["CC_COPILOT_CONFIG"] = self.p
+        os.environ.pop("CC_COPILOT_NO_ONBOARD", None)
+
+    def tearDown(self):
+        for k in ("CC_COPILOT_CONFIG", "CC_COPILOT_NO_ONBOARD",
+                  "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL", "OPENAI_API_KEY"):
+            os.environ.pop(k, None)
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    def _run(self, argv):
+        args = cli.build_parser().parse_args(argv)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = args.func(args)
+        return rc, out.getvalue() + err.getvalue()
+
+    def test_init_non_interactive_writes_a_default_config(self):
+        from cccopilot import onboard as OB
+        rc, _ = self._run(["init"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isfile(self.p))
+        self.assertFalse(OB.needs_onboarding())          # won't ask again
+
+    def test_init_refuses_silent_overwrite_when_config_exists(self):
+        from pathlib import Path
+        from cccopilot import onboard as OB
+        OB.write_choice("claude")                        # pre-existing config
+        before = Path(self.p).read_text()
+        rc, out = self._run(["init"])                    # non-tty → no prompt, no clobber
+        self.assertEqual(rc, 0)
+        self.assertIn("already exists", out)
+        self.assertEqual(Path(self.p).read_text(), before)   # untouched
+
+    def test_init_force_reconfigures_existing(self):
+        from cccopilot import onboard as OB
+        OB.write_choice("openai", key_value="sk-keep")   # existing api key
+        rc, _ = self._run(["init", "--force"])           # rewrites to the default
+        self.assertEqual(rc, 0)
+        from cccopilot import config as CFG
+        data = CFG._load_simple(self.p)
+        self.assertEqual(data["env"]["OPENAI_API_KEY"], "sk-keep")  # key preserved
+
+    def test_terminal_wizard_propagates_choice_into_args(self):
+        # a first-run plain `chat` builds the ChatSession right after the wizard;
+        # the chosen backend must land on args so it's used now, not next launch.
+        import argparse
+        ns = argparse.Namespace(backend=None, model=None)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli._run_terminal_onboard(ns)
+        self.assertEqual(rc, 0)
+        self.assertEqual(ns.backend, "claude")           # first row / first ready CLI
+
+
 if __name__ == "__main__":
     unittest.main()
