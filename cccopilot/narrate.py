@@ -52,9 +52,12 @@ def _be(backend) -> Backend:
 
 
 def available(backend=None) -> bool:
+    # A probe must never crash a caller: resolving/probing a backend can fail
+    # outside BackendError (e.g. an unusable TMPDIR while building the registry).
+    # Any failure means "not usable" → callers fall back to the deterministic core.
     try:
         return _be(backend).available()
-    except BackendError:
+    except Exception:
         return False
 
 

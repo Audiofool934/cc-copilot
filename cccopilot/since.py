@@ -27,6 +27,7 @@ class SinceView:
     label: str
     new_events: int
     text: str
+    nothing_new: bool = True       # True iff the render is the "Nothing new" line
 
     @property
     def has_changes(self) -> bool:
@@ -136,9 +137,14 @@ def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
 
     n = (len(new_humans) + len(new_agent) + len(new_cmds)
          + len(new_fail) + len(new_chg))
+    # a status/safety transition is shown even with zero counted events (e.g. a new
+    # read-only Read flips idle → running) — so the delta isn't empty for recap.
+    transition = (d.status_from != d.status_to) or (d.verdict_from != d.verdict_to)
+    nothing = (n == 0 and not transition)
     text = _render(label, cutoff, st, d, new_humans, new_agent,
                    new_cmds, new_fail, new_chg)
-    return SinceView(cutoff_line=cutoff, label=label, new_events=n, text=text)
+    return SinceView(cutoff_line=cutoff, label=label, new_events=n, text=text,
+                     nothing_new=nothing)
 
 
 def _clip(s: str, n: int = 160) -> str:

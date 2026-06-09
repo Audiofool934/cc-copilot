@@ -113,6 +113,33 @@ class TestSinceRecap(unittest.TestCase):
         commit()
         self.assertGreater(int(LL.get(key)["line"]), 1)    # advanced once shown
 
+    def test_transition_only_delta_triggers_recap(self):
+        """A delta that is only a status/safety transition (e.g. a read-only Read
+        flips idle → running) is non-empty — it must still get the recap, not be
+        skipped as 'nothing new'."""
+        from tests.util import write as uwrite, user, asst, tool
+        from cccopilot import lastlook as LL
+        from cccopilot.chat import _now_iso
+        p = uwrite([user("go", 300), asst("done", 240),
+                    tool("Read", {"file_path": "a.py"}, "r1", 1)])
+        sess = C.ChatSession(p, backend="codex", alerts=False, persist=False)
+        LL.mark(sess._lastlook_key(), 2, "", _now_iso())   # mark just after "done"
+        out = sess._since("last-look")
+        self.assertEqual(len(self.calls), 1)               # recap WAS called
+        self.assertIn("RECAP", out)
+
+    def test_available_probe_never_raises(self):
+        """A backend probe that fails outside BackendError (e.g. unusable TMPDIR)
+        must read as unavailable, so /since falls back to the deterministic delta
+        instead of crashing."""
+        N.available = self._real_avail                     # the real impl
+        real_be = N._be
+        N._be = lambda backend=None: (_ for _ in ()).throw(OSError("no TMPDIR"))
+        try:
+            self.assertFalse(N.available("codex"))
+        finally:
+            N._be = real_be
+
     def test_deferred_commit_never_rewinds_a_concurrent_advance(self):
         """While a recap is pending, another /since (or a second cockpit) can move
         the marker forward; the deferred commit must not rewind it to its older

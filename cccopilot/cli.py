@@ -484,7 +484,7 @@ def cmd_since(args) -> int:
     # evidence kept beneath it; `--raw`, no backend, or an empty delta print the
     # deterministic view alone.
     be = getattr(args, "backend", None)
-    if getattr(args, "raw", False) or not view.has_changes or not N.available(be):
+    if getattr(args, "raw", False) or view.nothing_new or not N.available(be):
         print(view.text)
     else:
         sys.stderr.write(f"# recapping via {N.backend_name(be)} …\n")

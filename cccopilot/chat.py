@@ -409,7 +409,7 @@ class ChatSession:
         evidence kept beneath it. The deterministic delta is returned verbatim
         when ``--raw``, when no backend is available, or when nothing changed
         (no point spending a model call to recap an empty delta)."""
-        if raw or not view.has_changes or not N.available(self.backend):
+        if raw or view.nothing_new or not N.available(self.backend):
             return view.text
         try:
             recap = N.recap_since(view.text, model=self.model, backend=self.backend)

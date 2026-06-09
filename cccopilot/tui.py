@@ -1469,7 +1469,7 @@ class Cockpit(App):
             self._collapsible(title, res)
             return
         view, raw, commit = res
-        if raw or not view.has_changes or not N.available(self.backend) or self._busy:
+        if raw or view.nothing_new or not N.available(self.backend) or self._busy:
             self._collapsible(title, view.text)  # deterministic, instant
             commit()                             # shown → advance the marker
             return

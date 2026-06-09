@@ -28,7 +28,19 @@ class TestSinceByLine(unittest.TestCase):
         tr, st = _tr_st([user("go", 120), asst("done", 5)])
         v = SI.build(tr, st, since_line=tr.records[-1].line)
         self.assertFalse(v.has_changes)
+        self.assertTrue(v.nothing_new)
         self.assertIn("Nothing new", v.text)
+
+    def test_transition_only_delta_is_not_nothing_new(self):
+        # a new read-only Read isn't a counted event (only Bash, humans, agent
+        # text, failures, and file changes are), but it flips idle → running — a
+        # real change the recap should narrate, so nothing_new must be False.
+        tr, st = _tr_st([user("go", 300), asst("done", 240),
+                         tool("Read", {"file_path": "a.py"}, "r1", 1)])
+        v = SI.build(tr, st, since_line=2)
+        self.assertEqual(v.new_events, 0)          # nothing counted
+        self.assertFalse(v.nothing_new)            # …but the status transition counts
+        self.assertNotIn("Nothing new", v.text)
 
     def test_new_command_after_cutoff_only(self):
         tr, st = _tr_st([
