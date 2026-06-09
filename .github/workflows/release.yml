@@ -16,8 +16,8 @@ jobs:
     name: Build & validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -51,7 +51,7 @@ jobs:
           /tmp/smoke/bin/cc-copilot --version
           /tmp/smoke/bin/python -c "import cccopilot.cli, cccopilot.sources.codex, cccopilot.sources.claude; print('wheel smoke OK')"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
@@ -63,7 +63,7 @@ jobs:
     permissions:
       id-token: write          # OIDC token for Trusted Publishing — this is what replaces an API token
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: dist
           path: dist/
