@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.14.0 — 2026-06-09
+
+**First-run onboarding — pick your model once, instead of silently defaulting.**
+The first time you launch the cockpit (no `~/.cc-copilot.toml` yet), a branded
+**welcome screen** asks which model should power recaps, chat, and `since`
+summaries — **Claude** or **Codex** (uses the agent's own login, no key) or an
+**API provider** (OpenAI / DeepSeek / OpenRouter, with the key captured inline
+and written to the chmod-600 `[env]` table). It shows only on the first run; the
+config's existence is the "already set up" sentinel.
+
+- **`cc-copilot init`** — the same wizard in a plain terminal (line-based menu +
+  hidden key prompt), for headless / SSH setup or to reconfigure later
+  (`--force` to rewrite; other providers' keys and your `[history]` setting are
+  preserved across a re-run).
+- **`/init` in the cockpit** reopens the picker anytime.
+- Picking a model **takes effect immediately** in the running cockpit — no
+  relaunch. Non-cockpit LLM commands (`ask` / `since` / `brief --narrate`) print
+  a one-line first-run nudge until you choose. Everything stays scriptable:
+  onboarding never fires on a non-TTY (hooks/CI) or when `--backend` is explicit,
+  and `CC_COPILOT_NO_ONBOARD=1` opts out entirely.
+- The shared, UI-agnostic core lives in `cccopilot.onboard` (zero-dep, fully
+  unit-tested), so the TUI screen and the terminal wizard can't drift.
+
 ## 0.13.3 — 2026-06-09
 
 **Maintenance: the version is single-sourced.** `pyproject.toml` now reads the

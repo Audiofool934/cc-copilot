@@ -1,5 +1,6 @@
 """cc-copilot command-line interface.
 
+    cc-copilot init                   first-run setup: pick the model, save config
     cc-copilot sessions               list this project's sessions (newest first)
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
     cc-copilot chat [...]             live read-only chat pinned to a session
@@ -112,6 +113,106 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
     return vpy
 
 
+_ONBOARD_INTRO = (
+    "\n  Welcome to cc-copilot — a read-only sidecar that watches your coding\n"
+    "  agents and recaps what changed while you were away.\n\n"
+    "  Pick the model that powers its recaps, chat, and `since` summaries.\n"
+    "  (The deterministic core — brief / check / observe — needs no model.)\n")
+
+
+def _run_terminal_onboard(args=None) -> int:
+    """Line-based first-run wizard (mirrors the cockpit's WelcomeScreen). Writes
+    ~/.cc-copilot.toml and applies the choice to this process."""
+    import getpass
+    from . import onboard as OB, config as CFG, narrate as N
+    detected = OB.detect()
+    sys.stderr.write(_ONBOARD_INTRO + "\n")
+    for i, d in enumerate(detected, 1):
+        mark = "✓" if d.ready else "·"
+        sys.stderr.write(f"   {i}) {d.choice.label:<13} {mark} {d.status}\n")
+    sys.stderr.write("\n")
+    # default to the first ready CLI backend (no key needed), else the first row.
+    default_idx = next((i for i, d in enumerate(detected, 1)
+                        if d.choice.kind == "cli" and d.ready), 1)
+    raw = ""
+    if sys.stdin.isatty():
+        try:
+            raw = input(f"  choice [1-{len(detected)}] (default {default_idx}): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.stderr.write("\n  cancelled — using the default for now.\n")
+            return 1
+    try:
+        idx = int(raw) if raw else default_idx
+    except ValueError:
+        idx = default_idx
+    if not 1 <= idx <= len(detected):
+        idx = default_idx
+    c = detected[idx - 1].choice
+
+    key_value, model = "", ""
+    if c.kind == "api":
+        if not os.environ.get(c.key_env) and sys.stdin.isatty():
+            try:
+                key_value = getpass.getpass(
+                    f"  {c.label} API key ({c.key_env}, hidden — paste & Enter): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                sys.stderr.write("\n  cancelled.\n")
+                return 1
+        if c.default_model and sys.stdin.isatty():
+            try:
+                m = input(f"  model [{c.default_model}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                m = ""
+            model = m or c.default_model
+        else:
+            model = c.default_model
+
+    name = c.name or "skip"
+    OB.write_choice(name, model=model, key_value=key_value)
+    OB.apply_to_env(name, model=model, key_value=key_value)
+    if c.kind == "skip":
+        print(f"\n  ✓ saved {CFG.path()} — no model set; the default ({N.backend_name()}) "
+              f"applies.\n    Run `cc-copilot init` anytime to choose one.")
+    else:
+        suffix = f" · model {model}" if model else ""
+        print(f"\n  ✓ saved {CFG.path()} (chmod 600) · backend → {c.label}{suffix}")
+        if c.kind == "api" and not (key_value or os.environ.get(c.key_env)):
+            print(f"    note: no {c.key_env} yet — set it in the config or environment "
+                  f"before the model can answer.")
+        else:
+            print(f"    active backend: {N.backend_name()}")
+    print("  launch the cockpit:  cc-copilot cockpit\n")
+    return 0
+
+
+def cmd_init(args) -> int:
+    from . import config as CFG
+    p = CFG.path()
+    if os.path.isfile(p) and not getattr(args, "force", False):
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print(f"config already exists: {p}\n"
+                  f"  re-run with --force to reconfigure, or edit it directly.")
+            return 0
+        try:
+            ans = input(f"config exists at {p} — reconfigure it? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans not in ("y", "yes"):
+            print("left untouched.")
+            return 0
+    return _run_terminal_onboard(args)
+
+
+def _maybe_first_run_nudge() -> None:
+    """A one-line, non-blocking hint shown on the LLM commands until the user
+    runs `init`. Never fires in scripts/hooks (gated on an interactive stdout)."""
+    from . import onboard as OB
+    if OB.needs_onboarding() and sys.stdout.isatty():
+        sys.stderr.write(
+            "# cc-copilot: first run — no model configured yet (using the default).\n"
+            "#   run `cc-copilot init` to pick Claude / Codex / an API key.\n")
+
+
 def cmd_setup(args) -> int:
     import subprocess
     vpy = _ensure_tui_runtime()
@@ -214,6 +315,7 @@ def cmd_brief(args) -> int:
         return 2
     print(ev.text)
     if getattr(args, "narrate", False):
+        _maybe_first_run_nudge()
         from . import narrate as N
         be = getattr(args, "backend", None)
         if not N.available(be):
@@ -231,6 +333,7 @@ def cmd_brief(args) -> int:
 
 
 def cmd_ask(args) -> int:
+    _maybe_first_run_nudge()
     path, tr, st = _load(args)
     from . import narrate as N
     be = getattr(args, "backend", None)
@@ -357,7 +460,14 @@ def cmd_observe(args) -> int:
 
 
 def cmd_chat(args) -> int:
-    from . import chat as C
+    from . import chat as C, onboard as OB
+    # First run, plain interactive chat: run the terminal wizard before the REPL
+    # (the cockpit gets its own visual WelcomeScreen instead). Skip when a
+    # --backend was given explicitly or we're not on a TTY (scripts/hooks).
+    if (not getattr(args, "tui", False) and OB.needs_onboarding()
+            and getattr(args, "backend", None) is None
+            and sys.stdin.isatty() and sys.stdout.isatty()):
+        _run_terminal_onboard(args)
     # Cockpit requested but Textual isn't in THIS interpreter → bootstrap the
     # .venv once and re-exec under it, so `cc-copilot cockpit` just works.
     if getattr(args, "tui", False) and not _tui_importable():
@@ -473,6 +583,8 @@ def _now_iso() -> str:
 
 def cmd_since(args) -> int:
     from . import lastlook as LL, since as SI, narrate as N
+    if not getattr(args, "raw", False):
+        _maybe_first_run_nudge()
     path = _resolve_or_die(args)
     if getattr(args, "path", False):
         sys.stderr.write(f"# transcript: {path}\n")
@@ -622,10 +734,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--backend", help="show this backend as the active selection")
     sp.set_defaults(func=cmd_backends)
 
+    sp = sub.add_parser("init",
+                        help="first-run setup: pick the model (Claude/Codex/API) & save the config")
+    sp.add_argument("--force", action="store_true",
+                    help="reconfigure even if a config already exists (preserves other keys)")
+    sp.set_defaults(func=cmd_init)
+
     sp = sub.add_parser("config",
                         help="show or scaffold ~/.cc-copilot.toml (default backend/model/keys)")
     sp.add_argument("--init", action="store_true",
-                    help="write a starter config file if none exists")
+                    help="write a starter config file if none exists (see `init` for the wizard)")
     sp.set_defaults(func=cmd_config)
 
     sp = sub.add_parser("setup",

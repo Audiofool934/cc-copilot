@@ -31,13 +31,14 @@ try:
     from textual import events, on, work
     from textual.app import App, ComposeResult, SystemCommand
     from textual.binding import Binding
-    from textual.containers import Vertical, VerticalScroll
+    from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.css.query import NoMatches
     from textual.message import Message
     from textual.screen import ModalScreen
     from textual.theme import Theme
-    from textual.widgets import (Collapsible, Footer, Input, Markdown, OptionList,
-                                 RichLog, Static, TextArea)
+    from textual.widgets import (Button, Collapsible, Footer, Input, Markdown,
+                                 OptionList, RadioButton, RadioSet, RichLog,
+                                 Static, TextArea)
     from textual.widgets.option_list import Option
     from rich.text import Text
     from rich.cells import cell_len as _cell_len
@@ -48,7 +49,7 @@ except ImportError:
 
 from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
-               observe as O, context as EC, prefs as PREFS)
+               observe as O, context as EC, prefs as PREFS, onboard as OB)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -179,6 +180,7 @@ _HELP_TEXT = (
     "  /select                 release the mouse for native drag-select + ⌘C copy (Ctrl+N)\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
+    "  /init                   reopen the model picker (Claude / Codex / API key)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
     "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
     "copy: Ctrl+N (or /select) frees the mouse so the terminal selects — drag, then ⌘C.\n"
@@ -199,6 +201,7 @@ _SLASH_CMDS = [
     ("/theme", "switch cockpit palette", False),
     ("/select", "free the mouse for native drag-select + ⌘C copy (Ctrl+N)", False),
     ("/model", "switch the LLM backend", True),
+    ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
     ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
@@ -894,6 +897,120 @@ class MultiPicker(ModalScreen):
         self._toggle()
 
 
+# ── first-run onboarding ────────────────────────────────────────────────────
+class WelcomeScreen(ModalScreen):
+    """Shown once, on the very first cockpit launch (no ~/.cc-copilot.toml yet).
+    A brand-colored backend picker: Claude / Codex use the agent's own login (no
+    key); the API providers take a key inline. Writes the config and applies the
+    choice to the live cockpit, then dismisses with ``(name, choice)`` — or
+    ``("skip", None)`` on Skip/Esc (which still writes a config so we stop
+    asking). The heavy lifting lives in :mod:`cccopilot.onboard`, shared with the
+    terminal ``cc-copilot init`` wizard."""
+
+    BINDINGS = [Binding("escape", "skip", "skip")]
+
+    def __init__(self, detected):
+        super().__init__()
+        self._detected = detected                 # list[onboard.Detected]
+        self._default = next((i for i, d in enumerate(detected)
+                              if d.choice.kind == "cli" and d.ready), 0)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="welcome"):
+            yield Static("cc-copilot · welcome", id="welcome-title")
+            yield Static(
+                "Pick the model that powers recaps, chat & since summaries.\n"
+                "The deterministic core (brief / check / observe) needs no model.",
+                id="welcome-intro")
+            with RadioSet(id="welcome-choices"):
+                for i, d in enumerate(self._detected):
+                    yield RadioButton(self._row_label(d), value=(i == self._default))
+            yield Input(placeholder="API key — paste & Enter (API providers only)",
+                        password=True, id="welcome-key")
+            yield Static("", id="welcome-hint")
+            with Horizontal(id="welcome-actions"):
+                yield Button("Save & enter cockpit", id="welcome-save", variant="primary")
+                yield Button("Skip for now", id="welcome-skip")
+
+    def _row_label(self, d) -> Text:
+        c = d.choice
+        hue = c.brand_hex or _PAL["accent"]
+        t = Text()
+        t.append(f"{c.label:<13}", style=f"bold {hue}")
+        mark = "✓" if d.ready else "·"
+        t.append(f"{mark} {d.status}", style=_PAL["text"] if d.ready else _PAL["muted"])
+        return t
+
+    def on_mount(self) -> None:
+        self.query_one("#welcome-choices", RadioSet).focus()
+        self._sync_chrome()
+
+    def _selected_index(self) -> int:
+        idx = self.query_one("#welcome-choices", RadioSet).pressed_index
+        return idx if idx is not None and idx >= 0 else self._default
+
+    def _sync_chrome(self) -> None:
+        """Show the key field only for API providers; explain the highlighted row."""
+        c = self._detected[self._selected_index()].choice
+        self.query_one("#welcome-key", Input).display = (c.kind == "api")
+        hint = self.query_one("#welcome-hint", Static)
+        if c.kind == "api":
+            have = os.environ.get(c.key_env)
+            msg = (f"{c.label}: key already detected — leave the field blank to use it."
+                   if have else f"{c.label}: paste your {c.key_env} above.")
+            if c.default_model:
+                msg += f"  (model: {c.default_model})"
+            hint.update(Text(msg, style=_PAL["muted"]))
+        elif c.kind == "cli":
+            hint.update(Text(c.blurb, style=_PAL["muted"]))
+        else:
+            hint.update(Text("No model now — recaps show the cited evidence only. "
+                             "Choose one later with /init.", style=_PAL["muted"]))
+
+    @on(RadioSet.Changed, "#welcome-choices")
+    def _on_change(self, event) -> None:
+        self._sync_chrome()
+
+    @on(Input.Submitted, "#welcome-key")
+    def _on_key_submit(self, event) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#welcome-save")
+    def _on_save(self, event) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#welcome-skip")
+    def _on_skip(self, event) -> None:
+        self.action_skip()
+
+    def _save(self) -> None:
+        c = self._detected[self._selected_index()].choice
+        key = self.query_one("#welcome-key", Input).value.strip()
+        model = c.default_model if c.kind == "api" else ""
+        if c.kind == "api" and not key and not os.environ.get(c.key_env):
+            self.query_one("#welcome-hint", Static).update(
+                Text(f"{c.label} needs an API key ({c.key_env}) — paste it, "
+                     f"or pick a CLI option / Skip.", style=_PAL["warning"]))
+            self.query_one("#welcome-key", Input).focus()
+            return
+        name = c.name or "skip"
+        try:
+            OB.write_choice(name, model=model, key_value=key)
+            OB.apply_to_env(name, model=model, key_value=key)
+        except OSError as e:
+            self.query_one("#welcome-hint", Static).update(
+                Text(f"could not save config: {e}", style=_PAL["error"]))
+            return
+        self.dismiss((name, c))
+
+    def action_skip(self) -> None:
+        try:
+            OB.write_choice("skip")           # still writes a config: stop asking
+        except OSError:
+            pass
+        self.dismiss(("skip", None))
+
+
 # ── the cockpit ────────────────────────────────────────────────────────────
 class Cockpit(App):
     CSS = """
@@ -960,6 +1077,17 @@ class Cockpit(App):
 
     Picker { align: center middle; }
     MultiPicker { align: center middle; }
+    WelcomeScreen { align: center middle; }
+    #welcome { width: 66; max-width: 92%; height: auto; max-height: 90%;
+               background: $surface; border: round $accent; padding: 1 2; }
+    #welcome-title { text-style: bold; color: $primary; }
+    #welcome-intro { color: $text-muted; margin-bottom: 1; }
+    #welcome-choices { height: auto; width: 100%; margin-bottom: 1;
+                       background: $panel; border: round $accent; padding: 0 1; }
+    #welcome-key { margin-bottom: 1; }
+    #welcome-hint { color: $text-muted; height: auto; min-height: 1; margin-bottom: 1; }
+    #welcome-actions { height: auto; align: right middle; }
+    #welcome-actions Button { margin-left: 2; }
     #picker { width: 80; max-width: 90%; height: auto; max-height: 80%;
               background: $surface; border: round $accent; padding: 1; }
     #picker-title { text-style: bold; color: $accent; margin-bottom: 1; }
@@ -1084,6 +1212,30 @@ class Cockpit(App):
         self.set_interval(self.poll, self._tick_refresh, name="auto-refresh")
         if self.alerts:
             self.watch_agent()
+        # first launch (no config yet, no explicit --backend): greet with the
+        # model picker over the dimmed cockpit. Deferred so the cockpit paints
+        # behind it first.
+        if self.backend is None and OB.needs_onboarding():
+            self.call_after_refresh(self.action_onboard)
+
+    def action_onboard(self) -> None:
+        """Open the first-run model picker (also reachable later via /init)."""
+        self.push_screen(WelcomeScreen(OB.detect()), self._after_onboard)
+
+    def _after_onboard(self, result) -> None:
+        if not result:
+            return
+        name, choice = result
+        if not choice or choice.kind == "skip":
+            self.notify("no model set — pick one anytime with /init", severity="information")
+            self._update_status()
+            return
+        self._set_backend(name)                 # applies to the live session + UI
+        if choice.kind == "api" and choice.default_model:
+            self.model = self.session.model = choice.default_model
+        self._update_header()
+        self._update_status()
+        self.notify(f"model ready · {choice.label}", severity="information")
 
     def on_unmount(self):
         self._busy = False
@@ -1810,6 +1962,8 @@ class Cockpit(App):
             else:
                 self.action_model()
             return
+        if low == "/init" or low == "/onboard":
+            self.action_onboard(); return
         if low in ("/select", "/copy", "/copy-mode"):
             self.action_toggle_select_mode(); return
         if low == "/refresh":

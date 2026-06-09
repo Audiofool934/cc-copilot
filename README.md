@@ -22,6 +22,13 @@ workflow.
 cc-copilot cockpit
 ```
 
+The **first launch** greets you with a one-time welcome screen to pick the model
+that powers recaps, chat, and `since` — **Claude** or **Codex** (uses the
+agent's own login, no API key) or an **API provider** (OpenAI / DeepSeek /
+OpenRouter, key captured inline). It only shows once; reopen it anytime with
+`/init`, or run `cc-copilot init` in a plain terminal (handy over SSH). The
+deterministic core (`brief` / `check` / `observe`) needs no model at all.
+
 Inside Cockpit:
 
 ```text
@@ -34,6 +41,7 @@ Inside Cockpit:
 /check      safety / off-track verdict
 /diff       changes since last turn
 /model      choose backend/model
+/init       reopen the model picker (Claude / Codex / an API key)
 /resume     resume a Cockpit Session
 ```
 
@@ -261,11 +269,17 @@ Supported backend families:
 | `ollama` | none | local server at `http://localhost:11434` |
 | `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
 
-Set defaults once:
+Set defaults once — the guided way (pick a model, capture an API key):
 
 ```bash
-cc-copilot config --init
-cc-copilot config
+cc-copilot init           # interactive wizard (also runs on the first cockpit launch)
+```
+
+Or scaffold/inspect the file directly:
+
+```bash
+cc-copilot config --init  # write a commented starter ~/.cc-copilot.toml
+cc-copilot config         # show the effective backend
 ```
 
 Example `~/.cc-copilot.toml`:
