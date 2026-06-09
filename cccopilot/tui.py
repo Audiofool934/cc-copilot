@@ -176,10 +176,13 @@ _HELP_TEXT = (
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
+    "  /select                 release the mouse for native drag-select + ⌘C copy (Ctrl+N)\n"
     "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear view · Shift+↑/↓ resize timeline · Ctrl+C quit")
+    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
+    "copy: Ctrl+N (or /select) frees the mouse so the terminal selects — drag, then ⌘C.\n"
+    "      one-off without toggling: hold Option (iTerm2) / Fn (Terminal.app) while dragging.")
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 _SLASH_CMDS = [
@@ -194,6 +197,7 @@ _SLASH_CMDS = [
     ("/resume", "browse & resume cockpit sessions", False),
     ("/new", "start a new independent cockpit session", False),
     ("/theme", "switch cockpit palette", False),
+    ("/select", "free the mouse for native drag-select + ⌘C copy (Ctrl+N)", False),
     ("/model", "switch the LLM backend", True),
     ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
@@ -981,6 +985,13 @@ class Cockpit(App):
         Binding("ctrl+r", "refresh_now", "refresh"),
         Binding("ctrl+l", "clear_chat", "clear view"),
         Binding("ctrl+t", "model", "model"),
+        # release the mouse so the TERMINAL does native selection + copy (⌘C):
+        # Textual captures the mouse for scroll/click, which blocks the terminal's
+        # own click-drag selection. ctrl+n (not ctrl+s — XOFF; not ctrl+b — tmux
+        # prefix). NOT priority: an open Picker/MultiPicker uses ctrl+n to move to
+        # the next row and stops the event, so it keeps nav; with no modal open
+        # the composer lets ctrl+n bubble here to toggle select mode.
+        Binding("ctrl+n", "toggle_select_mode", "select"),
         # resize the activity timeline (the chat fills the rest); persisted.
         # priority so it works while the composer is focused. Shift+arrows are
         # the primary keys — macOS grabs Ctrl+Up/Down for Mission Control, so
@@ -1012,6 +1023,7 @@ class Cockpit(App):
         self._watch_size = -1
         self._watch_state = None
         self._timeline_sig = None       # evidence identity of the last rebuild
+        self._select_mode = False       # True = mouse released to the terminal for native select/copy
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -1446,6 +1458,22 @@ class Cockpit(App):
         status.update(self._status_text(w))
 
     def _status_text(self, w: int) -> Text:
+        """The status bar — the reflowed body, with a select-mode banner on top
+        when the mouse has been released to the terminal for native selection."""
+        body = self._status_body(w)
+        if not self._select_mode:
+            return body
+        banner = _assemble([
+            (" ⌗ SELECT MODE ", f"bold {_PAL['bg']} on {_PAL['warning']}"),
+            ("  drag to select · ⌘C copies · Ctrl+N exits", _PAL["warning"]),
+        ])
+        t = Text()
+        t.append_text(banner)
+        t.append("\n")
+        t.append_text(body)
+        return t
+
+    def _status_body(self, w: int) -> Text:
         """The status bar, reflowed to width ``w``. Every field is an atomic styled
         span; the renderer picks the widest layout that fits so a sidebar keeps all
         of them (the inline line → a 2-row split → fully stacked rows)."""
@@ -1782,6 +1810,8 @@ class Cockpit(App):
             else:
                 self.action_model()
             return
+        if low in ("/select", "/copy", "/copy-mode"):
+            self.action_toggle_select_mode(); return
         if low == "/refresh":
             self.action_refresh_now(); return
         if low in ("/clear", "/cls"):
@@ -2003,6 +2033,33 @@ class Cockpit(App):
             self.notify(str(e), severity="error"); return
         self.backend = self.session.backend = name
         self.notify(f"backend → {name}", severity="information")
+        self._update_status()
+
+    def action_toggle_select_mode(self) -> None:
+        """Release / re-grab the mouse. Textual captures the mouse for scroll and
+        clicks, which stops the terminal from doing its own click-drag selection —
+        so ⌘C has nothing to copy. Releasing it hands selection back to the
+        terminal: drag highlights natively and ⌘C copies, exactly like a non-TUI
+        shell. Toggle back to restore wheel-scroll / clicks."""
+        drv = getattr(self, "_driver", None)
+        enable = getattr(drv, "_enable_mouse_support", None)
+        disable = getattr(drv, "_disable_mouse_support", None)
+        if not callable(enable) or not callable(disable):
+            self.notify("native selection isn't available on this terminal driver",
+                        severity="warning")
+            return
+        self._select_mode = not self._select_mode
+        try:
+            (disable if self._select_mode else enable)()
+        except Exception as e:                      # pragma: no cover - driver-specific
+            self.notify(f"couldn't toggle the mouse: {e}", severity="error")
+            self._select_mode = not self._select_mode
+            return
+        if self._select_mode:
+            self.notify("SELECT MODE on — drag to select, ⌘C to copy. Ctrl+N to exit "
+                        "(mouse scroll/click are off until then).", timeout=6)
+        else:
+            self.notify("SELECT MODE off — mouse restored.")
         self._update_status()
 
     def action_refresh_now(self):

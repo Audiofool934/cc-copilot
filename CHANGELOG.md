@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.13.1 — 2026-06-09
+
+**You can copy out of the cockpit now (`Ctrl+N` / `/select`).** Textual captures
+the mouse for scroll/click, which blocks the *terminal's* own click-drag
+selection — so dragging did nothing and ⌘C had nothing to copy. `Ctrl+N` (or
+`/select`) now toggles **select mode**: it hands the mouse back to the terminal
+so you can drag-select and ⌘C exactly like a normal shell, with a clear status
+banner; toggle again to restore wheel-scroll and clicks. For a one-off without
+toggling, hold Option (iTerm2) / Fn (Terminal.app) while dragging. (Mouse-capture
+release uses the driver's own mouse-support hooks; no architecture change.)
+
 ## 0.13.0 — 2026-06-09
 
 **The status bar reflows to width — a narrow sidebar keeps every field.** Before,
