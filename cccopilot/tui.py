@@ -55,12 +55,15 @@ from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 COCKPIT_THEME_SPECS = {
     "cockpit": {
         "label": "Cockpit",
-        "description": "ink, apricot, blue, and violet",
-        "primary": "#fab283", "secondary": "#5c9cf5", "accent": "#9d7cd8",
-        "foreground": "#c0caf5", "background": "#1a1b26",
-        "surface": "#1f2335", "panel": "#24283b", "boost": "#292e42",
+        # neutral graphite ground; the accent is the Claude×Codex midpoint
+        # (#cb7d5b + #347ff2 averaged → a muted lavender) — the copilot's own
+        # color is literally the blend of the two agents it watches.
+        "description": "graphite, apricot, blue, and the Claude×Codex blend",
+        "primary": "#fab283", "secondary": "#5c9cf5", "accent": "#807ea6",
+        "foreground": "#c0caf5", "background": "#1e1e1e",
+        "surface": "#262626", "panel": "#2d2d2d", "boost": "#353535",
         "success": "#9ece6a", "warning": "#e0af68", "error": "#f7768e",
-        "muted": "#565f89", "dark": True,
+        "muted": "#6c7086", "dark": True,
     },
     "graphite": {
         "label": "Graphite",
@@ -142,6 +145,17 @@ _PAL = _rich_palette("cockpit")
 _VERDICT_HEX = _verdict_palette("cockpit")
 _BUSY_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TIMELINE_TITLE = "session activity"
+
+# Per-agent identity hues — the *watched* agent's brand color (Claude's
+# apricot-rust, Codex's blue), applied to agent-identity spans: the timeline
+# `agent` label and the header's "<agent> session". These are theme-independent
+# (an agent's brand is the agent's brand). Unknown agents fall back to the
+# copilot's own accent so its chrome color shows through instead of a stray hue.
+_AGENT_HEX = {"claude": "#cb7d5b", "codex": "#347ff2"}
+
+
+def _agent_hex(agent: str) -> str:
+    return _AGENT_HEX.get((agent or "").strip().lower(), _PAL["accent"])
 
 _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter)\n"
@@ -256,7 +270,11 @@ def _tool_activity_target(record) -> str:
     return inp.get("file_path") or inp.get("notebook_path") or ""
 
 
-def _activity_line(record):
+def _activity_line(record, agent_hex=None):
+    # agent_hex: the source session's brand color for its `agent` label (Claude
+    # rust / Codex blue). Read _PAL at call time (it's a mutable global swapped on
+    # theme switch), so it can't be a default-arg value.
+    agent_hex = agent_hex or _PAL["primary"]
     if record.kind == "human" and not record.housekeeping:
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("user", style=_PAL["secondary"])
@@ -264,7 +282,7 @@ def _activity_line(record):
         return t
     if record.kind == "agent_text":
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
-        t.append("agent", style=_PAL["primary"])
+        t.append("agent", style=agent_hex)
         t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     if record.kind == "agent_thinking":
@@ -285,14 +303,15 @@ def _activity_line(record):
     return None
 
 
-def _recent_activity_lines(st, limit=None) -> list:
+def _recent_activity_lines(st, limit=None, agent_hex=None) -> list:
     """Activity lines for the timeline, oldest→newest. ``limit`` None = the whole
-    session (the RichLog timeline holds it all and scrolls)."""
+    session (the RichLog timeline holds it all and scrolls). ``agent_hex`` colors
+    the `agent` label with the watched session's brand hue."""
     if st is None:
         return []
     rows = []
     for record in reversed(getattr(st.tr, "records", [])):
-        line = _activity_line(record)
+        line = _activity_line(record, agent_hex)
         if line is None:
             continue
         rows.append(line)
@@ -488,8 +507,9 @@ def _prefixed_activity_line(sid: str, line) -> Text:
 def _scoped_recent_activity_lines(items: list, limit: int = 5) -> list:
     entries = []
     for ref, st, _a in items:
+        hexcol = _agent_hex(getattr(ref, "agent", "claude"))
         for record in reversed(getattr(st.tr, "records", [])):
-            line = _activity_line(record)
+            line = _activity_line(record, hexcol)
             if line is None:
                 continue
             ts = record.ts.timestamp() if record.ts is not None else 0
@@ -1233,7 +1253,8 @@ class Cockpit(App):
                            follow=False)
         if self.session.scope == SC.SESSION:
             self._timeline(_timeline_status_line(self.session.st), follow=False)
-            for line in _recent_activity_lines(self.session.st):   # the *entire* history
+            agent_hex = _agent_hex(_agent_of(self.session))
+            for line in _recent_activity_lines(self.session.st, agent_hex=agent_hex):  # the *entire* history
                 self._timeline(line, follow=False)
             self._land_timeline(rl, prev_y, was_bottom, keep_scroll)
             return
@@ -1301,7 +1322,8 @@ class Cockpit(App):
             status = st.status if st is not None else "missing"
             verdict = a.verdict if a is not None else "empty"
             t.append("evidence ", style=_PAL["muted"])
-            t.append(f"{_agent_of(self.session)} session", style=_PAL["accent"])
+            ag = _agent_of(self.session)
+            t.append(f"{ag} session", style=_agent_hex(ag))
             t.append(f" · {title} · {sid}", style=_PAL["text"])
             t.append(f" · {status}", style="bold")
             t.append(f" · {verdict}", style=_VERDICT_HEX.get(verdict, _PAL["muted"]))
@@ -1351,6 +1373,14 @@ class Cockpit(App):
             return f"{_agent_of(self.session)} session"
         return self.session.scope_label()
 
+    def _watch_hex(self) -> str:
+        """Color for the status-line `watching …` span: the watched agent's brand
+        hue for a single session, the copilot accent for a multi-agent scope (no
+        single brand)."""
+        if getattr(self.session, "scope", SC.SESSION) == SC.SESSION:
+            return _agent_hex(_agent_of(self.session))
+        return _PAL["accent"]
+
     def _update_status(self):
         status = self._status()
         if status is None:
@@ -1364,7 +1394,7 @@ class Cockpit(App):
             be = N.backend_name(self.backend).split(" (")[0]
             t.append("copilot " + be + (":" + self.model if self.model else ""),
                      style=_PAL["secondary"])
-            t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
+            t.append(f"   watching {self._evidence_label()}", style=self._watch_hex())
             status.update(t)
             return
         a = A.assess(st)
@@ -1376,7 +1406,7 @@ class Cockpit(App):
         be = N.backend_name(self.backend).split(" (")[0]
         t.append("copilot " + be + (":" + self.model if self.model else ""),
                  style=_PAL["secondary"])
-        t.append(f"   watching {self._evidence_label()}", style=_PAL["accent"])
+        t.append(f"   watching {self._evidence_label()}", style=self._watch_hex())
         t.append(f"   idle {_dur(st.idle_seconds)} · {st.tr.raw_lines} ev",
                  style=_PAL["muted"])
         if self._busy:
@@ -1556,7 +1586,8 @@ class Cockpit(App):
         self._update_status()
         if d.new_events or d.status_from != d.status_to or d.verdict_from != d.verdict_to:
             self._timeline(_timeline_delta_line(st, d))
-            line = _activity_line(st.last_record) if st.last_record is not None else None
+            line = (_activity_line(st.last_record, _agent_hex(_agent_of(self.session)))
+                    if st.last_record is not None else None)
             if line is not None:
                 self._timeline(line)
         for fc in d.new_changed[:4]:

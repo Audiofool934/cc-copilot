@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.12.0 — 2026-06-09
+
+**A neutral cockpit, and each agent shown in its own color.** The default theme
+gets a quieter ground and a more meaningful identity:
+- **Neutral graphite ground.** The cockpit background moves off the old blue-ink
+  ramp to a neutral grey (`#1e1e1e` and a grey `surface`/`panel`/`boost` ramp),
+  so it reads as a calm workspace rather than a tinted block.
+- **The accent IS the Claude×Codex blend.** The copilot's own accent (borders,
+  the timeline title, its own chat replies) is now `#807ea6` — literally the
+  midpoint of Claude's `#cb7d5b` and Codex's `#347ff2`. The copilot's color is
+  the average of the two agents it watches. (A test pins the accent to that
+  computed midpoint, so it can't silently drift.)
+- **Per-agent brand colors.** Agent-identity spans now carry the *watched*
+  agent's brand hue: a Claude session's `agent` label and `"<agent> session"`
+  header glow rust, a Codex session's blue. In a multi-session view, each row
+  takes its own session's color, so a mixed Claude+Codex timeline is legible at
+  a glance. Unknown agents fall back to the copilot accent.
+
 ## 0.11.2 — 2026-06-09
 
 **The chat and timeline panes now line up.** Two theme/layout nits:
