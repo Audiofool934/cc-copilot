@@ -9,16 +9,19 @@
   a long line (a deep path, a long error) stays on one row and you pan across it
   with the trackpad / shift-wheel. The horizontal scrollbar is drawn at
   zero thickness, so there's no chunky bar eating a row — scrolling without the
-  gutter. (The vertical history scrollbar stays a thin 1 cell.) The pan survives
-  same-session refreshes — it no longer snaps back to column 0 on every poll /
-  theme change / `/refresh` while you're tailing. (Caught by a Codex review.)
-- **Evidence switches land on the newest line again.** The 0.10.4 scroll-preserve
-  was applied to *every* rebuild, so switching evidence (`/sessions`, `/use`,
-  `/here`, `/resume`) restored the previous view's scroll offset — opening a
-  freshly-selected session scrolled into the middle with the latest activity
-  off-screen. Scroll position is now preserved only on *same-session* refreshes
-  (poll tick, theme change, manual refresh); an evidence/scope switch lands on
-  the newest line. (Caught by a Codex cross-model review.)
+  gutter. (The vertical history scrollbar stays a thin 1 cell.) Timeline rows are
+  also kept much longer (up to 200 chars, was ~58) so there's real content to pan
+  to. The pan survives same-session refreshes — it no longer snaps back to
+  column 0 on every poll / theme change / `/refresh` while you're tailing.
+- **Scroll position follows the evidence, not the clock.** The 0.10.4
+  scroll-preserve was applied to *every* rebuild, so switching evidence
+  (`/sessions`, `/use`, `/here`, `/resume`) restored the previous view's offset —
+  opening a freshly-selected session scrolled into the middle. Whether to keep
+  the scroll is now *derived* from whether the evidence identity (scope · session ·
+  multi-session set) actually changed: same-evidence rebuilds (poll tick, theme,
+  `/refresh`, re-observe, a no-op `/scope`) hold your position; an evidence switch
+  lands on the newest line. (All three fixes above caught by Codex cross-model
+  review.)
 
 ## 0.10.4 — 2026-06-08
 

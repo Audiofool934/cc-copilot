@@ -515,11 +515,11 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)   # followed exactly to bottom
 
-    async def test_evidence_switch_lands_on_newest_refresh_preserves(self):
-        """A rebuild for an evidence/scope switch (default keep_scroll=False) lands
-        on the newest line — restoring a stale offset would open a freshly-selected
-        session scrolled into the middle. A same-session refresh (keep_scroll=True)
-        instead holds the reader's position."""
+    async def test_same_evidence_preserves_switch_lands_on_newest(self):
+        """Auto-detected keep_scroll: a rebuild whose evidence identity is unchanged
+        (poll/theme/refresh, re-observe via _refresh_scope_view, a no-op /scope)
+        holds the reader's scroll; an evidence switch (different session/scope) lands
+        on the newest line, so a freshly-selected session doesn't open mid-scroll."""
         import json
         import tempfile
         from cccopilot.chat import ChatSession
@@ -539,16 +539,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             rl = app.query_one("#timeline-log", RichLog)
             self.assertGreater(rl.max_scroll_y, 3)
+            # same evidence (signature unchanged since mount) -> scroll held
             rl.scroll_to(y=2, animate=False)
             await pilot.pause()
-            app._rebuild_timeline()                              # evidence switch (default)
+            app._rebuild_timeline()
             await pilot.pause()
-            self.assertGreaterEqual(rl.scroll_offset.y, rl.max_scroll_y)  # landed on newest
+            self.assertLessEqual(rl.scroll_offset.y, 3)
+            # P3: _refresh_scope_view on unchanged evidence (e.g. re-observe) holds too
             rl.scroll_to(y=2, animate=False)
             await pilot.pause()
-            app._rebuild_timeline(keep_scroll=True)              # same-session refresh
+            app._refresh_scope_view()
             await pilot.pause()
-            self.assertLessEqual(rl.scroll_offset.y, 3)          # held the reader's place
+            self.assertLessEqual(rl.scroll_offset.y, 3)
+            # an evidence switch (the prior signature differs) lands on newest
+            rl.scroll_to(y=2, animate=False)
+            await pilot.pause()
+            app._timeline_sig = ("__other_evidence__", "", ())
+            app._rebuild_timeline()
+            await pilot.pause()
+            self.assertGreaterEqual(rl.scroll_offset.y, rl.max_scroll_y)
 
     async def test_keep_scroll_preserves_horizontal_pan_at_bottom(self):
         """A same-session refresh while tailing must keep a horizontal pan — a bare
@@ -576,14 +585,15 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.x, 30)
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)
-            app._rebuild_timeline(keep_scroll=True)              # poll/theme/refresh
+            app._rebuild_timeline()                              # same evidence: poll/theme/refresh
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.x, 30)             # pan KEPT (x_axis=False)
             self.assertEqual(rl.scroll_offset.y, rl.max_scroll_y)  # still tailing
             # an evidence switch resets the horizontal pan to the start
             rl.scroll_to(x=30, y=rl.max_scroll_y, animate=False)
             await pilot.pause()
-            app._rebuild_timeline()                              # keep_scroll=False
+            app._timeline_sig = ("__other_evidence__", "", ())   # prior evidence differed
+            app._rebuild_timeline()
             await pilot.pause()
             self.assertEqual(rl.scroll_offset.x, 0)              # pan reset for new evidence
 

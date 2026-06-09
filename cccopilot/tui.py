@@ -240,6 +240,13 @@ def _short_activity(text: str, limit: int = 70) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# Timeline rows are unwrapped and pan horizontally, so they keep far more than
+# the compact status-line summaries — a long path / command / error stays
+# readable by scrolling sideways. Still capped so one pathological multi-KB blob
+# can't make the virtual width (and the pan distance) absurd.
+_TIMELINE_LINE_MAX = 200
+
+
 def _tool_activity_target(record) -> str:
     inp = record.tool_input if isinstance(record.tool_input, dict) else {}
     if record.tool_name == "Bash":
@@ -253,17 +260,17 @@ def _activity_line(record):
     if record.kind == "human" and not record.housekeeping:
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("user", style=_PAL["secondary"])
-        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     if record.kind == "agent_text":
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("agent", style=_PAL["primary"])
-        t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+        t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     if record.kind == "agent_thinking":
         return Text(f"{record.hhmm} agent thinking", style=_PAL["muted"])
     if record.kind == "tool_call":
-        target = _short_activity(_tool_activity_target(record), 58)
+        target = _short_activity(_tool_activity_target(record), _TIMELINE_LINE_MAX)
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append(record.tool_name or "tool", style=_PAL["accent"])
         if target:
@@ -273,7 +280,7 @@ def _activity_line(record):
         t = Text(f"{record.hhmm} ", style=_PAL["muted"])
         t.append("tool error", style=_PAL["error"])
         if record.text:
-            t.append(" · " + _short_activity(record.text), style=_PAL["text"])
+            t.append(" · " + _short_activity(record.text, _TIMELINE_LINE_MAX), style=_PAL["text"])
         return t
     return None
 
@@ -922,6 +929,7 @@ class Cockpit(App):
         self._watch_path = None
         self._watch_size = -1
         self._watch_state = None
+        self._timeline_sig = None       # evidence identity of the last rebuild
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -1169,13 +1177,28 @@ class Cockpit(App):
         else:
             rl.scroll_end(animate=False)
 
-    def _rebuild_timeline(self, keep_scroll=False):
+    def _evidence_sig(self):
+        """Identity of *what* the timeline is showing — scope, the session, and the
+        multi-session set. A rebuild whose signature is unchanged is a same-session
+        refresh (poll tick, theme, /refresh, re-observe, a no-op /scope); a changed
+        signature is an evidence switch (/sessions, /use, /here, /scope, /resume)."""
+        s = self.session
+        return (s.scope, s.path,
+                tuple(sorted(str(x) for x in (getattr(s, "scope_sessions", None) or []))))
+
+    def _rebuild_timeline(self):
         rl = self.query_one("#timeline-log", RichLog)
         prev_y = rl.scroll_offset.y
         # "at the bottom" is EXACT here — NOT the append path's `- 1` slack.
         # When the log overflows by a single line (max_scroll_y == 1) that slack
         # would treat a top reader (y == 0) as at-bottom and yank them down.
         was_bottom = prev_y >= rl.max_scroll_y         # capture BEFORE clear
+        # Keep the reader's scroll only when the evidence is unchanged; an evidence
+        # switch (or the first build) lands on the newest line. Derived, not passed
+        # by callers — _refresh_scope_view has both same-evidence and switch callers.
+        sig = self._evidence_sig()
+        keep_scroll = (sig == self._timeline_sig)
+        self._timeline_sig = sig
         snap = _scope_snapshot(self.session)
         title = _scope_activity_title(self.session, snap)
         try:
@@ -1360,7 +1383,7 @@ class Cockpit(App):
         # keeps the cockpit reactive when alert toasts are disabled.
         changed = self.session.refresh() if not self.alerts else False
         if changed or self.session.scope != SC.SESSION:
-            self._rebuild_timeline(keep_scroll=True)   # same session — don't yank scroll
+            self._rebuild_timeline()
         self._update_header()
         self._update_status()
 
@@ -1743,7 +1766,7 @@ class Cockpit(App):
             return
         self.theme = name
         self._sync_rich_palette()
-        self._rebuild_timeline(keep_scroll=True)       # same session — keep reading position
+        self._rebuild_timeline()
         self._update_header()
         self._update_status()
         label = COCKPIT_THEME_SPECS[name]["label"]
@@ -1760,7 +1783,7 @@ class Cockpit(App):
 
     def action_refresh_now(self):
         self.session.refresh()
-        self._rebuild_timeline(keep_scroll=True)       # same session — keep reading position
+        self._rebuild_timeline()
         self._update_header()
         self._update_status()
         self.notify("history-only — no live session" if self.session.st is None
