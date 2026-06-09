@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0 — 2026-06-10
+
 **Streaming answers — the copilot talks while it thinks.** Chat answers in the
 cockpit and the REPL, `cc-copilot ask`, and `brief --narrate` now render
 incrementally as the model produces them instead of blocking on a spinner until
@@ -45,7 +47,18 @@ Cockpit rendering uses `Markdown.append` (trailing-block re-parse) with 50 ms
 worker-side coalescing — claude's token deltas paint as words, not keystrokes —
 and the chat pane anchors to the bottom while streaming, released the moment
 you scroll up. `CC_COPILOT_STREAM=0` opts out (everything then behaves exactly
-as before). 33 new tests (357 total).
+as before).
+
+Hardened by three cross-model review rounds plus an 18-agent adversarial
+workflow (every finding re-verified, then fixed): quitting the cockpit
+mid-answer now aborts the backend transport instead of hanging up to the
+stream timeout (`Backend.cancel()`); `cc-copilot ask … | head` no longer
+surfaces a spurious BrokenPipeError; chunks that stream in while you're
+viewing another conversation buffer and repaint in full when you switch back;
+`/forget` aborts only an answer running for the forgotten conversation; exact
+usage/cost can't leak onto another conversation's HUD; and the stderr-drain
+race, SSE-BOM first-chunk loss, and claude multi-message mashing are gone.
+44 new tests (368 total).
 
 ## 0.14.1 — 2026-06-10
 
