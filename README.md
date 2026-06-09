@@ -1,5 +1,10 @@
 # CC-Copilot
 
+[![PyPI](https://img.shields.io/pypi/v/cc-copilot)](https://pypi.org/project/cc-copilot/)
+[![Python](https://img.shields.io/pypi/pyversions/cc-copilot)](https://pypi.org/project/cc-copilot/)
+[![CI](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **CC-Copilot helps you stay aligned with AI coding agents.**
 
 Cockpit is the primary TUI experience: a live supervision layer for ongoing
@@ -34,34 +39,45 @@ Inside Cockpit:
 
 ## Install
 
-Current install:
+One command, no clone — install it as an isolated tool:
 
 ```bash
-python3 -m pip install --user "cc-copilot[tui] @ git+https://github.com/Audiofool934/cc-copilot.git"
-cc-copilot setup
+uv tool install "cc-copilot[tui]"      # recommended (https://docs.astral.sh/uv/)
+# or
+pipx install "cc-copilot[tui]"
+```
+
+Then:
+
+```bash
 cc-copilot cockpit
 ```
 
-Core requirements: Python 3.9+. The CLI core is dependency-free; Cockpit uses
-the optional Textual extra.
-
-On fresh Debian/Ubuntu servers, setup may need Python's venv package:
+Or run it without installing anything:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip
-cc-copilot setup
+uvx --from "cc-copilot[tui]" cc-copilot cockpit
 ```
 
-Target install experience:
+Requirements: Python 3.9+. The CLI core is **dependency-free**; the Cockpit TUI
+pulls in the optional `[tui]` extra (Textual) — drop it (`cc-copilot` instead of
+`cc-copilot[tui]`) if you only want the command-line briefs.
+
+<details>
+<summary>plain <code>pip</code> / from source</summary>
 
 ```bash
-npm install -g cc-copilot
-cc-copilot cockpit
+pip install "cc-copilot[tui]"                         # from PyPI
+# from a clone (development):
+pip install -e ".[tui]"
 ```
 
-That npm wrapper is planned distribution work; the current supported install is
-the Python package from GitHub.
+On fresh Debian/Ubuntu servers `pipx`/venv may need:
+
+```bash
+sudo apt-get update && sudo apt-get install -y python3-venv python3-pip pipx
+```
+</details>
 
 ## Why CC-Copilot
 
@@ -368,18 +384,19 @@ another agent (Gemini CLI, Aider, …) is a new `sources/` adapter, not a rewrit
 ```bash
 git clone https://github.com/Audiofool934/cc-copilot.git
 cd cc-copilot
+pip install -e ".[tui]"          # editable install with the Cockpit extra
 
-python3 -m unittest discover
-cc-copilot setup
+python3 -m unittest discover     # stdlib-only test suite
 cc-copilot cockpit
 ```
 
 Core tests are stdlib-only. Textual is optional and lazy-imported by Cockpit.
+Releases publish to PyPI automatically on a `v*` tag — see
+[`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Roadmap
 
-- npm installer wrapper for easier sharing
-- Rust migration for portable single-binary distribution
+- Homebrew tap + a `curl | sh` one-line installer
 - deeper project evidence retrieval and file ranking
 - streaming responses and exact backend token usage
 - additional transcript parsers beyond Claude Code

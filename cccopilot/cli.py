@@ -34,6 +34,25 @@ def _tui_importable() -> bool:
     return importlib.util.find_spec("textual") is not None
 
 
+def _is_source_checkout() -> bool:
+    """True only when running from a git clone — the lone place the auto-`.venv`
+    bootstrap belongs. An installed wheel lives in site-packages with no
+    pyproject/.git beside it, and that dir may be read-only (uv/pipx tool
+    installs), so we must never write a `.venv` there."""
+    root = _repo_root()
+    return (os.path.isfile(os.path.join(root, "pyproject.toml"))
+            or os.path.isdir(os.path.join(root, ".git")))
+
+
+def _install_extra_hint() -> str:
+    return (
+        "cc-copilot: the cockpit needs the optional TUI extra (Textual).\n"
+        "Reinstall cc-copilot with it:\n"
+        "  uv tool install \"cc-copilot[tui]\"       # or: pipx install \"cc-copilot[tui]\"\n"
+        "  # plain pip:  python3 -m pip install --user \"cc-copilot[tui]\"\n"
+    )
+
+
 def _setup_troubleshooting() -> str:
     return (
         "cc-copilot setup: could not install Textual.\n"
@@ -45,9 +64,8 @@ def _setup_troubleshooting() -> str:
         "If you cannot use sudo, install Textual into your current/user Python instead:\n"
         "  python3 -m pip install --user 'textual>=2.0'\n"
         "\n"
-        "Or install cc-copilot with the TUI extra:\n"
-        "  python3 -m pip install --user "
-        "\"cc-copilot[tui] @ git+https://github.com/Audiofool934/cc-copilot.git\"\n"
+        "Or (re)install cc-copilot with the TUI extra:\n"
+        "  uv tool install \"cc-copilot[tui]\"   #  or: pipx install \"cc-copilot[tui]\"\n"
     )
 
 
@@ -67,6 +85,13 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
         return sys.executable
     if os.path.isfile(vpy) and has_textual(vpy):
         return vpy
+    if not _is_source_checkout():
+        # installed via pip/uv/pipx, not a clone: never build a .venv inside
+        # site-packages (it pollutes a writable tool env and fails a read-only
+        # one). Point the user at the optional extra instead.
+        if not quiet:
+            sys.stderr.write(_install_extra_hint())
+        return None
     if not os.path.isfile(vpy):
         if not quiet:
             sys.stderr.write(f"# cc-copilot: creating venv at {vdir} (one-time) …\n")
