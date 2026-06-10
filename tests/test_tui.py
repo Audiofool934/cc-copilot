@@ -1554,6 +1554,17 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.model, "some-future-model-id")
 
+    async def test_colonized_model_id_is_not_a_backend_switch(self):
+        # OpenRouter variants carry colon suffixes (`…:free`, `…:nitro`) —
+        # the colon form only means backend:model when the prefix IS a backend
+        app = self._cockpit(backend="deepseek")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model meta-llama/llama-3.1-405b-instruct:free")
+            await pilot.pause()
+            self.assertEqual(app.backend, "deepseek")  # unchanged
+            self.assertEqual(app.model, "meta-llama/llama-3.1-405b-instruct:free")
+
     async def test_cli_switch_still_clears_model(self):
         # the stale-model invariant survives the catalog: API → CLI drops it
         app = self._cockpit(backend="deepseek", model="deepseek-v4-pro")

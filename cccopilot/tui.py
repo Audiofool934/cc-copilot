@@ -2232,13 +2232,16 @@ class Cockpit(App):
             return
         if low == "/model" or low.startswith("/model "):
             arg = cmd.strip()[6:].strip()
+            reg = BK.registry()
             if not arg:
                 self.action_model()
-            elif ":" in arg:
-                # `/model deepseek:deepseek-v4-pro` — backend and model in one go
+            elif ":" in arg and arg.split(":", 1)[0].strip() in reg:
+                # `/model deepseek:deepseek-v4-pro` — backend and model in one
+                # go. Only when the prefix IS a backend: model ids themselves
+                # can contain colons (OpenRouter's `…:free` / `…:nitro`).
                 bname, _, mname = arg.partition(":")
                 self._set_backend(bname.strip(), after_model=mname.strip() or None)
-            elif arg in BK.registry():
+            elif arg in reg:
                 self._set_backend(arg)
             else:
                 # not a backend name → treat as a model id on the CURRENT
