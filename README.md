@@ -20,8 +20,6 @@ workflow.
 happened while you were away, a streamed citation-pinned answer to "is it safe
 to merge?", and the two-level model picker.*
 
-![CC-Copilot Cockpit](docs/cockpit.png)
-
 ## Quick Start
 
 ```bash
