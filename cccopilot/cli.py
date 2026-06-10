@@ -623,6 +623,9 @@ def _cockpit_sh(cwd: str) -> str:
     return sh
 
 
+_COCKPIT_WIDTH = "33%"   # agent : cockpit = 2 : 1 — the agent is the main act
+
+
 def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
                  inside_tmux: bool, session_name: str = "cc-copilot"):
     """The tmux calls for `launch`, as data: (setup argvs, final exec argv).
@@ -633,13 +636,22 @@ def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
     import shlex
     if inside_tmux:
         # Split the current window; the user's pane (focus stays, -d) becomes
-        # the agent via exec, so launch leaves no wrapper process behind.
-        return ([["tmux", "split-window", "-h", "-d", "-c", cwd, cockpit_sh]],
+        # the agent via exec, so launch leaves no wrapper process behind. We
+        # are a guest in the user's server here — don't touch their options.
+        return ([["tmux", "split-window", "-h", "-d", "-l", _COCKPIT_WIDTH,
+                  "-c", cwd, cockpit_sh]],
                 agent_argv)
     agent_sh = " ".join(shlex.quote(a) for a in agent_argv)
     return ([["tmux", "new-session", "-d", "-s", session_name, "-c", cwd, agent_sh],
-             ["tmux", "split-window", "-h", "-d", "-t", session_name, "-c", cwd,
-              cockpit_sh]],
+             # Our own session: stock tmux ships `mouse off`, where clicking a
+             # pane does nothing — a user who doesn't live in tmux literally
+             # cannot reach the cockpit pane. Click-to-focus and wheel scroll
+             # should just work in a session we created. Bare name, no "=":
+             # set-option's target parser rejects the exact-match prefix, and
+             # the session we just created guarantees an exact match anyway.
+             ["tmux", "set-option", "-t", session_name, "mouse", "on"],
+             ["tmux", "split-window", "-h", "-d", "-l", _COCKPIT_WIDTH,
+              "-t", session_name, "-c", cwd, cockpit_sh]],
             ["tmux", "attach-session", "-t", session_name])
 
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.1 — 2026-06-11
+
+**`launch` split-screen fixes (user-reported).** The cockpit pane is now a
+third of the window (agent : cockpit = 2 : 1) instead of half — the agent is
+the main act. And the session `launch` creates gets `mouse on`: stock tmux
+ships with the mouse off, where clicking a pane does nothing — so anyone not
+fluent in tmux prefix keys literally could not focus the cockpit pane (every
+keystroke kept landing in the agent). Click-to-focus and wheel scrolling now
+work out of the box in launch-created sessions; when `launch` splits inside
+*your* tmux, your options are left untouched. tmux quirk for the record:
+`set-option -t` rejects the `=exact` target prefix that `has-session` /
+`kill-session` accept — bare name used (exact match guaranteed, the session
+was just created).
+
 ## 0.17.0 — 2026-06-10
 
 **One command to start it all.** `cc-copilot launch` (alias `up`) starts your
