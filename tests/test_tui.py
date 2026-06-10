@@ -1378,7 +1378,7 @@ class TestModelSwitchKeyPrompt(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.backend, "deepseek")
             self.assertEqual(app.session.backend, "deepseek")
-            self.assertEqual(app.model, "deepseek-chat")   # provider default applied
+            self.assertEqual(app.model, tui.MODELS.default_for("deepseek"))  # provider default applied
         data = CFG._load_simple(os.environ["CC_COPILOT_CONFIG"])
         self.assertEqual(data.get("backend"), "deepseek")
         self.assertEqual(data["env"]["DEEPSEEK_API_KEY"], "sk-deep")
@@ -1421,7 +1421,7 @@ class TestModelSwitchKeyPrompt(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertNotIsInstance(app.screen, tui.KeyPrompt)    # no prompt needed
             self.assertEqual(app.backend, "deepseek")
-            self.assertEqual(app.model, "deepseek-chat")
+            self.assertEqual(app.model, tui.MODELS.default_for("deepseek"))
 
     async def test_switch_to_cli_clears_stale_api_model(self):
         os.environ["OPENAI_API_KEY"] = "sk-oi"
@@ -1475,6 +1475,94 @@ class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
             content = str(app.query_one("#tip", Static).content)
             self.assertIn("💡", content)                  # the subtle marker
             self.assertTrue(any(t in content for t in tui._TIPS))
+
+
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
+    """The /model surface beyond provider-only: typed model ids, the
+    backend:model combo form, and the post-switch model step."""
+
+    def setUp(self):
+        import tempfile
+        self._saved = {k: os.environ.pop(k, None) for k in
+                       ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                        "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL",
+                        "DEEPSEEK_API_KEY")}
+        self.dir = tempfile.mkdtemp()
+        os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.dir, "cc.toml")
+        os.environ["CC_COPILOT_NO_ONBOARD"] = "1"
+        os.environ["DEEPSEEK_API_KEY"] = "sk-test"     # keyed → no KeyPrompt detour
+
+    def tearDown(self):
+        for k in ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
+                  "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL", "DEEPSEEK_API_KEY"):
+            os.environ.pop(k, None)
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    def _cockpit(self, backend="codex", model=None):
+        from cccopilot.chat import ChatSession
+        sess = ChatSession(write([user("x", 30), asst("y", 10)]),
+                           backend=backend, model=model)
+        sess.refresh()
+        return tui.Cockpit(sess, poll=999, alerts=False)
+
+    async def test_typed_bare_model_switches_model_only(self):
+        app = self._cockpit(backend="deepseek",
+                            model=tui.MODELS.default_for("deepseek"))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model deepseek-v4-pro")
+            await pilot.pause()
+            self.assertEqual(app.backend, "deepseek")  # backend unchanged
+            self.assertEqual(app.model, "deepseek-v4-pro")
+            self.assertEqual(app.session.model, "deepseek-v4-pro")
+
+    async def test_typed_combo_switches_backend_and_model(self):
+        app = self._cockpit()                          # starts on codex
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model deepseek:deepseek-v4-pro")
+            await pilot.pause()
+            self.assertEqual(app.backend, "deepseek")
+            self.assertEqual(app.model, "deepseek-v4-pro")
+
+    async def test_typed_backend_name_lands_on_catalog_default(self):
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model deepseek")
+            await pilot.pause()
+            self.assertEqual(app.backend, "deepseek")
+            self.assertEqual(app.model, tui.MODELS.default_for("deepseek"))
+
+    async def test_commit_backend_with_explicit_after_model(self):
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek", after_model="deepseek-v4-pro")
+            await pilot.pause()
+            self.assertEqual(app.model, "deepseek-v4-pro")
+
+    async def test_free_form_model_id_accepted(self):
+        # the catalog is a convenience, never a restriction
+        app = self._cockpit(backend="deepseek")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model some-future-model-id")
+            await pilot.pause()
+            self.assertEqual(app.model, "some-future-model-id")
+
+    async def test_cli_switch_still_clears_model(self):
+        # the stale-model invariant survives the catalog: API → CLI drops it
+        app = self._cockpit(backend="deepseek", model="deepseek-v4-pro")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model codex")
+            await pilot.pause()
+            self.assertEqual(app.backend, "codex")
+            self.assertIsNone(app.model)
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")

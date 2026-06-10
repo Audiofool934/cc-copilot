@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from . import config as CFG, backends as BK
+from . import config as CFG, backends as BK, models as MODELS
 
 
 @dataclass
@@ -34,25 +34,35 @@ class Choice:
     key_env: str = ""         # env var the API key lives under (api only)
     default_model: str = ""   # prefilled, editable; "" → backend's own default
     brand_hex: str = ""       # identity hue for the TUI row
+    featured: bool = True     # shown in the compact WelcomeScreen modal
 
 
-# Curated, friendly subset of backends.registry(), in presentation order. We
-# don't surface every backend (ollama/llm/custom stay power-user, file-only) —
-# onboarding is the common path, not the exhaustive one.
+def _api(name, label, key_env, blurb="", featured=False) -> Choice:
+    """An API choice whose default model comes from the curated catalog."""
+    return Choice(name, label, "api", blurb or f"{label} API — needs a key",
+                  key_env=key_env, default_model=MODELS.default_for(name),
+                  featured=featured)
+
+
+# Every key-needing provider has a Choice (that is what powers the inline
+# key-prompt when /model switches to it); the WelcomeScreen modal shows only
+# the FEATURED subset so the first-run screen stays compact. `cc-copilot init`
+# lists everything. ollama/llm/custom stay power-user, file-only.
 CHOICES = [
     Choice("claude", "Claude", "cli",
            "uses your Claude Code subscription — no API key", brand_hex="#cb7d5b"),
     Choice("codex", "Codex", "cli",
            "uses your ChatGPT (Codex) login — no API key", brand_hex="#347ff2"),
-    Choice("openai", "OpenAI", "api",
-           "OpenAI API — needs a key", key_env="OPENAI_API_KEY",
-           default_model="gpt-4o"),
-    Choice("deepseek", "DeepSeek", "api",
-           "DeepSeek API — needs a key", key_env="DEEPSEEK_API_KEY",
-           default_model="deepseek-chat"),
-    Choice("openrouter", "OpenRouter", "api",
-           "OpenRouter API — needs a key", key_env="OPENROUTER_API_KEY",
-           default_model="openai/gpt-4o"),
+    _api("openai", "OpenAI", "OPENAI_API_KEY", featured=True),
+    _api("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", featured=True),
+    _api("openrouter", "OpenRouter", "OPENROUTER_API_KEY",
+         "OpenRouter API — any model, needs a key", featured=True),
+    _api("moonshot", "Moonshot Kimi", "MOONSHOT_API_KEY"),
+    _api("zai", "Z.ai GLM", "ZAI_API_KEY"),
+    _api("qwen", "Qwen (DashScope)", "DASHSCOPE_API_KEY"),
+    _api("groq", "Groq", "GROQ_API_KEY"),
+    _api("xai", "xAI Grok", "XAI_API_KEY"),
+    _api("gemini-api", "Gemini API", "GEMINI_API_KEY"),
     Choice("", "Skip for now", "skip",
            "deterministic recaps only — set a model later with `cc-copilot init`"),
 ]
@@ -86,11 +96,16 @@ def choice_for_or_none(name: str):
     return c if c.kind != "skip" else None
 
 
-def detect() -> list:
-    """Each curated choice annotated with whether it's usable on this machine."""
+def detect(featured_only: bool = False) -> list:
+    """Each curated choice annotated with whether it's usable on this machine.
+    ``featured_only`` trims to the compact set the WelcomeScreen modal shows
+    (claude/codex/openai/deepseek/openrouter/skip); the terminal wizard and the
+    /model switch path see every provider."""
     reg = BK.registry()
     out = []
     for c in CHOICES:
+        if featured_only and not c.featured and c.kind == "api":
+            continue
         if c.kind == "skip":
             out.append(Detected(c, True, "no model — recaps show the cited evidence only"))
             continue
@@ -177,7 +192,8 @@ def render_config(backend, model="", env=None, history_enabled=True,
         "# Defaults for the LLM-backed commands (ask / chat / cockpit / since",
         "# recap / brief --narrate). The deterministic core needs none of this.",
         "",
-        "# backend: claude | codex | openai | deepseek | openrouter | ollama | llm | gemini",
+        "# backend: claude | codex | openai | deepseek | openrouter | moonshot |",
+        "#          zai | qwen | groq | xai | gemini-api | ollama | llm | gemini",
     ]
     if backend:
         lines.append(f'backend = "{_esc(backend)}"')
@@ -209,7 +225,9 @@ def render_config(backend, model="", env=None, history_enabled=True,
         "# Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):",
         "# CC_COPILOT_API_BASE = \"http://localhost:11434\"",
         "# CC_COPILOT_API_KEY = \"...\"",
-        "# CC_COPILOT_MODEL = \"qwen2.5\"",
+        "# CC_COPILOT_MODEL = \"qwen3\"",
+        "# Mainland-China DashScope (key must match the region):",
+        "# DASHSCOPE_API_BASE = \"https://dashscope.aliyuncs.com/compatible-mode/v1\"",
         "",
         "# Persist your copilot Q&A so relaunching restores prior chats. Stored",
         "# locally under $CC_COPILOT_STATE_DIR (0700/0600), never under ~/.claude.",
