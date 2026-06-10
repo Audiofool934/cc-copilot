@@ -8,11 +8,16 @@ current window and the agent takes over your pane; outside it creates a
 `cc-copilot` session with both panes and attaches. The agent command is
 whatever you say (`launch codex`, `launch -- claude --resume`; default: claude,
 else codex). Without tmux it says so and opens the cockpit alone. The cockpit
-side rides the new `--next` flag: wait for the next session to start (or
-resume — it keys on mtime, so `claude --resume` counts) in the project and pin
-to it, instead of latching onto yesterday's transcript or dying in a fresh
-project. And plain `cc-copilot` with no arguments now opens the cockpit —
-off-TTY (scripts, hooks, pipes) the usage error stays.
+side rides the new `--next` flag: wait for the project's transcripts to
+*change* — a new session appearing, or an existing one growing (`claude
+--resume` appends in place) — and pin to it, instead of latching onto
+yesterday's transcript or dying in a fresh project. And plain `cc-copilot`
+with no arguments now opens the cockpit — off-TTY (scripts, hooks, pipes) the
+usage error stays. Hardened against the launch-pane-dies-with-the-diagnostic
+family: `[tui]` preflight before any pane opens, the agent binary absolutized
+(the tmux *server's* PATH resolves pane commands), `env`-prefixed cockpit
+command (fish/tcsh default-shells), and no leaked half-built sessions on
+setup failure.
 
 ## 0.16.0 — 2026-06-10
 

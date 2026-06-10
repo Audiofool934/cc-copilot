@@ -27,6 +27,16 @@ class TestEffectiveArgv(unittest.TestCase):
         self.assertEqual(cli._effective_argv(["sessions"]), ["sessions"])
         self.assertEqual(cli._effective_argv(["--version"]), ["--version"])
 
+    def test_stdout_piped_keeps_the_usage_error(self):
+        with mock.patch.object(sys.stdin, "isatty", return_value=True), \
+             mock.patch.object(sys.stdout, "isatty", return_value=False):
+            self.assertEqual(cli._effective_argv([]), [])
+
+    def test_closed_stdin_does_not_crash(self):
+        # daemons may close (not null) stdio: Python then sets sys.stdin = None
+        with mock.patch.object(sys, "stdin", None):
+            self.assertEqual(cli._effective_argv([]), [])
+
 
 class TestLaunchParser(unittest.TestCase):
     def test_launch_subcommand_exists_with_alias(self):
@@ -86,7 +96,9 @@ class TestCockpitSh(unittest.TestCase):
         with mock.patch("shutil.which", return_value="/abs/bin/cc-copilot"), \
              mock.patch.object(cli, "_is_source_checkout", return_value=True):
             sh = cli._cockpit_sh("/tmp/p")
-        self.assertIn("PYTHONPATH=", sh)
+        # `env` prefix: tmux runs this via the default-shell, which may be
+        # fish/tcsh — bare VAR=… prefixes are POSIX-only syntax there.
+        self.assertTrue(sh.startswith("env PYTHONPATH="))
         self.assertIn("-m cccopilot cockpit --next", sh)
         self.assertNotIn("/abs/bin/cc-copilot", sh)
 
@@ -144,9 +156,21 @@ class TestCmdLaunch(unittest.TestCase):
                         ["launch", "--cwd", td, "--", "claude", "--resume"]))
         finally:
             os.chdir(prev)   # cmd_launch chdirs before the (faked) exec
-        self.assertEqual(seen["argv"], ["claude", "--resume"])
+        # agent binary absolutized: the tmux server's PATH, not ours, resolves
+        # pane commands, and execvp should agree with the preflight which()
+        self.assertEqual(seen["argv"], ["/bin/claude", "--resume"])
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0][:3], ["tmux", "split-window", "-h"])
+
+    def test_missing_tui_extra_aborts_before_any_pane(self):
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch("shutil.which", side_effect=lambda c: f"/bin/{c}"), \
+             mock.patch.object(cli, "_tui_importable", return_value=False), \
+             mock.patch.object(cli, "_is_source_checkout", return_value=False), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            rc = cli.cmd_launch(self._args(["launch", "--cwd", td]))
+        self.assertEqual(rc, 3)
+        self.assertIn("[tui]", err.getvalue())
 
     def test_unknown_agent_is_a_clean_error(self):
         which = lambda c: "/bin/tmux" if c == "tmux" else None
@@ -165,23 +189,100 @@ class TestCmdLaunch(unittest.TestCase):
 
 
 class TestWaitForNextSession(unittest.TestCase):
-    def test_skips_stale_then_attaches_to_fresh(self):
+    """`--next` waits for the session picture to CHANGE — recency alone can't
+    tell the just-launched agent from a transcript quit seconds ago."""
+
+    def _resolve(self, td, answers):
+        """A SRC.resolve fake that also pins the call contract."""
+        def fake(cwd_arg, session_arg=None, **kw):
+            self.assertEqual(cwd_arg, td)
+            self.assertIsNone(session_arg)
+            return answers()
+        return fake
+
+    def _touch(self, path, ago=0.0):
+        with open(path, "a") as f:
+            f.write("{}\n")
+        t = time.time() - ago
+        os.utime(path, (t, t))
+
+    def test_fresh_project_attaches_to_first_session(self):
         with tempfile.TemporaryDirectory() as td:
-            stale = os.path.join(td, "old.jsonl")
             fresh = os.path.join(td, "new.jsonl")
-            for p in (stale, fresh):
-                with open(p, "w") as f:
-                    f.write("{}\n")
-            past = time.time() - 120
-            os.utime(stale, (past, past))
-            answers = iter([None, stale, fresh])
+            self._touch(fresh)
+            seq = iter([None, None, fresh])
             with mock.patch.object(cli.SRC, "resolve",
-                                   side_effect=lambda *a, **k: next(answers)), \
+                                   side_effect=self._resolve(td, lambda: next(seq))), \
                  mock.patch.object(time, "sleep", lambda s: None), \
                  contextlib.redirect_stderr(io.StringIO()) as err:
-                got = cli._wait_for_next_session(td, slack=15.0, poll=0)
+                got = cli._wait_for_next_session(td, poll=0)
             self.assertEqual(got, fresh)
             self.assertIn("waiting for an agent session", err.getvalue())
+
+    def test_does_not_pin_a_just_quit_session(self):
+        # The death of the 15s-recency design: a transcript the user quit
+        # moments before `launch` is recent, but it is not the next session.
+        with tempfile.TemporaryDirectory() as td:
+            quit_ = os.path.join(td, "quit.jsonl")
+            fresh = os.path.join(td, "new.jsonl")
+            self._touch(quit_, ago=2.0)   # would beat any slack window
+            self._touch(fresh)
+            seq = iter([quit_, quit_, quit_, fresh])
+            with mock.patch.object(cli.SRC, "resolve",
+                                   side_effect=self._resolve(td, lambda: next(seq))), \
+                 mock.patch.object(time, "sleep", lambda s: None), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                got = cli._wait_for_next_session(td, poll=0)
+            self.assertEqual(got, fresh)
+
+    def test_resume_appending_to_an_old_transcript_counts(self):
+        # `claude --resume` reuses a transcript: same path, growing mtime.
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "s.jsonl")
+            self._touch(p, ago=120.0)
+            calls = {"n": 0}
+
+            def answers():
+                calls["n"] += 1
+                if calls["n"] == 3:        # the resume lands
+                    self._touch(p)
+                return p
+
+            with mock.patch.object(cli.SRC, "resolve",
+                                   side_effect=self._resolve(td, answers)), \
+                 mock.patch.object(time, "sleep", lambda s: None), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                got = cli._wait_for_next_session(td, poll=0)
+            self.assertEqual(got, p)
+            self.assertGreaterEqual(calls["n"], 3)
+
+
+class TestCmdChatNext(unittest.TestCase):
+    def _args(self, argv):
+        return cli.build_parser().parse_args(argv)
+
+    def test_ctrl_c_while_waiting_exits_130(self):
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch.object(cli, "_tui_importable", return_value=True), \
+             mock.patch.object(cli, "_wait_for_next_session",
+                               side_effect=KeyboardInterrupt), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = cli.cmd_chat(self._args(["cockpit", "--next", "--cwd", td]))
+        self.assertEqual(rc, 130)
+
+    def test_explicit_session_skips_the_wait(self):
+        with tempfile.TemporaryDirectory() as td:
+            sess = os.path.join(td, "s.jsonl")
+            with open(sess, "w") as f:
+                f.write("{}\n")
+            with mock.patch.object(cli, "_tui_importable", return_value=True), \
+                 mock.patch.object(cli, "_wait_for_next_session",
+                                   side_effect=AssertionError("must not wait")), \
+                 mock.patch("cccopilot.chat.ChatSession",
+                            side_effect=ValueError("stop here")), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                rc = cli.cmd_chat(self._args(["cockpit", "--next", sess]))
+            self.assertEqual(rc, 2)   # ValueError path: got past the wait
 
 
 if __name__ == "__main__":
