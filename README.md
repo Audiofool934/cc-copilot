@@ -14,6 +14,12 @@ Ask questions across one session, selected sessions, or an entire project
 without injecting supervision chatter into the main Claude Code or Codex
 workflow.
 
+![CC-Copilot demo — re-entry recap, grounded chat, model picker](docs/demo.gif)
+
+*Above: coming back to an agent session — the `/since` re-entry recap of what
+happened while you were away, a streamed citation-pinned answer to "is it safe
+to merge?", and the two-level model picker.*
+
 ![CC-Copilot Cockpit](docs/cockpit.png)
 
 ## Quick Start
