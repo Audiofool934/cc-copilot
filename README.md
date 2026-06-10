@@ -40,7 +40,7 @@ cc-copilot            # no arguments = open the cockpit
 Or start your agent and the cockpit together, side by side (tmux):
 
 ```bash
-cc-copilot launch                 # claude in the left pane, cockpit in the right
+cc-copilot launch                 # claude left (2/3), cockpit right (1/3)
 cc-copilot launch codex           # any agent command works
 cc-copilot launch -- claude --resume
 ```

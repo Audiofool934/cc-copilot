@@ -56,7 +56,7 @@ class TestLaunchPlan(unittest.TestCase):
         setup, final = cli._launch_plan(["claude", "--resume"], "/tmp/p", "COCKPIT", True)
         self.assertEqual(final, ["claude", "--resume"])
         self.assertEqual(setup, [["tmux", "split-window", "-h", "-d",
-                                  "-c", "/tmp/p", "COCKPIT"]])
+                                  "-l", "33%", "-c", "/tmp/p", "COCKPIT"]])
 
     def test_outside_tmux_builds_a_session_and_attaches(self):
         setup, final = cli._launch_plan(["codex"], "/tmp/p", "COCKPIT",
@@ -64,8 +64,24 @@ class TestLaunchPlan(unittest.TestCase):
         self.assertEqual(final, ["tmux", "attach-session", "-t", "cc-copilot-2"])
         self.assertEqual(setup[0][:5], ["tmux", "new-session", "-d", "-s", "cc-copilot-2"])
         self.assertEqual(setup[0][-1], "codex")
-        self.assertEqual(setup[1][-1], "COCKPIT")
-        self.assertIn("-t", setup[1])
+        # our own session gets mouse on (stock tmux can't click-focus a pane);
+        # bare name — set-option's target parser rejects the "=" prefix
+        self.assertEqual(setup[1], ["tmux", "set-option", "-t", "cc-copilot-2",
+                                    "mouse", "on"])
+        self.assertEqual(setup[2][-1], "COCKPIT")
+        self.assertIn("-t", setup[2])
+
+    def test_cockpit_pane_is_a_third_wide(self):
+        # agent : cockpit = 2 : 1 — both branches pass the ratio to tmux
+        for inside in (True, False):
+            setup, _ = cli._launch_plan(["claude"], "/p", "C", inside)
+            split = [a for a in setup if a[1] == "split-window"][0]
+            i = split.index("-l")
+            self.assertEqual(split[i + 1], "33%")
+
+    def test_inside_tmux_does_not_touch_host_options(self):
+        setup, _ = cli._launch_plan(["claude"], "/p", "C", True)
+        self.assertNotIn("set-option", [a[1] for a in setup])
 
     def test_agent_args_are_shell_quoted(self):
         setup, _ = cli._launch_plan(["claude", "--add-dir", "/tmp/with space"],
