@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+**One command to start it all.** `cc-copilot launch` (alias `up`) starts your
+agent and the cockpit side by side in a tmux split — inside tmux it splits the
+current window and the agent takes over your pane; outside it creates a
+`cc-copilot` session with both panes and attaches. The agent command is
+whatever you say (`launch codex`, `launch -- claude --resume`; default: claude,
+else codex). Without tmux it says so and opens the cockpit alone. The cockpit
+side rides the new `--next` flag: wait for the next session to start (or
+resume — it keys on mtime, so `claude --resume` counts) in the project and pin
+to it, instead of latching onto yesterday's transcript or dying in a fresh
+project. And plain `cc-copilot` with no arguments now opens the cockpit —
+off-TTY (scripts, hooks, pipes) the usage error stays.
+
 ## 0.16.0 — 2026-06-10
 
 **Pick your model, not just your provider — plus 6 new providers.** Every API

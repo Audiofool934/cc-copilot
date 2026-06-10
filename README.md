@@ -23,8 +23,20 @@ to merge?", and the two-level model picker.*
 ## Quick Start
 
 ```bash
-cc-copilot cockpit
+cc-copilot            # no arguments = open the cockpit
 ```
+
+Or start your agent and the cockpit together, side by side (tmux):
+
+```bash
+cc-copilot launch                 # claude in the left pane, cockpit in the right
+cc-copilot launch codex           # any agent command works
+cc-copilot launch -- claude --resume
+```
+
+`launch` splits the window (or creates a tmux session and attaches), starts the
+agent, and the cockpit waits for that agent's session to appear and pins itself
+to it. No tmux? It tells you and opens the cockpit alone.
 
 The **first launch** greets you with a one-time welcome screen to pick the model
 that powers recaps, chat, and `since` — **Claude** or **Codex** (uses the
@@ -64,7 +76,7 @@ pipx install "cc-copilot[tui]"
 Then:
 
 ```bash
-cc-copilot cockpit
+cc-copilot
 ```
 
 Or run it without installing anything:
