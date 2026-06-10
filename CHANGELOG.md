@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+**Pick your model, not just your provider — plus 6 new providers.** Every API
+backend now carries a small curated model catalog (`cccopilot/models.py`, one
+hand-checked table verified against live provider docs), and the cockpit's
+`/model` flow is two-level: pick the backend, then pick among its models —
+with typed fast-paths `/model deepseek-v4-pro` (switch model on the current
+backend), `/model deepseek:deepseek-v4-pro` (both at once), and any free-form
+id still accepted everywhere (the catalog is a convenience, never a
+restriction). `cc-copilot backends --models` lists everything; the `init`
+wizard offers a numbered model menu.
+
+- **DeepSeek defaults to `deepseek-v4-flash`** (with `deepseek-v4-pro`
+  selectable) — `deepseek-chat` / `deepseek-reasoner` are deprecated upstream
+  on **2026-07-24** and are marked as such in the picker. OpenAI's default
+  moves `gpt-4o` → `gpt-5.4`.
+- **New providers** (all OpenAI-compatible, stdlib HTTP, key via env or the
+  config's `[env]` table): **moonshot** (Kimi `kimi-k2.6`), **zai** (GLM
+  `glm-5.1`), **qwen** (DashScope, `qwen3-max`; mainland endpoint via
+  `DASHSCOPE_API_BASE`), **groq**, **xai** (Grok `grok-4.3`), and
+  **gemini-api** (Google's OpenAI-compat endpoint — distinct from the `gemini`
+  CLI backend). All get the inline key-prompt on `/model` switch, like the
+  original three.
+- **Fix:** a model picked for any provider used to leak into **ollama's**
+  default via the `CC_COPILOT_MODEL` export (cross-provider contamination) —
+  ollama now has its own catalog default.
+- Model switches stay session-scoped like backend switches; persist a default
+  with `cc-copilot init` (which now also preserves your other settings, as
+  before). The first-run welcome modal stays compact (featured providers);
+  `cc-copilot init` lists every provider.
+
 ## 0.15.0 — 2026-06-10
 
 **Streaming answers — the copilot talks while it thinks.** Chat answers in the

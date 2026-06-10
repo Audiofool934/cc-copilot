@@ -159,11 +159,21 @@ def _run_terminal_onboard(args=None) -> int:
                 sys.stderr.write("\n  cancelled.\n")
                 return 1
         if c.default_model and sys.stdin.isatty():
+            from . import models as MODELS
+            curated = MODELS.models_for(c.name)
+            if curated:
+                sys.stderr.write(f"\n  models for {c.label}:\n")
+                for j, mi in enumerate(curated, 1):
+                    note = f" — {mi.note}" if mi.note else ""
+                    sys.stderr.write(f"   {j}) {mi.id}{note}\n")
             try:
-                m = input(f"  model [{c.default_model}]: ").strip()
+                m = input(f"  model [{c.default_model}] (number or any id): ").strip()
             except (EOFError, KeyboardInterrupt):
                 m = ""
-            model = m or c.default_model
+            if m.isdigit() and curated and 1 <= int(m) <= len(curated):
+                model = curated[int(m) - 1].id
+            else:
+                model = m or c.default_model
         else:
             model = c.default_model
 
@@ -394,6 +404,7 @@ def cmd_ask(args) -> int:
 
 def cmd_backends(args) -> int:
     from . import backends as BK
+    from . import models as MODELS
     from . import narrate as N
     active = BK.resolve(getattr(args, "backend", None)).name
     print("LLM backends (default selection marked ▶; the deterministic core needs none):")
@@ -402,9 +413,15 @@ def cmd_backends(args) -> int:
         mark = "▶" if name == active else " "
         status = "ready" if ok else f"needs: {be.reason()}"
         print(f"  {mark} {name:<11} {'✓' if ok else '·'} {status}")
+        if getattr(args, "models", False):
+            for mi in MODELS.models_for(name):
+                note = f" — {mi.note}" if mi.note else ""
+                print(f"      · {mi.id}{note}")
     print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
     print("pick with --backend <name>, env CC_COPILOT_BACKEND, or a custom "
-          "CC_COPILOT_LLM_CMD / CC_COPILOT_API_BASE.")
+          "CC_COPILOT_LLM_CMD / CC_COPILOT_API_BASE."
+          + ("" if getattr(args, "models", False)
+             else "  `--models` lists each provider's curated models."))
     return 0
 
 
@@ -767,6 +784,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("backends", help="list LLM backends and their availability")
     sp.add_argument("--backend", help="show this backend as the active selection")
+    sp.add_argument("--models", action="store_true",
+                    help="also list each provider's curated models")
     sp.set_defaults(func=cmd_backends)
 
     sp = sub.add_parser("init",

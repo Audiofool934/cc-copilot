@@ -50,7 +50,8 @@ except ImportError:
 
 from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
-               observe as O, context as EC, prefs as PREFS, onboard as OB)
+               observe as O, context as EC, prefs as PREFS, onboard as OB,
+               models as MODELS)
 from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
 
 
@@ -1340,7 +1341,8 @@ class Cockpit(App):
 
     def action_onboard(self) -> None:
         """Open the first-run model picker (also reachable later via /init)."""
-        self.push_screen(WelcomeScreen(OB.detect()), self._after_onboard)
+        self.push_screen(WelcomeScreen(OB.detect(featured_only=True)),
+                         self._after_onboard)
 
     def _after_onboard(self, result) -> None:
         if not result:
@@ -2230,10 +2232,21 @@ class Cockpit(App):
             return
         if low == "/model" or low.startswith("/model "):
             arg = cmd.strip()[6:].strip()
-            if arg:
+            reg = BK.registry()
+            if not arg:
+                self.action_model()
+            elif ":" in arg and arg.split(":", 1)[0].strip() in reg:
+                # `/model deepseek:deepseek-v4-pro` — backend and model in one
+                # go. Only when the prefix IS a backend: model ids themselves
+                # can contain colons (OpenRouter's `…:free` / `…:nitro`).
+                bname, _, mname = arg.partition(":")
+                self._set_backend(bname.strip(), after_model=mname.strip() or None)
+            elif arg in reg:
                 self._set_backend(arg)
             else:
-                self.action_model()
+                # not a backend name → treat as a model id on the CURRENT
+                # backend (`/model deepseek-v4-pro`); free-form ids welcome
+                self._set_model(arg)
             return
         if low == "/init" or low == "/onboard":
             self.action_onboard(); return
@@ -2416,11 +2429,60 @@ class Cockpit(App):
 
     @work
     async def action_model(self):
-        opts = [(f"{name}{'  ✓' if be.available() else '  · ' + be.reason()}", name)
-                for name, be in sorted(BK.registry().items())]
+        opts = []
+        for name, be in sorted(BK.registry().items()):
+            cur = "  ✓" if name == (self.backend or "") else ""
+            avail = "" if be.available() else "  · " + be.reason()
+            # show the model that selecting this backend would land on
+            hint = ""
+            if isinstance(be, BK.OpenAICompatBackend) and be.default_model:
+                shown = self.model if (cur and self.model) else be.default_model
+                hint = f"  ({shown})"
+            opts.append((f"{name}{hint}{cur}{avail}", name))
         chosen = await self.push_screen_wait(Picker("switch backend", opts))
         if chosen:
-            self._set_backend(chosen)
+            # picking an API backend with a curated catalog flows straight into
+            # its model picker (Esc there keeps the recommended default)
+            self._set_backend(chosen, after_model="PICK")
+
+    @work
+    async def action_pick_model(self):
+        """Second level of /model: choose among the current backend's curated
+        models. Free-form ids stay available via `/model <model-id>`."""
+        name = self.backend or ""
+        models = MODELS.models_for(name)
+        if not models:
+            self.notify(f"no curated models for {name or 'this backend'} — "
+                        f"set one with `/model <model-id>`", severity="information")
+            return
+        be = BK.registry().get(name)
+        current = self.model or (be.default_model if be is not None
+                                 and isinstance(be, BK.OpenAICompatBackend) else None)
+        opts = []
+        for m in models:
+            mark = "  ✓" if m.id == current else ""
+            opts.append((f"{m.id:<26} · {m.note}{mark}", m.id))
+        opts.append(("custom…  (set any id with `/model <model-id>`)", "__custom__"))
+        chosen = await self.push_screen_wait(Picker(f"model for {name}", opts))
+        if not chosen:
+            return                                # Esc keeps the current model
+        if chosen == "__custom__":
+            self.notify("type `/model <model-id>` to set a custom model",
+                        severity="information")
+            return
+        self._set_model(chosen)
+
+    def _set_model(self, model_id):
+        """Switch the model on the CURRENT backend (session-scoped, like backend
+        switches; persist a default with `cc-copilot init`)."""
+        self.model = self.session.model = (model_id or "").strip() or None
+        info = MODELS.find(self.backend or "", self.model or "")
+        if info and "deprecated" in (info.note or ""):
+            self.notify(f"model → {self.model} — {info.note}", severity="warning")
+        else:
+            self.notify(f"model → {self.model or '(backend default)'}",
+                        severity="information")
+        self._update_status()
 
     def action_change_theme(self) -> None:
         self.action_theme()
@@ -2453,7 +2515,10 @@ class Cockpit(App):
         label = COCKPIT_THEME_SPECS[name]["label"]
         self.notify(f"theme → {label}", severity="information")
 
-    def _set_backend(self, name):
+    def _set_backend(self, name, after_model=None):
+        """Switch backend. ``after_model``: None = land on the provider default;
+        "PICK" = open the model picker after the switch (API + catalog only);
+        any other string = set that model id after the switch."""
         try:
             be = BK.resolve(name)
         except BK.BackendError as e:
@@ -2465,25 +2530,32 @@ class Cockpit(App):
         choice = OB.choice_for_or_none(name)
         if choice and choice.kind == "api" and not be.available():
             self.push_screen(KeyPrompt(choice),
-                             lambda k: self._finish_api_switch(name, choice, k))
+                             lambda k: self._finish_api_switch(name, choice, k,
+                                                               after_model))
             return
-        self._commit_backend(name, be)
+        self._commit_backend(name, be, after_model)
 
-    def _commit_backend(self, name, be):
+    def _commit_backend(self, name, be, after_model=None):
         self.backend = self.session.backend = name
         # Keep the active model coherent with the new backend's kind: an API
-        # backend uses its provider default (e.g. deepseek-chat); a CLI backend
-        # uses its own and must not inherit a stale API model — otherwise a
-        # claude→deepseek→claude round-trip would run `claude --model
-        # deepseek-chat`. Mirrors the onboarding path (_after_onboard).
+        # backend uses its provider default (e.g. deepseek-v4-flash); a CLI
+        # backend uses its own and must not inherit a stale API model —
+        # otherwise a claude→deepseek→claude round-trip would run `claude
+        # --model deepseek-v4-flash`. Mirrors the onboarding path (_after_onboard).
         if isinstance(be, BK.OpenAICompatBackend):
             self.model = self.session.model = be.default_model or self.model
         elif isinstance(be, BK.CliBackend):
             self.model = self.session.model = None
         self.notify(f"backend → {name}", severity="information")
         self._update_status()
+        if after_model and isinstance(be, BK.OpenAICompatBackend):
+            if after_model == "PICK":
+                if MODELS.models_for(name):
+                    self.action_pick_model()
+            else:
+                self._set_model(after_model)
 
-    def _finish_api_switch(self, name, choice, key):
+    def _finish_api_switch(self, name, choice, key, after_model=None):
         """KeyPrompt callback: persist the entered key, then complete the switch.
         A None key means the user cancelled — keep the current backend."""
         if not key:
@@ -2495,7 +2567,7 @@ class Cockpit(App):
             OB.apply_to_env(name, model=choice.default_model, key_value=key)
         except OSError as e:
             self.notify(f"could not save key: {e}", severity="error"); return
-        self._commit_backend(name, BK.resolve(name))
+        self._commit_backend(name, BK.resolve(name), after_model)
         self.notify(f"key saved · {choice.key_env}", severity="information")
 
     def action_toggle_select_mode(self) -> None:

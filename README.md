@@ -265,11 +265,22 @@ Supported backend families:
 | `codex` | your `codex login` | default; local agent CLI |
 | `claude` | your Claude Code login | `claude -p`; no API key |
 | `gemini` / `llm` | the CLI's own config | if installed on PATH |
-| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible HTTP |
-| `openai` | `OPENAI_API_KEY` | OpenAI-compatible HTTP |
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` default (`-chat` is deprecated 2026-07-24) |
+| `openai` | `OPENAI_API_KEY` | `gpt-5.4` default |
 | `openrouter` | `OPENROUTER_API_KEY` | any OpenRouter model |
+| `moonshot` | `MOONSHOT_API_KEY` | Kimi (`kimi-k2.6`) |
+| `zai` | `ZAI_API_KEY` | GLM (`glm-5.1`) |
+| `qwen` | `DASHSCOPE_API_KEY` | Qwen via DashScope; mainland endpoint via `DASHSCOPE_API_BASE` |
+| `groq` | `GROQ_API_KEY` | fast open-weights hosting |
+| `xai` | `XAI_API_KEY` | Grok (`grok-4.3`) |
+| `gemini-api` | `GEMINI_API_KEY` | Google's OpenAI-compat endpoint (≠ the `gemini` CLI) |
 | `ollama` | none | local server at `http://localhost:11434` |
 | `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
+
+Each API provider ships a small **curated model list** (see `cc-copilot backends
+--models`): the `/model` picker offers them two-level — backend, then model —
+and typed fast-paths work too: `/model deepseek-v4-pro` (model only),
+`/model deepseek:deepseek-v4-pro` (both at once), or any free-form id.
 
 Answers **stream** as the model produces them (claude: token deltas; the HTTP
 backends: SSE; codex: whole message + exact usage), and when the backend

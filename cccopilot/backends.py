@@ -32,6 +32,17 @@ import threading
 import urllib.error
 import urllib.request
 
+from . import models as MODELS
+
+
+def _qwen_endpoint() -> str:
+    base = os.environ.get("DASHSCOPE_API_BASE", "").strip().rstrip("/")
+    if not base:
+        base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    if not base.endswith("/chat/completions"):
+        base = base + "/chat/completions"
+    return base
+
 
 class BackendError(RuntimeError):
     pass
@@ -583,15 +594,40 @@ def registry() -> dict:
                              model_args=lambda m: ["-m", m]),
         "llm":    CliBackend("llm", [shutil.which("llm") or "llm"],
                              model_args=lambda m: ["-m", m]),
-        # OpenAI-compatible HTTP APIs
+        # OpenAI-compatible HTTP APIs. Default models come from the curated
+        # catalog (cccopilot/models.py) — one place to update when a provider's
+        # lineup moves; the /model picker offers the rest of each list.
         "deepseek":   OpenAICompatBackend("deepseek", "https://api.deepseek.com/chat/completions",
-                                          "DEEPSEEK_API_KEY", "deepseek-chat"),
+                                          "DEEPSEEK_API_KEY", MODELS.default_for("deepseek")),
         "openai":     OpenAICompatBackend("openai", "https://api.openai.com/v1/chat/completions",
-                                          "OPENAI_API_KEY", "gpt-4o"),
+                                          "OPENAI_API_KEY", MODELS.default_for("openai")),
         "openrouter": OpenAICompatBackend("openrouter", "https://openrouter.ai/api/v1/chat/completions",
-                                          "OPENROUTER_API_KEY", "openai/gpt-4o"),
+                                          "OPENROUTER_API_KEY", MODELS.default_for("openrouter")),
+        "moonshot":   OpenAICompatBackend("moonshot", "https://api.moonshot.ai/v1/chat/completions",
+                                          "MOONSHOT_API_KEY", MODELS.default_for("moonshot")),
+        "zai":        OpenAICompatBackend("zai", "https://api.z.ai/api/paas/v4/chat/completions",
+                                          "ZAI_API_KEY", MODELS.default_for("zai")),
+        # Alibaba Model Studio / DashScope. Default = the international
+        # endpoint; mainland users point DASHSCOPE_API_BASE at
+        # https://dashscope.aliyuncs.com/compatible-mode/v1 (keys are
+        # region-scoped, so the override matches the key, not a guess by us).
+        "qwen":       OpenAICompatBackend("qwen", _qwen_endpoint(),
+                                          "DASHSCOPE_API_KEY", MODELS.default_for("qwen")),
+        "groq":       OpenAICompatBackend("groq", "https://api.groq.com/openai/v1/chat/completions",
+                                          "GROQ_API_KEY", MODELS.default_for("groq")),
+        "xai":        OpenAICompatBackend("xai", "https://api.x.ai/v1/chat/completions",
+                                          "XAI_API_KEY", MODELS.default_for("xai")),
+        # Google's OpenAI-compat endpoint — distinct from the `gemini` CLI
+        # backend above; the path already ends in /openai/, no /v1 to append.
+        "gemini-api": OpenAICompatBackend("gemini-api",
+                                          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                                          "GEMINI_API_KEY", MODELS.default_for("gemini-api")),
+        # ollama's default comes from the catalog like every other provider —
+        # it used to read CC_COPILOT_MODEL, which let a model picked for any
+        # OTHER provider silently become ollama's default (cross-provider
+        # contamination). Config `model = …` / --model still apply per call.
         "ollama":     OpenAICompatBackend("ollama", "http://localhost:11434/v1/chat/completions",
-                                          "OLLAMA_API_KEY", os.environ.get("CC_COPILOT_MODEL", "llama3.2"),
+                                          "OLLAMA_API_KEY", MODELS.default_for("ollama"),
                                           needs_key=False),
     }
     base = os.environ.get("CC_COPILOT_API_BASE", "").strip().rstrip("/")
