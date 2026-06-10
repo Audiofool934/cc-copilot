@@ -714,10 +714,13 @@ def cmd_launch(args) -> int:
         name = _free_tmux_session(taken)
 
     setup, final = _launch_plan(agent_argv, cwd, _cockpit_sh(cwd), inside, name)
-    for argv in setup:
+    for i, argv in enumerate(setup):
         r = subprocess.run(argv)
         if r.returncode != 0:
-            if not inside:   # don't leak a detached half-built session
+            # Clean up the half-built session — but only when a *later* step
+            # failed. If new-session itself failed (e.g. a duplicate-name race
+            # with a concurrent launch), the session isn't ours to kill.
+            if not inside and i > 0:
                 subprocess.run(["tmux", "kill-session", "-t", "=" + name],
                                stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL)

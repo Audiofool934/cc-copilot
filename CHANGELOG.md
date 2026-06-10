@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 2026-06-10
 
 **One command to start it all.** `cc-copilot launch` (alias `up`) starts your
 agent and the cockpit side by side in a tmux split — inside tmux it splits the

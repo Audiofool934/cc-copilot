@@ -133,6 +133,28 @@ class TestCmdLaunch(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("no such directory", err.getvalue())
 
+    def test_new_session_failure_does_not_kill_someone_elses_session(self):
+        # Duplicate-name race: if new-session itself fails, the session
+        # belongs to a concurrent launch — never kill it.
+        runs = []
+
+        def fake_run(argv, **kw):
+            runs.append(argv)
+            # has-session: 1 = name free; new-session: 1 = the race loss
+            rc = 1 if argv[1] in ("has-session", "new-session") else 0
+            return types.SimpleNamespace(returncode=rc)
+
+        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch("shutil.which", side_effect=lambda c: f"/bin/{c}"), \
+             mock.patch.object(subprocess, "run", fake_run), \
+             mock.patch.dict(os.environ, env, clear=True), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            rc = cli.cmd_launch(self._args(["launch", "--cwd", td, "claude"]))
+        self.assertEqual(rc, 1)
+        self.assertNotIn("kill-session", [a[1] for a in runs])
+        self.assertIn("failed", err.getvalue())
+
     def test_inside_tmux_splits_and_execs_agent(self):
         runs, seen = [], {}
 
