@@ -5,14 +5,25 @@
 [![CI](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**CC-Copilot helps you stay aligned with AI coding agents.**
+**A cockpit for AI coding agents.**
 
-Cockpit is the primary TUI experience: a live supervision layer for ongoing
-agentic work, shared context, and next decisions.
+GitHub Copilot made codebases easier to read.\
+CC-Copilot makes agent runtimes easier to follow.
 
-Ask questions across one session, selected sessions, or an entire project
+Modern coding agents don't just autocomplete code anymore. They plan, edit,
+test, fail, retry, and continue for hours across Claude Code, Codex, and
+multi-session workflows. That creates a new developer problem: not just
+understanding the codebase — understanding what your agents have been doing
+over time.
+
+CC-Copilot is a separate, **read-only** supervision layer for that work. Its
+primary interface, **Cockpit**, is a terminal-native TUI for live agent
+supervision: shared context, grounded questions, risk signals, and next
+decisions. Ask across one session, selected sessions, or an entire project —
 without injecting supervision chatter into the main Claude Code or Codex
 workflow.
+
+The working agent stays focused. You stay aligned.
 
 ![CC-Copilot demo — re-entry recap, grounded chat, model picker](docs/demo.gif)
 
@@ -111,45 +122,50 @@ Past copilots reduced the cognitive burden of understanding code.
 
 Agentic coding creates a new burden: understanding what agents are doing over
 time. Long-running Claude Code, Codex, and multi-agent workflows produce
-continuous context, decisions, tool calls, errors, and partial progress.
+continuous context: plans, edits, tests, failures, retries, tool calls,
+partial progress, and decisions. When those sessions run for hours or
+overnight, you need a way to re-enter the work without reading the entire
+transcript.
 
-CC-Copilot gives humans a separate supervision layer. You can inspect, ask,
-compare, and realign without interrupting the working agent or forcing yourself
-to reconstruct context manually.
+CC-Copilot is built for that supervision layer. It lets you inspect, ask,
+compare, and realign — without interrupting the working agent or polluting
+the agent's main conversation.
 
-## What Makes It Different
+**Prior art.** CC-Copilot is influenced by Claude Code's `/btw` and the Codex
+desktop app's Sidechat. Those tools point toward an important new pattern:
+side-channel supervision for agentic coding. CC-Copilot extends that idea into
+a broader runtime cockpit: cross-session context, project-level evidence,
+resumable supervision sessions, and flexible model backends. The TUI takes
+design cues from [opencode](https://github.com/sst/opencode).
 
-1. **Read-only supervision**
-   CC-Copilot observes agent transcripts and project context without editing
-   files, issuing agent actions, or interfering with the working agent.
+## What You Can Do
 
-2. **Separate Cockpit workflow**
-   Ask supervision questions outside the main agent conversation, so the
-   agent's working context stays clean.
+- **Re-enter after stepping away** —
+  `/since` shows what changed while you were gone: commands run, failures,
+  files touched, status transitions — every claim pinned to a transcript line
+  you can check.
 
-3. **Evidence-grounded answers**
-   Answers are grounded in transcript lines, tool results, project facts, git
-   state, and file evidence.
+- **Ask without interrupting** —
+  Supervision questions live in the cockpit, not in the agent's context. The
+  agent's working conversation stays clean.
 
-4. **Multi-session awareness**
-   Follow one session, selected sessions, or an entire project from one
-   interface.
+- **Follow multiple sessions** —
+  Inspect one session, selected sessions, or project-level context — Claude
+  Code and Codex side by side on one board.
 
-5. **Attention-first UI**
-   Cockpit surfaces status, risk, progress, and the next human decision instead
-   of forcing you to read the whole transcript.
+- **Know when you're needed** —
+  Stalls, fail-streaks, edit-thrash, and retry loops fold into a
+  CLEAR / REVIEW / INTERVENE verdict, with desktop alerts for unattended runs.
 
-6. **Model-flexible**
-   Use Codex, Claude, OpenAI-compatible APIs, DeepSeek, OpenRouter, Ollama,
-   Gemini, or custom CLI backends.
+- **Keep answers grounded** —
+  The model only ever sees deterministic, line-cited evidence: transcript
+  lines, tool results, git state, project facts. If it can't cite it, it
+  doesn't claim it.
 
-7. **Terminal-native**
-   Keyboard-first TUI with mouse support, designed for side-window and
-   CMUX-style workflows.
-
-8. **Resumable Cockpit Sessions**
-   Your supervision conversation is independent from the agent session and can
-   be resumed later.
+- **Use the model you want** —
+  Your existing Claude or Codex login (no API key), or DeepSeek, Kimi, GLM,
+  Qwen, Groq, Grok, Gemini, OpenRouter, local Ollama — any OpenAI-compatible
+  endpoint or custom CLI backend.
 
 ## Usage
 
@@ -463,3 +479,5 @@ are trying to observe.
 CC-Copilot keeps supervision outside the main workflow. Cockpit is where the
 human can regain situational awareness without contaminating the agent's own
 conversation.
+
+**Not a copilot for code. A copilot for the agent runtime.**
