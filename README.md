@@ -5,7 +5,7 @@
 [![CI](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Audiofool934/cc-copilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**A cockpit for AI coding agents.**
+**A copilot for AI coding agents.**
 
 GitHub Copilot made codebases easier to read.\
 CC-Copilot makes agent runtimes easier to follow.
@@ -17,7 +17,7 @@ understanding the codebase — understanding what your agents have been doing
 over time.
 
 CC-Copilot is a separate, **read-only** supervision layer for that work. Its
-primary interface, **Cockpit**, is a terminal-native TUI for live agent
+primary interface is the **cockpit**, a terminal-native TUI for live agent
 supervision: shared context, grounded questions, risk signals, and next
 decisions. Ask across one session, selected sessions, or an entire project —
 without injecting supervision chatter into the main Claude Code or Codex
@@ -58,7 +58,7 @@ deterministic core (`brief` / `check` / `observe`) needs no model at all.
 
 ![CC-Copilot first-run welcome screen](docs/welcome.png)
 
-Inside Cockpit:
+Inside the cockpit:
 
 ```text
 /sessions   choose one or more agent sessions (incl. your own live session)
@@ -96,7 +96,7 @@ Or run it without installing anything:
 uvx --from "cc-copilot[tui]" cc-copilot cockpit
 ```
 
-Requirements: Python 3.9+. The CLI core is **dependency-free**; the Cockpit TUI
+Requirements: Python 3.9+. The CLI core is **dependency-free**; the cockpit TUI
 pulls in the optional `[tui]` extra (Textual) — drop it (`cc-copilot` instead of
 `cc-copilot[tui]`) if you only want the command-line briefs.
 
@@ -217,7 +217,7 @@ See [docs/cross-model-adapters.md](docs/cross-model-adapters.md).
 
 ## Cockpit
 
-Cockpit is the main product surface.
+The cockpit is the main product surface.
 
 It gives you:
 
@@ -265,7 +265,7 @@ All three are LLM-free and work across Claude Code and Codex sessions.
 
 v0.7 introduced the Evidence Context Engine.
 
-For model-backed `ask`, `chat`, and Cockpit answers, CC-Copilot now retrieves
+For model-backed `ask`, `chat`, and cockpit answers, CC-Copilot now retrieves
 primary evidence first:
 
 - raw assistant messages
@@ -276,7 +276,7 @@ primary evidence first:
 - selected multi-session records
 - read-only project facts
 - git/file evidence
-- Cockpit conversation memory
+- cockpit conversation memory
 
 Summaries still exist, but they are navigation aids and UI surfaces, not the
 only source of truth. See [docs/evidence-context-engine.md](docs/evidence-context-engine.md).
@@ -356,7 +356,7 @@ It reads:
 - read-only project facts
 - git status
 - cited file excerpts
-- saved Cockpit conversation state
+- saved cockpit conversation state
 
 It does not:
 
@@ -375,7 +375,7 @@ cc-copilot check
 cc-copilot status
 ```
 
-Interactive `/diff` is available inside Cockpit and `cc-copilot chat`.
+Interactive `/diff` is available inside the cockpit and `cc-copilot chat`.
 
 LLM-backed answers receive bounded cited evidence context, not tool access or
 ambient repo access.
@@ -392,7 +392,7 @@ It stores:
 - selected evidence sessions
 - durable compacted memory for older Q&A
 
-Changing evidence with `/sessions` changes what the current Cockpit reads; it
+Changing evidence with `/sessions` changes what the current cockpit reads; it
 does not switch to another Cockpit Session.
 
 Saved state lives under:
@@ -434,7 +434,7 @@ scope.py        collect session, multi-session, and project evidence
 context.py      retrieve raw evidence for model-backed answers
 store.py        persist resumable Cockpit Sessions and compacted memory
 backends.py     call Codex, Claude, OpenAI-compatible APIs, Ollama, etc.
-tui.py          Cockpit, the Textual TUI
+tui.py          the cockpit (Textual TUI)
 ```
 
 Agent specifics live entirely in `sources/`. Each adapter supplies just two
@@ -448,13 +448,13 @@ another agent (Gemini CLI, Aider, …) is a new `sources/` adapter, not a rewrit
 ```bash
 git clone https://github.com/Audiofool934/cc-copilot.git
 cd cc-copilot
-pip install -e ".[tui]"          # editable install with the Cockpit extra
+pip install -e ".[tui]"          # editable install with the cockpit extra
 
 python3 -m unittest discover     # stdlib-only test suite
 cc-copilot cockpit
 ```
 
-Core tests are stdlib-only. Textual is optional and lazy-imported by Cockpit.
+Core tests are stdlib-only. Textual is optional and lazy-imported by the cockpit.
 Releases publish to PyPI automatically on a `v*` tag — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
@@ -476,8 +476,8 @@ what matters, preserve decisions, and decide whether to intervene. Mixing that
 into the working agent thread creates noise and changes the very context you
 are trying to observe.
 
-CC-Copilot keeps supervision outside the main workflow. Cockpit is where the
-human can regain situational awareness without contaminating the agent's own
-conversation.
+CC-Copilot keeps supervision outside the main workflow. The cockpit is where
+the human can regain situational awareness without contaminating the agent's
+own conversation.
 
 **Not a copilot for code. A copilot for the agent runtime.**
