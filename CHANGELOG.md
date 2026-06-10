@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0 — 2026-06-10
+
 **Pick your model, not just your provider — plus 6 new providers.** Every API
 backend now carries a small curated model catalog (`cccopilot/models.py`, one
 hand-checked table verified against live provider docs), and the cockpit's
