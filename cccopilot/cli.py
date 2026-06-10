@@ -1,5 +1,7 @@
 """cc-copilot command-line interface.
 
+    cc-copilot                        no arguments: open the cockpit
+    cc-copilot launch [-- AGENT …]    start an agent + the cockpit side by side (tmux)
     cc-copilot init                   first-run setup: pick the model, save config
     cc-copilot sessions               list this project's sessions (newest first)
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
@@ -273,6 +275,38 @@ def _resolve_or_die(args) -> str:
     return path
 
 
+def _wait_for_next_session(cwd: str, poll: float = 0.7) -> str:
+    """Block until the project's session picture *changes*: a new transcript
+    appears, or the newest one grows (``claude --resume`` appends in place).
+
+    ``--next`` exists for `launch`: the cockpit comes up alongside a freshly
+    started agent, and "most recent transcript" at that instant is yesterday's
+    session — or one the user quit seconds ago. Recency can't tell a dead
+    transcript from the coming one, so we snapshot and wait for change. With
+    several agents live in one project the first to write wins; `/use` re-pins.
+    """
+    def snap():
+        path = SRC.resolve(cwd, None)
+        if not path:
+            return None
+        try:
+            return (path, os.path.getmtime(path))
+        except OSError:
+            return None  # vanished between resolve and stat; treat as absent
+
+    base = snap()
+    told = False
+    while True:
+        cur = snap()
+        if cur is not None and cur != base:
+            return cur[0]
+        if not told:
+            sys.stderr.write(f"cc-copilot: waiting for an agent session in {cwd} "
+                             "(Ctrl-C to stop) …\n")
+            told = True
+        time.sleep(poll)
+
+
 def cmd_sessions(args) -> int:
     cwd = args.cwd or os.getcwd()
     all_refs = SRC.list_sessions(cwd, include_own=True)
@@ -532,6 +566,12 @@ def cmd_chat(args) -> int:
                       {**os.environ, "PYTHONPATH": _repo_root(), "PYTHONSAFEPATH": "1"})
             # execve replaces this process; nothing below runs
 
+    if getattr(args, "next", False) and not getattr(args, "session", None):
+        try:
+            _wait_for_next_session(args.cwd or os.getcwd())
+        except KeyboardInterrupt:
+            sys.stderr.write("\n")
+            return 130
     path = _resolve_or_die(args)
     try:
         session = C.ChatSession(
@@ -554,6 +594,144 @@ def cmd_chat(args) -> int:
         return 0
     session.loop()
     return 0
+
+
+def _cockpit_argv(cwd: str) -> list:
+    """How the cockpit pane should invoke us: the installed entry point when
+    there is one — but a source checkout must relaunch ITSELF, not whatever
+    older version happens to be installed."""
+    import shutil
+    exe = None if _is_source_checkout() else shutil.which("cc-copilot")
+    base = [exe] if exe else [sys.executable, "-m", "cccopilot"]
+    return base + ["cockpit", "--next", "--cwd", cwd]
+
+
+def _cockpit_sh(cwd: str) -> str:
+    """The cockpit invocation as a tmux shell-command string.
+
+    Panes inherit the tmux *server's* environment, not ours — so this can't
+    rely on PATH (shutil.which gives an absolute path) and a source checkout
+    must carry its own PYTHONPATH.
+    """
+    import shlex
+    argv = _cockpit_argv(cwd)
+    sh = " ".join(shlex.quote(a) for a in argv)
+    if argv[1] == "-m":   # no installed entry point: running from the repo
+        # `env`, not bare VAR=… — tmux hands this string to the user's
+        # default-shell, and fish/tcsh reject POSIX assignment prefixes.
+        sh = f"env PYTHONPATH={shlex.quote(_repo_root())} PYTHONSAFEPATH=1 {sh}"
+    return sh
+
+
+def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
+                 inside_tmux: bool, session_name: str = "cc-copilot"):
+    """The tmux calls for `launch`, as data: (setup argvs, final exec argv).
+
+    Pure so it's testable without tmux. tmux shell-commands are single
+    strings run by the user's shell, hence the quoting.
+    """
+    import shlex
+    if inside_tmux:
+        # Split the current window; the user's pane (focus stays, -d) becomes
+        # the agent via exec, so launch leaves no wrapper process behind.
+        return ([["tmux", "split-window", "-h", "-d", "-c", cwd, cockpit_sh]],
+                agent_argv)
+    agent_sh = " ".join(shlex.quote(a) for a in agent_argv)
+    return ([["tmux", "new-session", "-d", "-s", session_name, "-c", cwd, agent_sh],
+             ["tmux", "split-window", "-h", "-d", "-t", session_name, "-c", cwd,
+              cockpit_sh]],
+            ["tmux", "attach-session", "-t", session_name])
+
+
+def _free_tmux_session(taken) -> str:
+    """First of cc-copilot, cc-copilot-2, … for which ``taken(name)`` is False."""
+    name = "cc-copilot"
+    n = 1
+    while taken(name):
+        n += 1
+        name = f"cc-copilot-{n}"
+    return name
+
+
+def cmd_launch(args) -> int:
+    import shutil
+    import subprocess
+    # realpath, not abspath: agents record their *physical* cwd (macOS /tmp is
+    # a symlink), and the cockpit must resolve sessions under the same name.
+    cwd = os.path.realpath(args.cwd or os.getcwd())
+    if not os.path.isdir(cwd):
+        sys.stderr.write(f"cc-copilot: no such directory: {cwd}\n")
+        return 2
+    if cwd.endswith(";"):
+        cwd += os.sep   # tmux splits its command line at args ending in ';'
+
+    # Preflight the cockpit pane: without the [tui] extra it would die on
+    # arrival, taking this message with it. (A source checkout bootstraps
+    # its own .venv in the pane instead.)
+    if not _tui_importable() and not _is_source_checkout():
+        sys.stderr.write(
+            "cc-copilot: the cockpit needs the [tui] extra — reinstall with: "
+            "uv tool install \"cc-copilot[tui]\"\n")
+        return 3
+
+    agent_argv = list(args.agent_cmd or [])
+    if agent_argv and agent_argv[0] == "--":
+        agent_argv = agent_argv[1:]
+    if not agent_argv:
+        default = next((a for a in ("claude", "codex") if shutil.which(a)), None)
+        if not default:
+            sys.stderr.write("cc-copilot: no agent found on PATH (looked for "
+                             "claude, codex). Try: cc-copilot launch -- <agent-cmd>\n")
+            return 2
+        agent_argv = [default]
+    agent_exe = shutil.which(agent_argv[0])
+    if not agent_exe:
+        sys.stderr.write(f"cc-copilot: agent {agent_argv[0]!r} not found on PATH\n")
+        return 2
+    # Absolute: outside tmux the *server's* PATH resolves pane commands, and a
+    # long-lived server may predate nvm/~/.local/bin entries.
+    agent_argv[0] = agent_exe
+
+    if not shutil.which("tmux"):
+        sys.stderr.write("cc-copilot: tmux not found — start the agent in another "
+                         "terminal yourself; opening the cockpit only.\n")
+        argv = _cockpit_argv(cwd)
+        argv.remove("--next")   # no agent was launched; don't wait for one
+        env = os.environ
+        if argv[1] == "-m":     # source checkout: the child needs the repo on path
+            env = {**os.environ, "PYTHONPATH": _repo_root(), "PYTHONSAFEPATH": "1"}
+        os.execvpe(argv[0], argv, env)
+
+    inside = bool(os.environ.get("TMUX"))
+    name = "cc-copilot"
+    if not inside:
+        def taken(n: str) -> bool:
+            # "=" forces exact match; bare -t prefix-matches ("cc-copilot"
+            # reads as taken whenever "cc-copilot-2" exists).
+            return subprocess.run(["tmux", "has-session", "-t", "=" + n],
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL).returncode == 0
+        name = _free_tmux_session(taken)
+
+    setup, final = _launch_plan(agent_argv, cwd, _cockpit_sh(cwd), inside, name)
+    for i, argv in enumerate(setup):
+        r = subprocess.run(argv)
+        if r.returncode != 0:
+            # Clean up the half-built session — but only when a *later* step
+            # failed. If new-session itself failed (e.g. a duplicate-name race
+            # with a concurrent launch), the session isn't ours to kill.
+            if not inside and i > 0:
+                subprocess.run(["tmux", "kill-session", "-t", "=" + name],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            sys.stderr.write(f"cc-copilot: {' '.join(argv[:2])} failed "
+                             f"(exit {r.returncode}) — the agent may have "
+                             "exited immediately; try running it directly\n")
+            return 1
+    if inside:
+        os.chdir(cwd)            # the agent execs in place; honor --cwd
+    os.execvp(final[0], final)   # replaces this process: the agent (in-tmux)
+    return 0                     # or `tmux attach`; unreachable
 
 
 def cmd_state(args) -> int:
@@ -836,6 +1014,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="don't save/restore this cockpit session (in-memory only)")
         sp.add_argument("--poll", type=int, default=2,
                         help="alert/header poll interval in seconds (default 2)")
+        sp.add_argument("--next", action="store_true",
+                        help="wait for the next session to start (or resume) in this "
+                             "project and attach to it — what `launch` passes, since "
+                             "the agent's session may not exist yet")
         scope_arg(sp)
 
     sp = sub.add_parser("chat", aliases=["attach"],
@@ -849,6 +1031,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="full-screen TUI cockpit (= chat --tui; needs cc-copilot[tui])")
     add_chat_args(sp)
     sp.set_defaults(func=cmd_chat, path=False, tui=True)
+
+    sp = sub.add_parser("launch", aliases=["up"],
+                        help="start an agent and the cockpit side by side (tmux split)",
+                        epilog="agent flags go after `--`: "
+                               "cc-copilot launch -- claude --resume")
+    sp.add_argument("--cwd", help="project dir to launch in (default: $PWD)")
+    sp.add_argument("agent_cmd", nargs=argparse.REMAINDER, metavar="[--] AGENT [ARG …]",
+                    help="agent command (default: claude, else codex). "
+                         "Examples: `launch codex`, `launch -- claude --resume`")
+    sp.set_defaults(func=cmd_launch)
 
     sp = sub.add_parser("state", help="dump the raw state model as JSON")
     session_args(sp)
@@ -907,8 +1099,18 @@ def cmd_config(args) -> int:
     return 0
 
 
+def _effective_argv(argv):
+    """Bare `cc-copilot` on a terminal means the cockpit; everywhere else
+    (scripts, hooks, pipes) keep argparse's usage error."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if (not argv and sys.stdin and sys.stdin.isatty()      # stdin/stdout are None
+            and sys.stdout and sys.stdout.isatty()):       # when a daemon closed them
+        return ["cockpit"]
+    return argv
+
+
 def main(argv=None) -> int:
     from . import config as CFG
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(_effective_argv(argv))
     CFG.apply_defaults(args)   # config file fills gaps the flags/env left
     return args.func(args)
