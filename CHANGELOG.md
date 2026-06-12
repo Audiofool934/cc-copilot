@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.1 — 2026-06-12
+
+**Sticky prompt positioning fixes.** The chat-top sticky prompt now follows the
+actual scroll position instead of only the last keyboard jump: short
+conversations keep the latest or manually selected prompt, long conversations
+sync the `N/total` count to the prompt owning the current top of the viewport,
+and exact boundary cases no longer switch one line early when the next prompt is
+just below the top edge. Left/Right jumps force the target prompt to the top of
+the chat pane when possible, with a fallback for older Textual versions.
+
+**Router model-id switching is less surprising.** While a router-style backend
+such as OpenRouter, Groq, Together, DeepInfra, Hugging Face, NVIDIA, Chutes,
+Novita, or GMI is active, slash-style model ids like `openai/gpt-6-preview` stay
+on the current backend instead of being interpreted as a provider switch.
+Explicit backend switches still use the existing `backend:model` form.
+
 ## 0.18.0 — 2026-06-12
 
 **Codex-aware `/here`, richer model switching, and faster cockpit browsing.**

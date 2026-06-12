@@ -1221,6 +1221,96 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app._chat_prompt_nav_index, 0)
 
+    async def test_prompt_jump_moves_the_chat_viewport_and_syncs_count(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        sess.history = []
+        for i in range(24):
+            sess.history.append(("user", f"question {i}"))
+            sess.history.append(("assistant", "\n".join(
+                f"answer {i}.{j}" for j in range(3)) + " [L1]"))
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(90, 30)) as pilot:
+            await pilot.pause()
+            chat = app.query_one("#chat")
+            prompts = app._chat_prompt_widgets()
+            self.assertEqual(len(prompts), 24)
+            bottom_y = chat.scroll_offset.y
+
+            app._jump_chat_prompt(target=3)
+            await pilot.pause()
+            self.assertLess(chat.scroll_offset.y, bottom_y)
+            self.assertEqual(app._chat_prompt_nav_index, 3)
+            self.assertEqual(prompts[3].region.y, chat.region.y)
+            self.assertIn("4/24", str(app.query_one("#chat-pin", Static).content))
+
+            app._jump_chat_prompt(target=12)
+            await pilot.pause()
+            self.assertEqual(app._prompt_index_at_chat_top(), 12)
+            self.assertEqual(prompts[12].region.y, chat.region.y)
+
+            chat.scroll_end(animate=False)
+            await pilot.pause()
+            expected = app._prompt_index_at_chat_top()
+            app._sync_chat_pin_to_scroll()
+            self.assertEqual(app._chat_pin_index, expected)
+            self.assertIn(f"{expected + 1}/24",
+                          str(app.query_one("#chat-pin", Static).content))
+
+    async def test_prompt_pin_short_chat_keeps_latest_or_selected_prompt(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        sess.history = [("user", "first question"), ("assistant", "a1 [L1]"),
+                        ("user", "second question"), ("assistant", "a2 [L1]")]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(90, 40)) as pilot:
+            await pilot.pause()
+            chat = app.query_one("#chat")
+            self.assertEqual(chat.max_scroll_y, 0)       # content fits; no real top line
+            app._sync_chat_pin_to_scroll()
+            pin = app.query_one("#chat-pin", Static)
+            self.assertEqual(app._chat_pin_index, 1)
+            self.assertIn("2/2", str(pin.content))
+            self.assertIn("second question", str(pin.content))
+
+            app._jump_chat_prompt(target=0)
+            await pilot.pause()
+            app._sync_chat_pin_to_scroll()
+            self.assertEqual(app._chat_pin_index, 0)
+            self.assertIn("1/2", str(pin.content))
+            self.assertIn("first question", str(pin.content))
+
+    async def test_prompt_pin_boundary_does_not_switch_one_line_early(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        sess.history = []
+        for i in range(18):
+            sess.history.append(("user", f"question {i}"))
+            sess.history.append(("assistant", "\n".join(
+                f"answer {i}.{j}" for j in range(4)) + " [L1]"))
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test(size=(90, 28)) as pilot:
+            await pilot.pause()
+            chat = app.query_one("#chat")
+            prompts = app._chat_prompt_widgets()
+            self.assertGreater(chat.max_scroll_y, 0)
+
+            boundary = int(prompts[8].virtual_region.y)
+            chat.scroll_to(y=boundary - 1, animate=False, force=True, immediate=True)
+            await pilot.pause()
+            app._sync_chat_pin_to_scroll()
+            pin = app.query_one("#chat-pin", Static)
+            self.assertEqual(app._chat_pin_index, 7)
+            self.assertIn("8/18", str(pin.content))
+            self.assertIn("question 7", str(pin.content))
+
+            chat.scroll_to(y=boundary, animate=False, force=True, immediate=True)
+            await pilot.pause()
+            app._sync_chat_pin_to_scroll()
+            self.assertEqual(app._chat_pin_index, 8)
+            self.assertIn("9/18", str(pin.content))
+            self.assertIn("question 8", str(pin.content))
+
     async def test_escape_clears_input_and_double_escape_rewinds(self):
         sess = self._session("sess-A")
         sess.history = [("user", "first question"), ("assistant", "a1 [L1]")]
@@ -1705,6 +1795,18 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.backend, "openrouter")
             self.assertEqual(app.model, "anthropic/claude-sonnet-4.6")
+
+    async def test_current_router_backend_keeps_unknown_slash_refs(self):
+        os.environ["OPENROUTER_API_KEY"] = "sk-or"
+        os.environ["OPENAI_API_KEY"] = "sk-openai"
+        app = self._cockpit(backend="openrouter",
+                            model=tui.MODELS.default_for("openrouter"))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model openai/gpt-6-preview")
+            await pilot.pause()
+            self.assertEqual(app.backend, "openrouter")
+            self.assertEqual(app.model, "openai/gpt-6-preview")
 
     async def test_google_ref_switches_to_gemini_api(self):
         os.environ["GEMINI_API_KEY"] = "sk-gemini"

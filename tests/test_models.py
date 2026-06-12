@@ -90,6 +90,12 @@ class TestNewProviders(unittest.TestCase):
         self.assertEqual(M.resolve_ref("google/gemini-3.1-flash-lite",
                                        current_backend="openrouter"),
                          ("openrouter", "google/gemini-3.1-flash-lite"))
+        self.assertEqual(M.resolve_ref("openai/gpt-6-preview",
+                                       current_backend="openrouter"),
+                         ("openrouter", "openai/gpt-6-preview"))
+        self.assertEqual(M.resolve_ref("openrouter/openai/gpt-5.5",
+                                       current_backend="openrouter"),
+                         ("openrouter", "openai/gpt-5.5"))
         self.assertIsNone(M.resolve_ref("meta-llama/llama-3.1-405b-instruct:free",
                                         current_backend="deepseek"))
         self.assertIsNone(M.resolve_ref("not/a-ref"))

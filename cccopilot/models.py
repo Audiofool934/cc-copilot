@@ -269,6 +269,22 @@ _REF_BACKEND_ALIASES = {
     "ollama": "ollama",
 }
 
+# Backends whose model ids commonly contain provider/model slashes. While one of
+# these is active, a typed slash id should stay on the current backend unless the
+# user uses the explicit backend:model form handled by the caller.
+_ROUTER_MODEL_BACKENDS = {
+    "openrouter",
+    "groq",
+    "together",
+    "fireworks",
+    "deepinfra",
+    "huggingface",
+    "nvidia",
+    "chutes",
+    "novita",
+    "gmi",
+}
+
 
 def models_for(backend_name: str):
     """The curated models for a backend (possibly empty — CLI backends)."""
@@ -309,6 +325,12 @@ def resolve_ref(model_ref: str, current_backend: str = ""):
     backend = _REF_BACKEND_ALIASES.get(provider.strip().lower())
     if not backend or not model.strip():
         return None
+    if backend == cur:
+        if find(cur, raw):
+            return (cur, raw)
+        return (cur, model.strip())
+    if cur in _ROUTER_MODEL_BACKENDS:
+        return (cur, raw)
     if find(backend, raw):
         return (backend, raw)
     return (backend, model.strip())

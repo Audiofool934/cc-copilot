@@ -1329,6 +1329,7 @@ class Cockpit(App):
         self._prompt_draft = ""
         self._chat_prompt_nav_index = None
         self._chat_pin_index = None
+        self._chat_pin_scroll_sig = None
         self._rewind_esc_at = 0.0
         self._slash_open = False
         self._watch_stop = threading.Event()
@@ -1451,6 +1452,7 @@ class Cockpit(App):
         composer.focus()
         self._rotate_tip()                                  # show one immediately
         self.set_interval(16, self._rotate_tip, name="tips")
+        self.set_interval(0.35, self._sync_chat_pin_to_scroll, name="chat-pin")
         self.set_interval(0.12, self._tick_busy, name="busy-spinner")
         self.set_interval(self.poll, self._tick_refresh, name="auto-refresh")
         if self.alerts:
@@ -1727,6 +1729,49 @@ class Cockpit(App):
         t.append(self._prompt_first_line(text), style=_PAL["text"])
         pin.update(t)
 
+    def _prompt_index_at_chat_top(self):
+        prompts = self._chat_prompt_widgets()
+        if not prompts:
+            return None
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+            top = int(chat.scroll_offset.y)
+        except Exception:
+            return len(prompts) - 1
+        if getattr(chat, "max_scroll_y", 0) <= 0:
+            cur = self._chat_prompt_nav_index
+            return cur if cur is not None and 0 <= cur < len(prompts) else len(prompts) - 1
+        best = 0
+        for i, widget in enumerate(prompts):
+            try:
+                y = int(widget.virtual_region.y)
+            except Exception:
+                continue
+            if y <= top:
+                best = i
+            else:
+                break
+        return best
+
+    def _sync_chat_pin_to_scroll(self) -> None:
+        prompts = self._chat_prompt_widgets()
+        if not prompts:
+            self._chat_pin_scroll_sig = None
+            self._update_chat_pin()
+            return
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+            sig = (int(chat.scroll_offset.y), len(prompts))
+        except Exception:
+            sig = (None, len(prompts))
+        if sig == self._chat_pin_scroll_sig:
+            return
+        self._chat_pin_scroll_sig = sig
+        index = self._prompt_index_at_chat_top()
+        if index is not None:
+            self._chat_prompt_nav_index = index
+            self._update_chat_pin(index)
+
     def _jump_chat_prompt(self, delta=0, target=None) -> bool:
         prompts = self._chat_prompt_widgets()
         if not prompts:
@@ -1746,13 +1791,25 @@ class Cockpit(App):
         scroller = getattr(chat, "scroll_to_widget", None)
         if callable(scroller):
             try:
-                scroller(widget, animate=False)
+                scroller(widget, animate=False, top=True, force=True, immediate=True)
             except TypeError:
-                scroller(widget)
+                scroller(widget, animate=False)
+            except Exception:
+                try:
+                    chat.scroll_to(y=max(0, int(widget.virtual_region.y)),
+                                   animate=False, force=True)
+                except Exception:
+                    chat.scroll_end(animate=False)
+        else:
+            try:
+                chat.scroll_to(y=max(0, int(widget.virtual_region.y)),
+                               animate=False, force=True)
             except Exception:
                 chat.scroll_end(animate=False)
-        else:
-            chat.scroll_end(animate=False)
+        try:
+            self._chat_pin_scroll_sig = (int(chat.scroll_offset.y), len(prompts))
+        except Exception:
+            self._chat_pin_scroll_sig = None
         self._update_chat_pin(index)
         self._focus_composer()
         return True
