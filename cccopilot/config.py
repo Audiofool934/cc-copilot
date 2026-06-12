@@ -54,7 +54,7 @@ backend = "codex"
 # chats. Stored locally under $CC_COPILOT_STATE_DIR (default ~/.local/state/
 # cc-copilot), dir 0700 / files 0600. These files hold your questions and the
 # copilot's answers in plaintext — set enabled = false to keep everything in
-# memory only. Never written under ~/.claude.
+# memory only. Never written under ~/.claude or ~/.codex.
 [history]
 enabled = true
 # dir = "~/.local/state/cc-copilot"   # or set $CC_COPILOT_STATE_DIR

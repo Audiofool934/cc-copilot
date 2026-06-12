@@ -858,6 +858,45 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.session.history,
                          [("user", "q-for-A"), ("assistant", "answer-A [L1]")])
 
+    async def test_in_flight_answer_records_origin_metadata_after_switch(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin_store = app.session.store
+            origin_st = app.session.st
+            origin_path = os.path.abspath(app.session.path)
+            app.backend = app.session.backend = "openai"
+            app.model = app.session.model = "gpt-5.5"
+            app.session.scope = tui.SC.MULTI
+            app.session.scope_sessions = ["sess-A"]
+            origin = app._answer_origin(origin_st, origin_store)
+
+            b = write([user("task", 100, sessionId="sess-B"), asst("ok", 5)],
+                      dir=self.home)
+            app.session.switch_path(b)
+            app.backend = app.session.backend = "codex"
+            app.model = app.session.model = None
+            app.session.scope = tui.SC.SESSION
+            app.session.scope_sessions = []
+            app._rebuild_chat()
+            await pilot.pause()
+
+            app._answer_done("q-origin", "answer-origin [L1]", True,
+                             origin_st, origin_store, origin=origin)
+            await pilot.pause()
+
+        turn = origin_store._load_turns()[-1]
+        self.assertEqual(turn["backend"], "openai")
+        self.assertEqual(turn["model"], "gpt-5.5")
+        self.assertEqual(turn["src"]["scope"], tui.SC.MULTI)
+        self.assertEqual(turn["src"]["scope_sessions"], ["sess-A"])
+        self.assertEqual(turn["src"]["transcript"], origin_path)
+        header = origin_store.header()
+        self.assertEqual(header.scope, tui.SC.SESSION)
+        self.assertEqual(header.scope_sessions, [])
+        self.assertEqual(header.transcript, os.path.abspath(b))
+
     async def test_slash_autocomplete(self):
         from textual.widgets import OptionList
         sess = self._session("sess-A")

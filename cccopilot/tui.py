@@ -2205,6 +2205,7 @@ class Cockpit(App):
         self._answer_store = self.session.store
         self.session.last_context_stats = ctx.stats
         self.session.last_output_tokens = 0
+        origin = self._answer_origin(self.session.st, self.session.store)
         self._busy = True
         self._busy_frame = 0
         self._update_status()
@@ -2212,15 +2213,18 @@ class Cockpit(App):
         # switches sessions before the backend returns, the answer is recorded
         # against the session it was ASKED in — not whatever is current now.
         self._answer(text, ctx.text, self.session.st, list(self.session.history),
-                     self.session.store)
+                     self.session.store, origin)
 
     @work(thread=True)
-    def _answer(self, text, brief_text, st, history, store):
+    def _answer(self, text, brief_text, st, history, store, origin=None):
         import time as _time
         h = None
+        origin = origin or {}
+        backend = origin.get("backend", self.backend)
+        model = origin.get("model", self.model)
         try:
-            h = N.chat_brief_stream(brief_text, [], text, model=self.model,
-                                    backend=self.backend)
+            h = N.chat_brief_stream(brief_text, [], text, model=model,
+                                    backend=backend)
             self._answer_handle = h     # on_unmount/_abandon cancel() this
             # coalesce: claude emits token-level deltas (can be > 20/s); batch
             # anything that arrives within 50ms into one UI update so the loop
@@ -2248,7 +2252,7 @@ class Cockpit(App):
             self._answer_handle = None
         try:
             self.call_from_thread(self._answer_done, text, ans, ok, st, store,
-                                  h.usage if h is not None else None)
+                                  h.usage if h is not None else None, origin)
         except Exception:
             pass                        # app already shut down mid-answer
 
@@ -2297,13 +2301,36 @@ class Cockpit(App):
         else:                           # very old Textual: full re-render
             md.update(self._stream_buf)
 
-    def _answer_done(self, text, ans, ok, st, store, usage=None):
+    def _answer_origin(self, st, store) -> dict:
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "scope": self.session.scope,
+            "scope_sessions": list(self.session.scope_sessions or []),
+            "transcript": (os.path.abspath(self.session.path) if self.session.path
+                           else getattr(store, "transcript", "")),
+        }
+
+    def _restore_current_store_meta(self) -> None:
+        """Keep the conversation header pointed at the currently selected
+        evidence after an older in-flight answer writes its own turn source."""
+        store = self.session.store
+        store.scope = self.session.scope
+        store.scope_sessions = list(self.session.scope_sessions or [])
+        if self.session.path:
+            store.transcript = os.path.abspath(self.session.path)
+        store.record_state(self.session.st, scope=self.session.scope,
+                           scope_sessions=self.session.scope_sessions,
+                           backend=self.backend, model=self.model)
+
+    def _answer_done(self, text, ans, ok, st, store, usage=None, origin=None):
         self._busy = False
         self._busy_frame = 0
         self._answer_store = None
         md, buf = self._stream_md, self._stream_buf
         self._stream_md = None
         self._stream_buf = ""
+        origin = origin or {}
         if self._answer_abandoned:
             # /forget mid-stream: the user deleted this conversation while the
             # answer was in flight — render nothing, persist nothing (a write
@@ -2329,15 +2356,21 @@ class Cockpit(App):
             # the cockpit's single durable write-site (the REPL has its own in
             # ChatSession._finalize_turn); _answer runs on a worker thread, hence here.
             # Persist to the originating store, even if the user has switched away.
-            store.scope = self.session.scope
-            store.scope_sessions = list(self.session.scope_sessions)
-            store.record_turn(text, ans, st=st, backend=self.backend, model=self.model,
+            store.scope = origin.get("scope", self.session.scope)
+            store.scope_sessions = list(origin.get("scope_sessions",
+                                                   self.session.scope_sessions) or [])
+            if origin.get("transcript"):
+                store.transcript = origin["transcript"]
+            store.record_turn(text, ans, st=st,
+                              backend=origin.get("backend", self.backend),
+                              model=origin.get("model", self.model),
                               usage=(usage.as_dict() if usage else None))
             if same:
                 self.session.history.append(("user", text))
                 self.session.history.append(("assistant", ans))
                 if not live:            # nothing streamed live (fallback path)
                     self._chat(Markdown(ans, classes="role-assistant"))
+                self._restore_current_store_meta()
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
         elif same:

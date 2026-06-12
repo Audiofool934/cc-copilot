@@ -77,6 +77,17 @@ class TestRoundTrip(_Base):
         self.assertEqual(meta["title"], "q1")           # first question, kept
         self.assertEqual(meta["last_q"], "q3")
 
+    def test_record_state_can_clear_scope_sessions(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        s.record_state(_St(_Tr()), scope="multi", scope_sessions=["sess-a"])
+        self.assertEqual(s.header().scope_sessions, ["sess-a"])
+
+        s.record_state(_St(_Tr()), scope="session", scope_sessions=[])
+
+        h = s.header()
+        self.assertEqual(h.scope, "session")
+        self.assertEqual(h.scope_sessions, [])
+
     def test_compaction_writes_durable_memory_without_truncating_raw_log(self):
         s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
         st = _St(_Tr())

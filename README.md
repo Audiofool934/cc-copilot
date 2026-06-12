@@ -163,9 +163,11 @@ design cues from [opencode](https://github.com/sst/opencode).
   doesn't claim it.
 
 - **Use the model you want** —
-  Your existing Claude or Codex login (no API key), or DeepSeek, Kimi, GLM,
-  Qwen, Groq, Grok, Gemini, OpenRouter, local Ollama — any OpenAI-compatible
-  endpoint or custom CLI backend.
+  Your existing Claude or Codex login (no API key), or DeepSeek, OpenAI,
+  OpenRouter, Kimi, GLM, Qwen, Groq, Grok, Gemini, Mistral, Together,
+  Fireworks, Cerebras, DeepInfra, Hugging Face Router, NVIDIA, Chutes, Novita,
+  Venice, Arcee, GMI, StepFun, Xiaomi, Volcengine, Tencent TokenHub, local
+  Ollama — any OpenAI-compatible endpoint or custom CLI backend.
 
 ## Usage
 
@@ -237,6 +239,12 @@ suggestions, and `Ctrl+P` opens the command palette. `Shift+↑` / `Shift+↓` r
 the activity timeline (the chat fills the rest); the height is remembered across
 launches.
 
+The composer keeps prompt history: `↑` / `↓` browse prior prompts while the box
+is focused. `Esc` clears a draft; double-`Esc` on an empty composer opens
+rewind. With an empty composer, `←` / `→` jump between prior prompts in the chat.
+The one-line sticky prompt at the top of the chat shows the current prompt's
+first line and can be clicked to jump back to it.
+
 ## While You Were Away
 
 The hardest part of supervising long-running agents is *re-entry*: you stepped
@@ -287,7 +295,7 @@ only source of truth. See [docs/evidence-context-engine.md](docs/evidence-contex
 cc-copilot backends
 cc-copilot cockpit --backend codex
 cc-copilot cockpit --backend claude
-cc-copilot ask "what matters next?" --backend openai --model gpt-4o
+cc-copilot ask "what matters next?" --backend openai --model gpt-5.5
 ```
 
 Supported backend families:
@@ -306,6 +314,22 @@ Supported backend families:
 | `groq` | `GROQ_API_KEY` | fast open-weights hosting |
 | `xai` | `XAI_API_KEY` | Grok (`grok-4.3`) |
 | `gemini-api` | `GEMINI_API_KEY` | Google's OpenAI-compat endpoint (≠ the `gemini` CLI) |
+| `mistral` | `MISTRAL_API_KEY` | Mistral (`mistral-large-latest`) |
+| `together` | `TOGETHER_API_KEY` | Together AI (`moonshotai/Kimi-K2.6`) |
+| `fireworks` | `FIREWORKS_API_KEY` | Fireworks (`accounts/fireworks/models/kimi-k2p6`) |
+| `cerebras` | `CEREBRAS_API_KEY` | Cerebras (`zai-glm-4.7`) |
+| `deepinfra` | `DEEPINFRA_API_KEY` | DeepInfra (`deepseek-ai/DeepSeek-V4-Flash`) |
+| `huggingface` | `HUGGINGFACE_API_KEY` | Hugging Face Router (`deepseek-ai/DeepSeek-V3.1`) |
+| `nvidia` | `NVIDIA_API_KEY` | NVIDIA NIM (`nvidia/nemotron-3-ultra-550b-a55b`) |
+| `chutes` | `CHUTES_API_KEY` | Chutes (`zai-org/GLM-4.7-TEE`) |
+| `novita` | `NOVITA_API_KEY` | Novita (`moonshotai/kimi-k2.5`) |
+| `venice` | `VENICE_API_KEY` | Venice (`kimi-k2-5`) |
+| `arcee` | `ARCEE_API_KEY` | Arcee (`trinity-large-thinking`) |
+| `gmi` | `GMI_API_KEY` | GMI Cloud (`google/gemini-3.1-flash-lite`) |
+| `stepfun` | `STEPFUN_API_KEY` | StepFun (`step-3.5-flash`) |
+| `xiaomi` | `XIAOMI_API_KEY` | Xiaomi MiMo (`mimo-v2-flash`) |
+| `volcengine` | `VOLCENGINE_API_KEY` | Volcengine Ark (`doubao-seed-code-preview-251028`) |
+| `tencent-tokenhub` | `TENCENT_TOKENHUB_API_KEY` | Tencent TokenHub (`hy3-preview`) |
 | `ollama` | none | local server at `http://localhost:11434` |
 | `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
 
@@ -462,7 +486,7 @@ Releases publish to PyPI automatically on a `v*` tag — see
 
 - Homebrew tap + a `curl | sh` one-line installer
 - deeper project evidence retrieval and file ranking
-- additional transcript parsers beyond Claude Code
+- additional transcript parsers beyond Claude Code and Codex
 - hook-driven push alerts for unattended runs
 
 Rust migration is tracked separately in [docs/rust-migration.md](docs/rust-migration.md).

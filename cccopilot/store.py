@@ -325,7 +325,8 @@ class Store:
             "transcript_present": bool(transcript and os.path.isfile(transcript)),
             "sources": prev.get("sources") or ([self.session_id] if self.session_id else []),
             "scope": self.scope or prev.get("scope") or "session",
-            "scope_sessions": list(self.scope_sessions or prev.get("scope_sessions") or []),
+            "scope_sessions": list(self.scope_sessions if self.scope_sessions is not None
+                                   else prev.get("scope_sessions") or []),
         }
         tmp = self.meta_path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

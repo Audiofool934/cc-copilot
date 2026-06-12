@@ -39,6 +39,7 @@ what coverage the answer actually had.
 cc-copilot can read:
 
 - Claude Code JSONL transcripts under `~/.claude` or `$CLAUDE_CONFIG_DIR`.
+- Codex JSONL transcripts under `${CODEX_HOME:-~/.codex}/sessions/**`.
 - Raw user prompts, assistant messages, tool calls, and tool results recorded in
   those transcripts.
 - Session metadata such as cwd, branch, title/name, timestamps, session id,
@@ -50,12 +51,12 @@ cc-copilot can read:
 
 cc-copilot cannot read:
 
-- Claude's hidden internal model context.
+- The observed agent's hidden internal model context.
 - Private chain-of-thought.
-- Any reasoning/cache that Claude Code did not write to the transcript.
+- Any reasoning/cache that the observed agent did not write to the transcript.
 - Unobservable state inside the running agent process.
 
-The promise is complete observable context, not complete hidden Claude context.
+The promise is complete observable context, not complete hidden agent context.
 
 ## Main Goals
 
