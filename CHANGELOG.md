@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**Simpler model picker.** Removed the niche long-tail provider backends from the
+built-in `/model`, `backends`, and `init` surfaces. The public provider list now
+stays focused on Claude, Codex, DeepSeek, Gemini API, GLM, Groq, Grok, Kimi,
+Ollama, OpenAI, OpenRouter, Qwen, and custom OpenAI-compatible endpoints.
+Claude, Codex, and DeepSeek keep their alphabetical positions but now carry
+distinct brand colors in the interactive model lists.
+
 ## 0.18.1 — 2026-06-12
 
 **Sticky prompt positioning fixes.** The chat-top sticky prompt now follows the

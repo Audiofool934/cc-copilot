@@ -168,6 +168,11 @@ _AGENT_HEX = {"claude": "#cb7d5b", "codex": "#347ff2"}
 def _agent_hex(agent: str) -> str:
     return _AGENT_HEX.get((agent or "").strip().lower(), _PAL["accent"])
 
+
+def _backend_choice_hex(name: str) -> str:
+    choice = OB.choice_for_or_none(name)
+    return choice.brand_hex if choice else ""
+
 _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter · history: ↑/↓ · clear: Esc)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
@@ -762,8 +767,12 @@ class Picker(ModalScreen):
     def __init__(self, title: str, options: list):
         super().__init__()
         self._title = title
-        self._options = options            # [(label, value), …]
+        self._options = options            # [(label/renderable, value), …]
         self._by_id = {str(i): v for i, (l, v) in enumerate(options)}
+
+    @staticmethod
+    def _plain_label(label) -> str:
+        return label.plain if isinstance(label, Text) else str(label)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
@@ -837,7 +846,7 @@ class Picker(ModalScreen):
         ol = self._list()
         ol.clear_options()
         for i, (label, _) in enumerate(self._options):
-            if q in label.lower():
+            if q in self._plain_label(label).lower():
                 ol.add_option(Option(label, id=str(i)))
         if ol.option_count:
             ol.highlighted = 0
@@ -2747,7 +2756,13 @@ class Cockpit(App):
             if isinstance(be, BK.OpenAICompatBackend) and be.default_model:
                 shown = self.model if (cur and self.model) else be.default_model
                 hint = f"  ({shown})"
-            opts.append((f"{name}{hint}{cur}{avail}", name))
+            label = Text()
+            hue = _backend_choice_hex(name)
+            label.append(name, style=f"bold {hue}" if hue else "")
+            label.append(hint, style=_PAL["muted"])
+            label.append(cur, style=_PAL["success"])
+            label.append(avail, style=_PAL["muted"])
+            opts.append((label, name))
         chosen = await self.push_screen_wait(Picker("switch backend", opts))
         if chosen:
             # picking an API backend with a curated catalog flows straight into

@@ -6,6 +6,13 @@ import unittest
 from cccopilot import backends as BK, models as M, onboard as OB
 
 
+REMOVED_NICHE_PROVIDERS = (
+    "mistral", "together", "fireworks", "cerebras", "deepinfra",
+    "huggingface", "nvidia", "chutes", "novita", "venice", "arcee",
+    "gmi", "stepfun", "xiaomi", "volcengine", "tencent-tokenhub",
+)
+
+
 class TestCatalog(unittest.TestCase):
     def test_deepseek_default_is_v4_flash(self):
         # deepseek-chat is deprecated 2026-07-24; the default must be the v4 line
@@ -56,26 +63,18 @@ class TestNewProviders(unittest.TestCase):
             "groq": "GROQ_API_KEY",
             "xai": "XAI_API_KEY",
             "gemini-api": "GEMINI_API_KEY",
-            "mistral": "MISTRAL_API_KEY",
-            "together": "TOGETHER_API_KEY",
-            "fireworks": "FIREWORKS_API_KEY",
-            "cerebras": "CEREBRAS_API_KEY",
-            "deepinfra": "DEEPINFRA_API_KEY",
-            "huggingface": "HUGGINGFACE_API_KEY",
-            "nvidia": "NVIDIA_API_KEY",
-            "chutes": "CHUTES_API_KEY",
-            "novita": "NOVITA_API_KEY",
-            "venice": "VENICE_API_KEY",
-            "arcee": "ARCEE_API_KEY",
-            "gmi": "GMI_API_KEY",
-            "stepfun": "STEPFUN_API_KEY",
-            "xiaomi": "XIAOMI_API_KEY",
-            "volcengine": "VOLCENGINE_API_KEY",
-            "tencent-tokenhub": "TENCENT_TOKENHUB_API_KEY",
         }
         for name, key_env in expect.items():
             self.assertIn(name, reg)
             self.assertEqual(reg[name].key_env, key_env, name)
+
+    def test_niche_providers_are_not_public_backends(self):
+        reg = BK.registry()
+        for name in REMOVED_NICHE_PROVIDERS:
+            self.assertNotIn(name, reg)
+            self.assertNotIn(name, M.CATALOG)
+            self.assertIsNone(OB.choice_for_or_none(name))
+            self.assertEqual(M.models_for(name), [])
 
     def test_provider_refs_resolve(self):
         self.assertEqual(M.resolve_ref("openai/gpt-5.5"),

@@ -181,6 +181,34 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(chosen, ["g"])
 
+    async def test_filter_handles_rich_labels(self):
+        from rich.text import Text
+        from textual.widgets import OptionList, Static
+
+        chosen = []
+
+        class Harness(App):
+            def compose(self):
+                yield Static("root")
+
+        app = Harness()
+        async with app.run_test() as pilot:
+            picker = tui.Picker("pick", [
+                (Text("Claude", style="#cb7d5b"), "claude"),
+                (Text("DeepSeek", style="#8b5cf6"), "deepseek"),
+            ])
+            await app.push_screen(picker, chosen.append)
+            await pilot.pause()
+
+            await pilot.press("s", "e")
+            await pilot.pause()
+            ol = picker.query_one("#picker-list", OptionList)
+            self.assertEqual(ol.option_count, 1)
+            await pilot.press("enter")
+            await pilot.pause()
+
+        self.assertEqual(chosen, ["deepseek"])
+
     async def test_multi_picker_space_toggles_and_enter_selects(self):
         from textual.widgets import OptionList, Static
 
@@ -338,6 +366,12 @@ class TestPickerKeyboard(unittest.IsolatedAsyncioTestCase):
         # unknown / missing agent shows the copilot's own accent, not a stray hue
         self.assertEqual(tui._agent_hex("gemini"), tui._PAL["accent"])
         self.assertEqual(tui._agent_hex(""), tui._PAL["accent"])
+
+    async def test_model_picker_brand_colors_come_from_onboarding_choices(self):
+        self.assertEqual(tui._backend_choice_hex("claude"), "#cb7d5b")
+        self.assertEqual(tui._backend_choice_hex("codex"), "#347ff2")
+        self.assertEqual(tui._backend_choice_hex("deepseek"), "#8b5cf6")
+        self.assertEqual(tui._backend_choice_hex("ollama"), "")
 
     async def test_activity_line_paints_agent_label_in_brand_hue(self):
         """The timeline `agent` label is styled with the passed-in brand hue, so a

@@ -26,9 +26,7 @@ TEMPLATE = '''\
 
 # Default backend:
 # codex | claude | openai | deepseek | openrouter | moonshot | qwen | zai
-# groq | xai | gemini-api | mistral | together | fireworks | cerebras
-# deepinfra | huggingface | nvidia | chutes | novita | venice | arcee | gmi
-# stepfun | xiaomi | volcengine | tencent-tokenhub | ollama | gemini | llm
+# groq | xai | gemini-api | ollama | gemini | llm
 backend = "codex"
 
 # Default model for that backend (optional — omit to use the backend's own default)
@@ -40,11 +38,8 @@ backend = "codex"
 # DEEPSEEK_API_KEY = "sk-..."
 # OPENAI_API_KEY = "sk-..."
 # OPENROUTER_API_KEY = "sk-..."
-# More providers: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, MISTRAL_API_KEY,
-# TOGETHER_API_KEY, FIREWORKS_API_KEY, CEREBRAS_API_KEY, DEEPINFRA_API_KEY,
-# HUGGINGFACE_API_KEY, NVIDIA_API_KEY, CHUTES_API_KEY, NOVITA_API_KEY,
-# VENICE_API_KEY, ARCEE_API_KEY, GMI_API_KEY, STEPFUN_API_KEY,
-# XIAOMI_API_KEY, VOLCENGINE_API_KEY, TENCENT_TOKENHUB_API_KEY.
+# More providers: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, GROQ_API_KEY,
+# XAI_API_KEY, GEMINI_API_KEY, ZAI_API_KEY.
 # Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):
 # CC_COPILOT_API_BASE = "http://localhost:11434"
 # CC_COPILOT_API_KEY = "..."

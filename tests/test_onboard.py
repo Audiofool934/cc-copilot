@@ -11,12 +11,7 @@ _VARS = ("CC_COPILOT_CONFIG", "CC_COPILOT_NO_ONBOARD", "CC_COPILOT_BACKEND",
          "CC_COPILOT_MODEL", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
          "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY",
          "DASHSCOPE_API_KEY", "DASHSCOPE_API_BASE", "GROQ_API_KEY",
-         "XAI_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY",
-         "TOGETHER_API_KEY", "FIREWORKS_API_KEY", "CEREBRAS_API_KEY",
-         "DEEPINFRA_API_KEY", "HUGGINGFACE_API_KEY", "NVIDIA_API_KEY",
-         "CHUTES_API_KEY", "NOVITA_API_KEY", "VENICE_API_KEY",
-         "ARCEE_API_KEY", "GMI_API_KEY", "STEPFUN_API_KEY", "XIAOMI_API_KEY",
-         "VOLCENGINE_API_KEY", "TENCENT_TOKENHUB_API_KEY")
+         "XAI_API_KEY", "GEMINI_API_KEY")
 
 
 class _Base(unittest.TestCase):
@@ -70,8 +65,16 @@ class TestDetect(_Base):
 
     def test_every_curated_choice_present_and_ordered(self):
         labels = [d.choice.label for d in OB.detect()]
-        self.assertEqual(labels[:2], ["Claude", "Codex"])     # CLIs first
-        self.assertEqual(labels[-1], "Skip for now")          # skip last
+        self.assertEqual(labels, [
+            "Claude", "Codex", "DeepSeek", "Gemini API", "Groq",
+            "Moonshot Kimi", "OpenAI", "OpenRouter", "Qwen (DashScope)",
+            "xAI Grok", "Z.ai GLM", "Skip for now",
+        ])
+
+    def test_key_provider_brand_colors(self):
+        self.assertEqual(OB.choice_for("claude").brand_hex, "#cb7d5b")
+        self.assertEqual(OB.choice_for("codex").brand_hex, "#347ff2")
+        self.assertEqual(OB.choice_for("deepseek").brand_hex, "#8b5cf6")
 
 
 class TestWriteChoice(_Base):

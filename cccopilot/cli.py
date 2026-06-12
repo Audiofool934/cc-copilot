@@ -122,6 +122,23 @@ _ONBOARD_INTRO = (
     "  (The deterministic core — brief / check / observe — needs no model.)\n")
 
 
+_ANSI_BY_HEX = {
+    "#cb7d5b": "38;2;203;125;91",
+    "#347ff2": "38;2;52;127;242",
+    "#8b5cf6": "38;2;139;92;246",
+}
+
+
+def _ansi_label(text: str, hex_color: str = "", stream=None) -> str:
+    stream = stream or sys.stdout
+    if not hex_color or os.environ.get("NO_COLOR"):
+        return text
+    if not getattr(stream, "isatty", lambda: False)():
+        return text
+    code = _ANSI_BY_HEX.get(hex_color.lower())
+    return f"\033[1;{code}m{text}\033[0m" if code else text
+
+
 def _run_terminal_onboard(args=None) -> int:
     """Line-based first-run wizard (mirrors the cockpit's WelcomeScreen). Writes
     ~/.cc-copilot.toml and applies the choice to this process."""
@@ -131,7 +148,8 @@ def _run_terminal_onboard(args=None) -> int:
     sys.stderr.write(_ONBOARD_INTRO + "\n")
     for i, d in enumerate(detected, 1):
         mark = "✓" if d.ready else "·"
-        sys.stderr.write(f"   {i}) {d.choice.label:<13} {mark} {d.status}\n")
+        label = _ansi_label(f"{d.choice.label:<13}", d.choice.brand_hex, sys.stderr)
+        sys.stderr.write(f"   {i}) {label} {mark} {d.status}\n")
     sys.stderr.write("\n")
     # default to the first ready CLI backend (no key needed), else the first row.
     default_idx = next((i for i, d in enumerate(detected, 1)
@@ -441,13 +459,16 @@ def cmd_backends(args) -> int:
     from . import backends as BK
     from . import models as MODELS
     from . import narrate as N
+    from . import onboard as OB
     active = BK.resolve(getattr(args, "backend", None)).name
     print("LLM backends (default selection marked ▶; the deterministic core needs none):")
     for name, be in sorted(BK.registry().items()):
         ok = be.available()
         mark = "▶" if name == active else " "
         status = "ready" if ok else f"needs: {be.reason()}"
-        print(f"  {mark} {name:<11} {'✓' if ok else '·'} {status}")
+        choice = OB.choice_for_or_none(name)
+        label = _ansi_label(f"{name:<11}", choice.brand_hex if choice else "")
+        print(f"  {mark} {label} {'✓' if ok else '·'} {status}")
         if getattr(args, "models", False):
             for mi in MODELS.models_for(name):
                 note = f" — {mi.note}" if mi.note else ""
