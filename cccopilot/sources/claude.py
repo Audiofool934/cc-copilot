@@ -25,6 +25,12 @@ class ClaudeSource(AgentSource):
     def available(self) -> bool:
         return os.path.isdir(locate.projects_root())
 
+    def current_session_id(self) -> str:
+        return locate.current_session_id()
+
+    def current_session_path(self) -> Optional[str]:
+        return locate.current_session_path()
+
     def owns(self, path: str) -> bool:
         # Claude transcripts live under ``<config>/projects/``. We treat Claude
         # as the default, so the dispatcher only consults this after the more

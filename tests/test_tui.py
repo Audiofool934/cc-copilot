@@ -373,7 +373,14 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         from cccopilot import narrate as N, store as ST  # noqa
         self.home = tempfile.mkdtemp(prefix="cctui-")
         self._env = {k: os.environ.get(k) for k in
-                     ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY", "CC_COPILOT_CONFIG")}
+                     ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY",
+                      "CC_COPILOT_CONFIG", "CLAUDE_CODE_SESSION_ID",
+                      "CLAUDE_SESSION_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME",
+                      "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                      "CODEX_CONVERSATION_ID", "CODEX_ROLLOUT_ID",
+                      "CODEX_CI", "CODEX_MANAGED_BY_NPM")}
+        for k in self._env:
+            os.environ.pop(k, None)
         os.environ["CC_COPILOT_STATE_DIR"] = self.home
         os.environ["CC_COPILOT_HISTORY"] = "1"
         os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.home, "none.toml")
@@ -1139,6 +1146,107 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.store.load_history(),
                          [("user", "q0"), ("assistant", "a0 [L1]")])
 
+    async def test_prompt_history_up_down_restores_draft(self):
+        sess = self._session("sess-A")
+        sess.history = [("user", "first question"), ("assistant", "a1 [L1]"),
+                        ("user", "second question"), ("assistant", "a2 [L1]")]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            comp.focus()
+            comp.insert("draft")
+            await pilot.pause()
+
+            await pilot.press("up")
+            await pilot.pause()
+            self.assertEqual(comp.text, "second question")
+
+            await pilot.press("up")
+            await pilot.pause()
+            self.assertEqual(comp.text, "first question")
+
+            await pilot.press("down")
+            await pilot.pause()
+            self.assertEqual(comp.text, "second question")
+
+            await pilot.press("down")
+            await pilot.pause()
+            self.assertEqual(comp.text, "draft")
+
+    async def test_prompt_pin_tracks_first_line_and_arrow_jumps(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        sess.history = [
+            ("user", "first question"), ("assistant", "a1 [L1]"),
+            ("user", "second question\nwith details"), ("assistant", "a2 [L1]"),
+            ("user", "third question"), ("assistant", "a3 [L1]"),
+        ]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            comp.focus()
+            pin = app.query_one("#chat-pin", Static)
+            self.assertIn("third question", str(pin.content))
+
+            await pilot.press("left")
+            await pilot.pause()
+            self.assertEqual(app._chat_prompt_nav_index, 1)
+            self.assertIn("second question", str(pin.content))
+            self.assertNotIn("with details", str(pin.content))  # first line only
+
+            await pilot.press("right")
+            await pilot.pause()
+            self.assertEqual(app._chat_prompt_nav_index, 2)
+            self.assertIn("third question", str(pin.content))
+
+            comp.insert("draft")
+            await pilot.pause()
+            await pilot.press("left")
+            await pilot.pause()
+            self.assertEqual(app._chat_prompt_nav_index, 2)      # text cursor only
+            self.assertEqual(comp.text, "draft")
+
+    async def test_prompt_pin_click_jumps_to_pinned_prompt(self):
+        sess = self._session("sess-A")
+        sess.history = [("user", "first question"), ("assistant", "a1 [L1]"),
+                        ("user", "second question"), ("assistant", "a2 [L1]")]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._update_chat_pin(0)                      # pin the first prompt
+            app._chat_prompt_nav_index = 1               # pretend we drifted
+            await pilot.click("#chat-pin")
+            await pilot.pause()
+            self.assertEqual(app._chat_prompt_nav_index, 0)
+
+    async def test_escape_clears_input_and_double_escape_rewinds(self):
+        sess = self._session("sess-A")
+        sess.history = [("user", "first question"), ("assistant", "a1 [L1]")]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            comp.focus()
+            calls = []
+            app.action_rewind = lambda: calls.append("rewind")
+
+            comp.insert("draft")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(comp.text, "")
+            self.assertEqual(calls, [])
+
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(calls, [])
+
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(calls, ["rewind"])
+
     async def test_answer_done_records_once(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
@@ -1487,7 +1595,8 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
         self._saved = {k: os.environ.pop(k, None) for k in
                        ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
                         "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL",
-                        "DEEPSEEK_API_KEY")}
+                        "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+                        "OPENROUTER_API_KEY", "GEMINI_API_KEY")}
         self.dir = tempfile.mkdtemp()
         os.environ["CC_COPILOT_CONFIG"] = os.path.join(self.dir, "cc.toml")
         os.environ["CC_COPILOT_NO_ONBOARD"] = "1"
@@ -1495,7 +1604,8 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         for k in ("CC_COPILOT_NO_ONBOARD", "CC_COPILOT_CONFIG",
-                  "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL", "DEEPSEEK_API_KEY"):
+                  "CC_COPILOT_BACKEND", "CC_COPILOT_MODEL", "DEEPSEEK_API_KEY",
+                  "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
             os.environ.pop(k, None)
         for k, v in self._saved.items():
             if v is not None:
@@ -1564,6 +1674,47 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.backend, "deepseek")  # unchanged
             self.assertEqual(app.model, "meta-llama/llama-3.1-405b-instruct:free")
+
+    async def test_provider_slash_ref_switches_backend_and_model(self):
+        os.environ["OPENAI_API_KEY"] = "sk-openai"
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model openai/gpt-5.5")
+            await pilot.pause()
+            self.assertEqual(app.backend, "openai")
+            self.assertEqual(app.model, "gpt-5.5")
+
+    async def test_openrouter_ref_strips_backend_prefix(self):
+        os.environ["OPENROUTER_API_KEY"] = "sk-or"
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model openrouter/moonshotai/kimi-k2.6")
+            await pilot.pause()
+            self.assertEqual(app.backend, "openrouter")
+            self.assertEqual(app.model, "moonshotai/kimi-k2.6")
+
+    async def test_current_backend_exact_slash_ref_wins(self):
+        os.environ["OPENROUTER_API_KEY"] = "sk-or"
+        app = self._cockpit(backend="openrouter",
+                            model=tui.MODELS.default_for("openrouter"))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model anthropic/claude-sonnet-4.6")
+            await pilot.pause()
+            self.assertEqual(app.backend, "openrouter")
+            self.assertEqual(app.model, "anthropic/claude-sonnet-4.6")
+
+    async def test_google_ref_switches_to_gemini_api(self):
+        os.environ["GEMINI_API_KEY"] = "sk-gemini"
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/model google/gemini-3.1-flash-lite")
+            await pilot.pause()
+            self.assertEqual(app.backend, "gemini-api")
+            self.assertEqual(app.model, "gemini-3.1-flash-lite")
 
     async def test_cli_switch_still_clears_model(self):
         # the stale-model invariant survives the catalog: API → CLI drops it

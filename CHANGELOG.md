@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.18.0 — 2026-06-12
+
+**Codex-aware `/here`, richer model switching, and faster cockpit browsing.**
+The cockpit can now attach to the current live Codex session as well as Claude:
+`/here` uses source adapters instead of Claude-only environment guesses, so a
+cc-copilot pane opened beside Codex can jump straight onto that live rollout and
+show it as `your live session`.
+
+**`/model` now reaches the long tail.** The curated API catalog was expanded
+from the original provider set using OpenClaw's provider catalog shape and
+coverage: Mistral, Together, Fireworks, Cerebras, DeepInfra, Hugging Face
+Router, NVIDIA, Chutes, Novita, Venice, Arcee, GMI, StepFun, Xiaomi,
+Volcengine, and Tencent TokenHub now have registry entries, curated defaults,
+model-picker rows, config comments, and inline key prompts. Existing catalogs
+were refreshed too: DeepSeek still defaults to `deepseek-v4-flash` (not
+`deepseek-chat`), and `/model` accepts provider refs such as
+`/model openai/gpt-5.5`, `/model google/gemini-3.1-flash-lite`, and
+`/model openrouter/moonshotai/kimi-k2.6` without breaking OpenRouter model ids
+that naturally contain slashes or colon suffixes.
+
+**Composer and chat navigation feel more terminal-native.** Prompt history is
+available with Up/Down in the input box; Esc clears a draft, and double-Esc on
+an empty box opens rewind. The chat pane also has a one-line sticky prompt
+header showing the selected prior prompt's first line. With an empty input box,
+Left/Right jumps between prior prompts in the chat, and clicking that sticky
+line jumps back to the pinned prompt.
+
 ## 0.17.1 — 2026-06-11
 
 **`launch` split-screen fixes (user-reported).** The cockpit pane is now a

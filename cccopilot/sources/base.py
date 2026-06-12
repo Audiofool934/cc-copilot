@@ -48,6 +48,15 @@ class AgentSource:
         """
         raise NotImplementedError
 
+    def current_session_id(self) -> str:
+        """The id of the session cc-copilot is running inside, if this source
+        exposes one. Empty means "not detected"."""
+        return ""
+
+    def current_session_path(self) -> Optional[str]:
+        """The transcript path for :meth:`current_session_id`, if detectable."""
+        return None
+
     # ---- ownership ------------------------------------------------------
     def owns(self, path: str) -> bool:
         """True if ``path`` is one of *this* source's transcript files.

@@ -11,8 +11,9 @@ surfaces can never drift.
 What "model" means here maps straight onto :mod:`cccopilot.backends`:
   - **Claude** / **Codex** are *CLI* backends — auth is the CLI's own (your
     Claude subscription, your ChatGPT login); **no API key** is stored.
-  - **OpenAI / DeepSeek / OpenRouter** are OpenAI-compatible *API* backends —
-    they need a key, which we write into the ``[env]`` table (chmod 600).
+  - **OpenAI / DeepSeek / OpenRouter** and the long-tail providers are
+    OpenAI-compatible *API* backends — they need a key, which we write into the
+    ``[env]`` table (chmod 600).
   - **Skip** writes a config with no backend chosen; the default (``codex``)
     applies and the wizard stops nagging.
 """
@@ -63,6 +64,22 @@ CHOICES = [
     _api("groq", "Groq", "GROQ_API_KEY"),
     _api("xai", "xAI Grok", "XAI_API_KEY"),
     _api("gemini-api", "Gemini API", "GEMINI_API_KEY"),
+    _api("mistral", "Mistral", "MISTRAL_API_KEY"),
+    _api("together", "Together AI", "TOGETHER_API_KEY"),
+    _api("fireworks", "Fireworks", "FIREWORKS_API_KEY"),
+    _api("cerebras", "Cerebras", "CEREBRAS_API_KEY"),
+    _api("deepinfra", "DeepInfra", "DEEPINFRA_API_KEY"),
+    _api("huggingface", "Hugging Face Router", "HUGGINGFACE_API_KEY"),
+    _api("nvidia", "NVIDIA NIM", "NVIDIA_API_KEY"),
+    _api("chutes", "Chutes", "CHUTES_API_KEY"),
+    _api("novita", "Novita", "NOVITA_API_KEY"),
+    _api("venice", "Venice", "VENICE_API_KEY"),
+    _api("arcee", "Arcee", "ARCEE_API_KEY"),
+    _api("gmi", "GMI Cloud", "GMI_API_KEY"),
+    _api("stepfun", "StepFun", "STEPFUN_API_KEY"),
+    _api("xiaomi", "Xiaomi MiMo", "XIAOMI_API_KEY"),
+    _api("volcengine", "Volcengine Ark", "VOLCENGINE_API_KEY"),
+    _api("tencent-tokenhub", "Tencent TokenHub", "TENCENT_TOKENHUB_API_KEY"),
     Choice("", "Skip for now", "skip",
            "deterministic recaps only — set a model later with `cc-copilot init`"),
 ]
@@ -192,8 +209,11 @@ def render_config(backend, model="", env=None, history_enabled=True,
         "# Defaults for the LLM-backed commands (ask / chat / cockpit / since",
         "# recap / brief --narrate). The deterministic core needs none of this.",
         "",
-        "# backend: claude | codex | openai | deepseek | openrouter | moonshot |",
-        "#          zai | qwen | groq | xai | gemini-api | ollama | llm | gemini",
+        "# backend: claude | codex | openai | deepseek | openrouter | moonshot | qwen",
+        "#          zai | groq | xai | gemini-api | mistral | together | fireworks",
+        "#          cerebras | deepinfra | huggingface | nvidia | chutes | novita",
+        "#          venice | arcee | gmi | stepfun | xiaomi | volcengine",
+        "#          tencent-tokenhub | ollama | llm | gemini",
     ]
     if backend:
         lines.append(f'backend = "{_esc(backend)}"')
@@ -221,6 +241,13 @@ def render_config(backend, model="", env=None, history_enabled=True,
     for ex in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"):
         if ex not in env:
             lines.append(f'# {ex} = "sk-..."')
+    lines += [
+        "# More provider keys: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, MISTRAL_API_KEY,",
+        "# TOGETHER_API_KEY, FIREWORKS_API_KEY, CEREBRAS_API_KEY, DEEPINFRA_API_KEY,",
+        "# HUGGINGFACE_API_KEY, NVIDIA_API_KEY, CHUTES_API_KEY, NOVITA_API_KEY,",
+        "# VENICE_API_KEY, ARCEE_API_KEY, GMI_API_KEY, STEPFUN_API_KEY,",
+        "# XIAOMI_API_KEY, VOLCENGINE_API_KEY, TENCENT_TOKENHUB_API_KEY.",
+    ]
     lines += [
         "# Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):",
         "# CC_COPILOT_API_BASE = \"http://localhost:11434\"",

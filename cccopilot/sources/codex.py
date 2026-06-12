@@ -76,6 +76,8 @@ _EXIT_RE = re.compile(r"^(?:Process exited with code|Exit code:)\s*(-?\d+)", re.
 
 # Codex shell tools → cc-copilot's canonical command tool.
 _SHELL_TOOLS = {"exec_command", "shell", "exec", "run_command", "local_shell"}
+_CURRENT_ID_ENVS = ("CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                    "CODEX_CONVERSATION_ID", "CODEX_ROLLOUT_ID")
 
 
 def codex_home() -> str:
@@ -144,6 +146,27 @@ def _head_meta(path: str) -> Tuple[str, str, bool]:
     return cwd, model, own
 
 
+def _head_session_id(path: str) -> str:
+    """Session id from the rollout head, for unusual filenames that don't carry it."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(24):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = obj.get("payload") if isinstance(obj, dict) else None
+                if obj.get("type") == "session_meta" and isinstance(payload, dict):
+                    sid = payload.get("id")
+                    return str(sid) if sid else ""
+    except OSError:
+        pass
+    return ""
+
+
 def _thread_names() -> Dict[str, str]:
     """``session_id -> thread_name`` from ``session_index.jsonl`` (cached by mtime)."""
     idx = os.path.join(codex_home(), "session_index.jsonl")
@@ -206,6 +229,35 @@ class CodexSource(AgentSource):
 
     def available(self) -> bool:
         return any(os.path.isdir(d) for d in _session_dirs())
+
+    def current_session_id(self) -> str:
+        for name in _CURRENT_ID_ENVS:
+            sid = os.environ.get(name, "").strip()
+            if sid:
+                return sid
+        return ""
+
+    def current_session_path(self) -> Optional[str]:
+        sid = self.current_session_id()
+        if sid:
+            matches = []
+            for path, mtime in _iter_rollouts():
+                base = os.path.basename(path)
+                if (sid in base or _session_id_from_name(path) == sid
+                        or _head_session_id(path) == sid):
+                    matches.append((mtime, path))
+            if matches:
+                return max(matches)[1]
+
+        # Last-resort "inside Codex but no explicit id" fallback: attach to the
+        # newest rollout for the current cwd. This is intentionally gated on a
+        # Codex env marker so a plain terminal `--here` doesn't silently become
+        # "latest session in this repo".
+        if not any(k.startswith("CODEX_") for k in os.environ):
+            return None
+        cwd = os.path.abspath(os.getcwd())
+        refs = self.list_sessions(cwd, include_own=True)
+        return refs[0].path if refs else None
 
     def owns(self, path: str) -> bool:
         base = os.path.basename(path)

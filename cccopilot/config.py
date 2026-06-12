@@ -3,7 +3,7 @@
 Looked up at ``$CC_COPILOT_CONFIG`` or ``~/.cc-copilot.toml``. Holds:
 
     backend = "codex"            # default LLM backend
-    model   = "deepseek-reasoner"# default model for it
+    model   = "deepseek-v4-flash"# default model for it
     [env]                        # exported as env vars (real env wins)
     DEEPSEEK_API_KEY = "sk-…"
     CC_COPILOT_API_BASE = "http://localhost:11434"
@@ -24,11 +24,15 @@ TEMPLATE = '''\
 # Defaults for the LLM-backed commands (ask / chat / brief --narrate).
 # The deterministic core (brief / check / alerts) needs none of this.
 
-# Default backend: codex | claude | deepseek | openai | openrouter | ollama | gemini | llm
+# Default backend:
+# codex | claude | openai | deepseek | openrouter | moonshot | qwen | zai
+# groq | xai | gemini-api | mistral | together | fireworks | cerebras
+# deepinfra | huggingface | nvidia | chutes | novita | venice | arcee | gmi
+# stepfun | xiaomi | volcengine | tencent-tokenhub | ollama | gemini | llm
 backend = "codex"
 
 # Default model for that backend (optional — omit to use the backend's own default)
-# model = "deepseek-reasoner"
+# model = "deepseek-v4-flash"
 
 # Secrets + provider settings, exported as environment variables.
 # Real env vars always win over these. Keep this file private (chmod 600).
@@ -36,7 +40,12 @@ backend = "codex"
 # DEEPSEEK_API_KEY = "sk-..."
 # OPENAI_API_KEY = "sk-..."
 # OPENROUTER_API_KEY = "sk-..."
-# Any OpenAI-compatible endpoint (vLLM, LM Studio, Groq, a proxy, …):
+# More providers: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, MISTRAL_API_KEY,
+# TOGETHER_API_KEY, FIREWORKS_API_KEY, CEREBRAS_API_KEY, DEEPINFRA_API_KEY,
+# HUGGINGFACE_API_KEY, NVIDIA_API_KEY, CHUTES_API_KEY, NOVITA_API_KEY,
+# VENICE_API_KEY, ARCEE_API_KEY, GMI_API_KEY, STEPFUN_API_KEY,
+# XIAOMI_API_KEY, VOLCENGINE_API_KEY, TENCENT_TOKENHUB_API_KEY.
+# Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):
 # CC_COPILOT_API_BASE = "http://localhost:11434"
 # CC_COPILOT_API_KEY = "..."
 # CC_COPILOT_MODEL = "qwen2.5"

@@ -56,10 +56,43 @@ class TestNewProviders(unittest.TestCase):
             "groq": "GROQ_API_KEY",
             "xai": "XAI_API_KEY",
             "gemini-api": "GEMINI_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "together": "TOGETHER_API_KEY",
+            "fireworks": "FIREWORKS_API_KEY",
+            "cerebras": "CEREBRAS_API_KEY",
+            "deepinfra": "DEEPINFRA_API_KEY",
+            "huggingface": "HUGGINGFACE_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+            "chutes": "CHUTES_API_KEY",
+            "novita": "NOVITA_API_KEY",
+            "venice": "VENICE_API_KEY",
+            "arcee": "ARCEE_API_KEY",
+            "gmi": "GMI_API_KEY",
+            "stepfun": "STEPFUN_API_KEY",
+            "xiaomi": "XIAOMI_API_KEY",
+            "volcengine": "VOLCENGINE_API_KEY",
+            "tencent-tokenhub": "TENCENT_TOKENHUB_API_KEY",
         }
         for name, key_env in expect.items():
             self.assertIn(name, reg)
             self.assertEqual(reg[name].key_env, key_env, name)
+
+    def test_provider_refs_resolve(self):
+        self.assertEqual(M.resolve_ref("openai/gpt-5.5"),
+                         ("openai", "gpt-5.5"))
+        self.assertEqual(M.resolve_ref("google/gemini-3.1-flash-lite"),
+                         ("gemini-api", "gemini-3.1-flash-lite"))
+        self.assertEqual(M.resolve_ref("openrouter/moonshotai/kimi-k2.6"),
+                         ("openrouter", "moonshotai/kimi-k2.6"))
+        self.assertEqual(M.resolve_ref("anthropic/claude-sonnet-4.6",
+                                       current_backend="openrouter"),
+                         ("openrouter", "anthropic/claude-sonnet-4.6"))
+        self.assertEqual(M.resolve_ref("google/gemini-3.1-flash-lite",
+                                       current_backend="openrouter"),
+                         ("openrouter", "google/gemini-3.1-flash-lite"))
+        self.assertIsNone(M.resolve_ref("meta-llama/llama-3.1-405b-instruct:free",
+                                        current_backend="deepseek"))
+        self.assertIsNone(M.resolve_ref("not/a-ref"))
 
     def test_gemini_api_distinct_from_gemini_cli(self):
         reg = BK.registry()

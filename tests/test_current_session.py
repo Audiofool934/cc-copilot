@@ -5,7 +5,8 @@ import tempfile
 import types
 import unittest
 
-from cccopilot import cli, locate as LOC, scope as SC
+from cccopilot import cli, locate as LOC, scope as SC, sources as SRC
+from tests import util_codex as UC
 
 try:
     import textual  # noqa: F401  — probe first; cccopilot.tui sys.exits without it
@@ -16,7 +17,12 @@ except Exception:                                   # pragma: no cover
 
 
 class _SessionEnv(unittest.TestCase):
-    KEYS = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CONFIG_DIR")
+    KEYS = (
+        "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+        "CODEX_CONVERSATION_ID", "CODEX_ROLLOUT_ID", "CODEX_CI",
+        "CODEX_MANAGED_BY_NPM",
+    )
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.KEYS}
@@ -40,6 +46,18 @@ class _SessionEnv(unittest.TestCase):
         os.environ["CLAUDE_CONFIG_DIR"] = home
         return p
 
+    def _codex_home_with_session(self, sid, cwd="/proj/codex-here", name=None):
+        home = tempfile.mkdtemp(prefix="cccur-codex-")
+        d = os.path.join(home, "sessions", "2026", "06", "12")
+        os.makedirs(d)
+        p = UC.write_rollout(
+            [UC.session_meta(cwd=cwd, sid=sid), UC.umsg("work on this")],
+            dir=d,
+            name=name or f"rollout-2026-06-12T10-00-00-{sid}.jsonl",
+        )
+        os.environ["CODEX_HOME"] = home
+        return p
+
 
 class TestDetection(_SessionEnv):
     def test_current_session_id_precedence(self):
@@ -61,6 +79,19 @@ class TestDetection(_SessionEnv):
         os.environ["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp()
         os.environ["CLAUDE_CODE_SESSION_ID"] = "nope"
         self.assertIsNone(LOC.current_session_path())
+
+    def test_codex_current_session_path_found_by_thread_id(self):
+        sid = "019eba80-bb50-77e2-bae8-a59ad1b69dc1"
+        p = self._codex_home_with_session(sid)
+        os.environ["CODEX_THREAD_ID"] = sid
+        self.assertEqual(SRC.current_session_id(), sid)
+        self.assertEqual(SRC.current_session_path(), p)
+
+    def test_codex_current_session_path_reads_session_meta_id(self):
+        sid = "019eba80-bb50-77e2-bae8-a59ad1b69dc2"
+        p = self._codex_home_with_session(sid, name="rollout-2026-06-12T10-00-00-custom.jsonl")
+        os.environ["CODEX_THREAD_ID"] = sid
+        self.assertEqual(SRC.current_session_path(), p)
 
 
 class TestSurfacing(_SessionEnv):
@@ -96,6 +127,16 @@ class TestSurfacing(_SessionEnv):
         refs = [LOC.SessionRef("/p/a.jsonl", "aaa", 1, 1)]
         SC._mark_current_session(refs, here="/p/a.jsonl", inject=True)   # no env set
         self.assertFalse(any(r.live for r in refs))
+
+    def test_codex_live_ref_is_marked(self):
+        sid = "019eba80-bb50-77e2-bae8-a59ad1b69dc3"
+        p = self._codex_home_with_session(sid)
+        os.environ["CODEX_THREAD_ID"] = sid
+        refs = [LOC.SessionRef(p, sid, os.path.getmtime(p), 1, agent="codex"),
+                LOC.SessionRef("/p/b.jsonl", "bbb", 1, 1, agent="claude")]
+        SC._mark_current_session(refs, here="/p/b.jsonl")
+        self.assertTrue([r for r in refs if r.session_id == sid][0].live)
+        self.assertFalse([r for r in refs if r.session_id == "bbb"][0].live)
 
     def test_picker_puts_live_session_first(self):
         import json
@@ -175,6 +216,13 @@ class TestHereFlag(_SessionEnv):
         sid = "abababab-cdcd-efef-0101-202020202020"
         p = self._home_with_session(sid)
         os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        args = types.SimpleNamespace(cwd=None, here=True)
+        self.assertEqual(cli._resolve_or_die(args), p)
+
+    def test_here_resolves_to_current_codex_session(self):
+        sid = "019eba80-bb50-77e2-bae8-a59ad1b69dc4"
+        p = self._codex_home_with_session(sid)
+        os.environ["CODEX_THREAD_ID"] = sid
         args = types.SimpleNamespace(cwd=None, here=True)
         self.assertEqual(cli._resolve_or_die(args), p)
 

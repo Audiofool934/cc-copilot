@@ -247,12 +247,13 @@ def cmd_setup(args) -> int:
 def _resolve_or_die(args) -> str:
     cwd = args.cwd or os.getcwd()
     if getattr(args, "here", False):
-        p = locate.current_session_path()
+        p = SRC.current_session_path()
         if p:
             return p
         sys.stderr.write(
-            "cc-copilot: --here needs to run inside a Claude Code session "
-            "(CLAUDE_CODE_SESSION_ID is unset, or its transcript wasn't found).\n")
+            "cc-copilot: --here needs to run inside a live agent session "
+            "(no current Claude/Codex session id was found, or its transcript "
+            "wasn't found).\n")
         sys.exit(2)
     latest = bool(getattr(args, "latest", False))
     session = None if latest else getattr(args, "session", None)

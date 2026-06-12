@@ -522,7 +522,7 @@ class ChatSession:
         """Point at the live session as a *single* session (resetting any wider
         scope, whose selectors belong to the old anchor's project). Returns the
         path, or None if there's no detectable current session."""
-        p = LOC.current_session_path()
+        p = SRC.current_session_path()
         if not p:
             return None
         self.scope = SC.SESSION
@@ -532,10 +532,11 @@ class ChatSession:
 
     def _switch_here(self):
         """Switch to observing the session cc-copilot is running inside of."""
-        if not LOC.current_session_path():
+        cur = SRC.current_session_path()
+        if not cur:
             return ("no current session detected — run cc-copilot inside a live "
-                    "Claude Code session (CLAUDE_CODE_SESSION_ID).")
-        if os.path.abspath(LOC.current_session_path()) == os.path.abspath(self.path):
+                    "Claude Code or Codex session.")
+        if os.path.abspath(cur) == os.path.abspath(self.path):
             return "already observing your live session"
         p = self.switch_to_here()
         return (f"now observing your live session → "

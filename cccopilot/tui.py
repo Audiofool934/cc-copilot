@@ -18,6 +18,7 @@ import random
 import re
 import subprocess
 import threading
+import time
 
 # Disable the Kitty keyboard protocol by default. Its "associated text" feature
 # encodes IME-committed input (e.g. multi-character Chinese from pinyin) as
@@ -168,7 +169,7 @@ def _agent_hex(agent: str) -> str:
     return _AGENT_HEX.get((agent or "").strip().lower(), _PAL["accent"])
 
 _HELP_TEXT = (
-    "ask a question (newline: Ctrl+J · send: Enter)\n"
+    "ask a question (newline: Ctrl+J · send: Enter · history: ↑/↓ · clear: Esc)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /since [30m] [--raw]    recap since you last looked (--raw = cited delta)\n"
@@ -180,11 +181,13 @@ _HELP_TEXT = (
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
     "  /select                 release the mouse for native drag-select + ⌘C copy (Ctrl+N)\n"
-    "  /rewind                 fork the chat from an earlier message (Esc on empty)\n"
+    "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
     "  /use <n|id>  /refresh   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
+    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
+    "      Empty input: ←/→ jumps between prior prompts in chat.\n"
+    "      Esc clears input; Esc twice on empty opens rewind.\n"
     "copy: Ctrl+N (or /select) frees the mouse so the terminal selects — drag, then ⌘C.\n"
     "      one-off without toggling: hold Option (iTerm2) / Fn (Terminal.app) while dragging.")
 
@@ -205,7 +208,7 @@ _SLASH_CMDS = [
     ("/model", "switch the LLM backend", True),
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
     ("/use", "change evidence session by number / id", True),
-    ("/rewind", "fork from an earlier message (or Esc on empty input)", False),
+    ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
     ("/forget", "delete THIS cockpit session's saved state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
@@ -237,6 +240,7 @@ _TIPS = [
     "/init reopens the model picker; /theme switches the palette",
     "/resume reopens a past cockpit · /new starts fresh; Q&A stays",
     "/select or Ctrl+N frees the mouse for native drag-select",
+    "Empty input: Left/Right jumps between prior prompts",
     "Shift+Up/Down resizes the activity timeline",
     "/clear or Ctrl+L wipes the view, saved history stays",
 ]
@@ -647,6 +651,23 @@ class Composer(TextArea):
         super().__init__(soft_wrap=True, show_line_numbers=False,
                          tab_behavior="focus", **kw)
 
+    def _cursor_row(self) -> int:
+        loc = getattr(self, "cursor_location", None)
+        if isinstance(loc, tuple) and loc:
+            return int(loc[0] or 0)
+        row = getattr(loc, "row", None)
+        try:
+            return int(row or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _replace_text(self, text: str) -> None:
+        self.text = text or ""
+        try:
+            self.move_cursor(self.document.end)
+        except Exception:
+            pass
+
     async def _on_key(self, event: events.Key) -> None:
         # When the `/` suggestion popup is open, the arrow/Tab/Esc keys drive it
         # instead of the text cursor.
@@ -662,12 +683,46 @@ class Composer(TextArea):
                 event.prevent_default(); event.stop(); app._slash_accept(); return
             if event.key == "escape":
                 event.prevent_default(); event.stop(); app._slash_hide(); return
-        # Esc on an empty composer rewinds the conversation (Codex-style): fork
-        # from an earlier message. Only when there's something to rewind to.
-        if (event.key == "escape" and not self.text.strip()
-                and any(r == "user" for r, _ in app.session.history)):
+
+        if event.key in ("up", "down"):
+            lines = (self.text or "").splitlines() or [""]
+            row = self._cursor_row()
+            at_history_edge = ("\n" not in self.text
+                               or (event.key == "up" and row <= 0)
+                               or (event.key == "down" and row >= len(lines) - 1))
+            if at_history_edge:
+                fn = getattr(app, "_prompt_history_prev" if event.key == "up"
+                             else "_prompt_history_next", None)
+                replacement = fn(self.text) if callable(fn) else None
+                if replacement is not None:
+                    event.prevent_default()
+                    event.stop()
+                    self._replace_text(replacement)
+                    return
+
+        if event.key in ("left", "right") and not self.text:
+            fn = getattr(app, "_jump_chat_prompt", None)
+            if callable(fn) and fn(-1 if event.key == "left" else 1):
+                event.prevent_default()
+                event.stop()
+                return
+
+        # Esc clears the current draft. On an already-empty composer, a quick
+        # second Esc opens rewind; the first tap only primes it.
+        if event.key == "escape":
             event.prevent_default(); event.stop()
-            app.action_rewind()
+            if self.text:
+                self.text = ""
+                reset = getattr(app, "_reset_prompt_history_nav", None)
+                if callable(reset):
+                    reset()
+                cancel = getattr(app, "_cancel_rewind_esc", None)
+                if callable(cancel):
+                    cancel()
+                return
+            empty = getattr(app, "_empty_composer_escape", None)
+            if callable(empty):
+                empty()
             return
         # Enter submits. Shift+Enter / Ctrl+J insert a newline (TextArea's own
         # newline is bound to plain Enter, which we've taken for submit, so we
@@ -1137,6 +1192,12 @@ class Cockpit(App):
         width: 100%; height: 1fr; background: $panel; padding: 0 0 0 1;
         scrollbar-size-vertical: 1;
     }
+    #chat-pin {
+        width: 100%; height: 1; min-height: 1;
+        background: $boost; color: $text-muted; padding: 0 1;
+        text-wrap: nowrap;
+    }
+    #chat-pin:hover { background: $secondary 20%; }
 
     /* status + composer flow at the bottom (above the docked Footer); no
        competing dock:bottom so the composer box is always visible. */
@@ -1263,6 +1324,12 @@ class Cockpit(App):
         self._answer_handle = None       # in-flight StreamHandle (cancel target)
         self._answer_store = None        # the conversation the answer belongs to
         self._answer_abandoned = False   # /forget mid-stream: drop, don't persist
+        self._prompt_history = self._prompt_history_from_session()
+        self._prompt_history_index = None
+        self._prompt_draft = ""
+        self._chat_prompt_nav_index = None
+        self._chat_pin_index = None
+        self._rewind_esc_at = 0.0
         self._slash_open = False
         self._watch_stop = threading.Event()
         self._watch_path = None
@@ -1270,6 +1337,59 @@ class Cockpit(App):
         self._watch_state = None
         self._timeline_sig = None       # evidence identity of the last rebuild
         self._select_mode = False       # True = mouse released to the terminal for native select/copy
+
+    # ---- prompt history (composer ↑/↓, terminal-style) ----
+    def _prompt_history_from_session(self) -> list:
+        return [text for role, text in getattr(self.session, "history", [])
+                if role == "user" and str(text or "").strip()]
+
+    def _sync_prompt_history_from_session(self) -> None:
+        self._prompt_history = self._prompt_history_from_session()
+        self._reset_prompt_history_nav()
+
+    def _remember_prompt(self, text: str) -> None:
+        text = str(text or "").strip()
+        if text and (not self._prompt_history or self._prompt_history[-1] != text):
+            self._prompt_history.append(text)
+        self._reset_prompt_history_nav()
+        self._cancel_rewind_esc()
+
+    def _reset_prompt_history_nav(self) -> None:
+        self._prompt_history_index = None
+        self._prompt_draft = ""
+
+    def _prompt_history_prev(self, draft: str):
+        if not self._prompt_history:
+            return None
+        if self._prompt_history_index is None:
+            self._prompt_draft = draft or ""
+            self._prompt_history_index = len(self._prompt_history) - 1
+        else:
+            self._prompt_history_index = max(0, self._prompt_history_index - 1)
+        return self._prompt_history[self._prompt_history_index]
+
+    def _prompt_history_next(self, draft: str):
+        if self._prompt_history_index is None:
+            return None
+        if self._prompt_history_index >= len(self._prompt_history) - 1:
+            self._prompt_history_index = None
+            return self._prompt_draft
+        self._prompt_history_index += 1
+        return self._prompt_history[self._prompt_history_index]
+
+    def _cancel_rewind_esc(self) -> None:
+        self._rewind_esc_at = 0.0
+
+    def _empty_composer_escape(self) -> None:
+        if not any(role == "user" for role, _ in getattr(self.session, "history", [])):
+            return
+        now = time.monotonic()
+        if now - self._rewind_esc_at <= 1.2:
+            self._rewind_esc_at = 0.0
+            self.action_rewind()
+            return
+        self._rewind_esc_at = now
+        self.notify("Esc again to rewind", severity="information", timeout=2)
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -1286,14 +1406,16 @@ class Cockpit(App):
         timeline_log.can_focus = False
         timeline = Vertical(
             Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
+        chat_pin = Static("", id="chat-pin")
         chat = VerticalScroll(id="chat")
         # The timeline and chat are display-only. Keep them out of the focus
         # chain so a click (or Tab) can never strand focus on a scroll pane —
         # that used to leave typed / IME (e.g. Chinese) input with no target.
         # Mouse-wheel scrolling still works without focus.
-        header.can_focus = timeline.can_focus = chat.can_focus = False
+        header.can_focus = timeline.can_focus = chat_pin.can_focus = chat.can_focus = False
         yield header
         yield timeline
+        yield chat_pin
         yield chat
         yield Static("", id="status")
         yield Static("", id="tip")              # rotating feature tip (subtle)
@@ -1462,6 +1584,14 @@ class Cockpit(App):
             composer.focus()
 
     def on_click(self, event: events.Click) -> None:
+        widget = getattr(event, "widget", None) or getattr(event, "control", None)
+        if getattr(widget, "id", "") == "chat-pin":
+            if self._chat_pin_index is not None:
+                self._jump_chat_prompt(target=self._chat_pin_index)
+            try:
+                event.stop()
+            except Exception:
+                pass
         self._focus_composer()
 
     def on_app_focus(self, event: events.AppFocus) -> None:
@@ -1558,9 +1688,81 @@ class Cockpit(App):
         w = Static(renderable, classes=cls)
         return w
 
+    def _prompt_first_line(self, text: str, limit: int = 90) -> str:
+        first = (str(text or "").splitlines() or [""])[0].strip()
+        return _short_activity(first or "(empty prompt)", limit)
+
+    def _prompt_widget(self, text: str):
+        w = self._role(Text("› " + str(text or ""), style="bold"), "role-user")
+        w._cc_prompt_text = str(text or "")
+        return w
+
+    def _chat_prompt_widgets(self) -> list:
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+            return list(chat.query(".role-user"))
+        except Exception:
+            return []
+
+    def _update_chat_pin(self, index=None) -> None:
+        try:
+            pin = self.query_one("#chat-pin", Static)
+        except Exception:
+            return
+        prompts = self._chat_prompt_widgets()
+        if not prompts:
+            self._chat_pin_index = None
+            pin.update(Text("prompt · none yet", style=_PAL["muted"]))
+            return
+        if index is None:
+            index = self._chat_prompt_nav_index
+        if index is None or not (0 <= index < len(prompts)):
+            index = len(prompts) - 1
+        index = max(0, min(len(prompts) - 1, int(index)))
+        self._chat_pin_index = index
+        text = getattr(prompts[index], "_cc_prompt_text", "")
+        t = Text("prompt ", style=_PAL["muted"])
+        t.append(f"{index + 1}/{len(prompts)}", style=_PAL["secondary"])
+        t.append(" · ", style=_PAL["muted"])
+        t.append(self._prompt_first_line(text), style=_PAL["text"])
+        pin.update(t)
+
+    def _jump_chat_prompt(self, delta=0, target=None) -> bool:
+        prompts = self._chat_prompt_widgets()
+        if not prompts:
+            self._update_chat_pin()
+            return False
+        if target is None:
+            cur = self._chat_prompt_nav_index
+            if cur is None or not (0 <= cur < len(prompts)):
+                cur = len(prompts) - 1
+            index = cur + int(delta or 0)
+        else:
+            index = int(target)
+        index = max(0, min(len(prompts) - 1, index))
+        self._chat_prompt_nav_index = index
+        widget = prompts[index]
+        chat = self.query_one("#chat", VerticalScroll)
+        scroller = getattr(chat, "scroll_to_widget", None)
+        if callable(scroller):
+            try:
+                scroller(widget, animate=False)
+            except TypeError:
+                scroller(widget)
+            except Exception:
+                chat.scroll_end(animate=False)
+        else:
+            chat.scroll_end(animate=False)
+        self._update_chat_pin(index)
+        self._focus_composer()
+        return True
+
     def _chat(self, widget):
         chat = self.query_one("#chat", VerticalScroll)
         chat.mount(widget)
+        if hasattr(widget, "has_class") and widget.has_class("role-user"):
+            self._chat_prompt_nav_index = len(self._chat_prompt_widgets()) - 1
+        self._update_chat_pin()
         chat.scroll_end(animate=False)
 
     def _timeline(self, renderable, cls="role-event", follow=None):
@@ -1654,6 +1856,7 @@ class Cockpit(App):
         chat = self.query_one("#chat", VerticalScroll)
         if clear:
             chat.remove_children()
+        self._chat_prompt_nav_index = None
         hist = self.session.history
         if hist:
             n = len(hist) // 2
@@ -1662,9 +1865,13 @@ class Cockpit(App):
                 "role-event"))
             for role, txt in hist:
                 if role == "user":
-                    chat.mount(self._role(Text("› " + txt, style="bold"), "role-user"))
+                    chat.mount(self._prompt_widget(txt))
                 else:
                     chat.mount(Markdown(txt, classes="role-assistant"))
+        prompts = self._chat_prompt_widgets()
+        if prompts:
+            self._chat_prompt_nav_index = len(prompts) - 1
+        self._update_chat_pin()
         chat.scroll_end(animate=False)
 
     def _status(self):
@@ -1914,10 +2121,11 @@ class Cockpit(App):
     def _on_submit(self, event: Composer.Submitted):
         self._slash_hide()
         text = event.text
+        self._remember_prompt(text)
         if text.startswith("/"):
             self._meta(text)
             return
-        self._chat(self._role(Text("› " + text, style="bold"), "role-user"))
+        self._chat(self._prompt_widget(text))
         if self._busy:
             self.notify("still answering the previous question", severity="warning")
             return
@@ -2199,7 +2407,7 @@ class Cockpit(App):
             self.action_sessions(); return
         if low == "/here":
             if not self.session.switch_to_here():
-                self.notify("no current session detected (CLAUDE_CODE_SESSION_ID unset)",
+                self.notify("no current Claude/Codex session detected",
                             severity="warning")
                 return
             self._reset_watch_baseline()
@@ -2210,6 +2418,7 @@ class Cockpit(App):
             self.action_history(); return
         if low == "/new" or low == "/new-cockpit":
             out = self.session.new_cockpit()
+            self._sync_prompt_history_from_session()
             self._rebuild_chat()
             self._refresh_scope_view()
             self.notify(str(out).splitlines()[0], severity="information")
@@ -2244,6 +2453,14 @@ class Cockpit(App):
             elif arg in reg:
                 self._set_backend(arg)
             else:
+                ref = MODELS.resolve_ref(arg, self.backend or "")
+                if ref:
+                    bname, mname = ref
+                    if bname == (self.backend or ""):
+                        self._set_model(mname)
+                    else:
+                        self._set_backend(bname, after_model=mname)
+                    return
                 # not a backend name → treat as a model id on the CURRENT
                 # backend (`/model deepseek-v4-pro`); free-form ids welcome
                 self._set_model(arg)
@@ -2387,6 +2604,7 @@ class Cockpit(App):
             Picker("resume a cockpit session", opts))
         if chosen:
             live = self.session.attach_conv(chosen)
+            self._sync_prompt_history_from_session()
             self._rebuild_chat()
             self._reset_watch_baseline()
             self.sub_title = chosen.conv_id[:8]
@@ -2420,6 +2638,7 @@ class Cockpit(App):
         question = qs[k]
         self.session.history = hist[:2 * k]             # turns are user/assistant pairs
         self.session.store.truncate(k)                  # persist the fork
+        self._sync_prompt_history_from_session()
         self._rebuild_chat()
         comp = self.query_one("#composer", Composer)
         comp.text = question
@@ -2609,6 +2828,8 @@ class Cockpit(App):
         # Visual only — tidies the pane, keeps the saved history (so it returns
         # on switch-back / relaunch). Use /forget to actually delete it.
         self.query_one("#chat", VerticalScroll).remove_children()
+        self._chat_prompt_nav_index = None
+        self._update_chat_pin()
         self.notify("view cleared (saved history kept — /forget to delete it)")
 
     def action_forget(self):
@@ -2630,10 +2851,13 @@ class Cockpit(App):
                 h.cancel()
         store.delete()
         self.session.history = []
+        self._sync_prompt_history_from_session()
         chat = self.query_one("#chat", VerticalScroll)
         chat.remove_children()
+        self._chat_prompt_nav_index = None
         chat.mount(self._role(
             Text("(forgot this conversation's saved history)", "dim"), "role-event"))
+        self._update_chat_pin()
         self.notify("forgot this conversation's saved history", severity="warning")
 
 

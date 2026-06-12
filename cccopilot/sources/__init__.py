@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Tuple
 
-from ..locate import SessionRef, current_session_id
+from ..locate import SessionRef
 from ..transcript import Transcript
 from .base import AgentSource, all_sources, register
 from .claude import ClaudeSource
@@ -80,6 +80,47 @@ def source_for_path(path: str) -> AgentSource:
         except Exception:
             continue
     return _default()
+
+
+def current_session_ids() -> List[str]:
+    """Current live session ids exposed by any registered agent source."""
+    out: List[str] = []
+    seen = set()
+    for s in all_sources():
+        try:
+            sid = s.current_session_id()
+        except Exception:
+            sid = ""
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    return out
+
+
+def current_session_id() -> str:
+    ids = current_session_ids()
+    return ids[0] if ids else ""
+
+
+def current_session_path() -> Optional[str]:
+    """Best current live transcript path across agent sources.
+
+    If several sources expose a current session, prefer the one most recently
+    written, which is the session most likely to be live.
+    """
+    matches = []
+    for s in all_sources():
+        try:
+            p = s.current_session_path()
+        except Exception:
+            p = None
+        if not p:
+            continue
+        try:
+            matches.append((os.path.getmtime(p), p))
+        except OSError:
+            continue
+    return max(matches)[1] if matches else None
 
 
 # ---- per-session dispatch ----------------------------------------------
@@ -153,9 +194,10 @@ def resolve(cwd: str, session: Optional[str] = None, include_current: bool = Fal
     sessions = list_sessions(cwd, agents=agents)
     if not sessions:
         return None
-    self_id = "" if include_current else current_session_id()
+    self_ids = set() if include_current else set(current_session_ids())
     for ref in sessions:
-        if self_id and ref.session_id == self_id:
+        if any(ref.session_id == sid or ref.session_id.startswith(sid)
+               or sid.startswith(ref.session_id) for sid in self_ids):
             continue
         return ref.path
     return sessions[0].path

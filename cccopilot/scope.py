@@ -335,27 +335,35 @@ def _mark_current_session(refs: list, here: str, inject: bool = False) -> None:
     evidence callers never inject, so a foreign project can't leak into a
     project-scoped brief/observe/context view.
     """
-    cur_id = LOC.current_session_id()
-    if not cur_id:
+    cur_ids = set(SRC.current_session_ids())
+    if not cur_ids:
         return
+    marked = False
     for r in refs:
-        if r.session_id == cur_id or r.session_id.startswith(cur_id):
+        if any(r.session_id == sid or r.session_id.startswith(sid)
+               or sid.startswith(r.session_id) for sid in cur_ids):
             r.live = True
-            return
+            marked = True
+    if marked:
+        return
     if not inject:
         return
-    cur_path = LOC.current_session_path()
+    cur_path = SRC.current_session_path()
     if not cur_path or os.path.abspath(cur_path) == here:
         return
+    cur_src = SRC.source_for_path(cur_path)
+    cur_sid = cur_src.current_session_id()
     try:
         st = S.build(SRC.parse(cur_path))
         title = getattr(st.tr, "title", "") or ""
+        cur_sid = cur_sid or getattr(st.tr, "session_id", "")
     except OSError:
         title = ""
+    cur_sid = cur_sid or os.path.basename(cur_path)[:-6]
     try:
         ref = LOC.SessionRef(
-            cur_path, cur_id, os.path.getmtime(cur_path), os.path.getsize(cur_path),
-            title, False, agent=SRC.source_for_path(cur_path).name, live=True)
+            cur_path, cur_sid, os.path.getmtime(cur_path), os.path.getsize(cur_path),
+            title, False, agent=cur_src.name, live=True)
     except OSError:
         return
     refs.append(ref)
