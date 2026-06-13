@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1 — 2026-06-13
 
 **Fix: Ctrl+Y now actually copies.** The new copy key was bound without priority,
 so the focused composer (a `TextArea`) swallowed `ctrl+y` before the app's binding
