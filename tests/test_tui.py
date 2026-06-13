@@ -1354,6 +1354,16 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # The restored history must be painted before we can pin a prompt: if
+            # _chat_prompt_widgets() is still empty, _update_chat_pin leaves the pin
+            # index None and the click becomes a no-op. One pause isn't always
+            # enough on a slow runner (flaked on CI 3.13), so settle until painted.
+            # (No pause AFTER _update_chat_pin: a refresh would resync the pin to the
+            # bottom prompt, so the click would jump there instead of to index 0.)
+            for _ in range(20):
+                if app._chat_prompt_widgets():
+                    break
+                await pilot.pause()
             app._update_chat_pin(0)                      # pin the first prompt
             app._chat_prompt_nav_index = 1               # pretend we drifted
             await pilot.click("#chat-pin")
