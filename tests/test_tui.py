@@ -1154,10 +1154,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app.screen.get_selected_text = lambda: "hello world"
             app.action_copy_selection()
             self.assertEqual(copied, ["hello world"])
-            # /copy is the same path
-            copied.clear()
-            app._meta("/copy")
-            self.assertEqual(copied, ["hello world"])
             # nothing selected → no copy, no crash
             copied.clear()
             app.screen.get_selected_text = lambda: ""
@@ -1166,6 +1162,27 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         actions = {b.key: b.action for b in tui.Cockpit.BINDINGS}
         self.assertEqual(actions.get("ctrl+c"), "quit")            # quit, never copy
         self.assertEqual(actions.get("ctrl+y"), "copy_selection")  # copy is its own key
+
+    async def test_tip_line_prompts_ctrl_y_when_text_is_selected(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tip = app.query_one("#tip", Static)
+            app._current_tip = "a normal tip"
+            # a live selection → the contextual copy prompt replaces the tip
+            app.screen.get_selected_text = lambda: "some selected text"
+            app._render_tip()
+            self.assertIn("Ctrl+Y to copy", str(tip.content))
+            # Textual's TextSelected event paints it immediately too
+            app.on_text_selected(None)
+            self.assertIn("Ctrl+Y to copy", str(tip.content))
+            # selection cleared → back to the rotating tip
+            app.screen.get_selected_text = lambda: ""
+            app._render_tip()
+            self.assertIn("a normal tip", str(tip.content))
+            self.assertNotIn("Ctrl+Y to copy", str(tip.content))
 
     async def test_put_on_clipboard_uses_osc52_and_a_local_command(self):
         """The clipboard write is belt-and-suspenders: OSC 52 (for SSH/tmux) AND a

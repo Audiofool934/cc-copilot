@@ -225,7 +225,6 @@ _SLASH_CMDS = [
     ("/refresh", "re-read the observed session now", False),
     ("/forget", "delete THIS cockpit session's saved resume state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
-    ("/copy", "copy the selected text to the clipboard (Ctrl+Y)", False),
     ("/help", "show help", False),
     ("/quit", "exit the cockpit", False),
 ]
@@ -256,6 +255,7 @@ _TIPS = [
     "Empty input: Left/Right jumps between prior prompts",
     "Shift+Up/Down resizes the activity timeline",
     "/clear or Ctrl+L wipes the view, saved history stays",
+    "Drag to select text, then Ctrl+Y copies it to the clipboard",
 ]
 
 
@@ -1576,17 +1576,35 @@ class Cockpit(App):
         return _TIPS[idx]
 
     def _rotate_tip(self) -> None:
-        txt = self._next_tip()
-        if not txt:
-            return
+        self._current_tip = self._next_tip()
+        self._render_tip()
+
+    def _render_tip(self) -> None:
+        """Paint the #tip line: a contextual 'Ctrl+Y to copy' prompt whenever text
+        is selected, otherwise the current rotating feature tip."""
         try:
             w = self.query_one("#tip", Static)
         except NoMatches:
             return
+        try:
+            selected = bool(self.screen.get_selected_text())
+        except Exception:
+            selected = False
         t = Text()
-        t.append("💡 ", style=_PAL["accent"])
-        t.append(txt, style=_PAL["muted"])
+        if selected:
+            t.append("📋 ", style=_PAL["accent"])
+            t.append("Ctrl+Y to copy the selection", style=_PAL["secondary"])
+        elif getattr(self, "_current_tip", ""):
+            t.append("💡 ", style=_PAL["accent"])
+            t.append(self._current_tip, style=_PAL["muted"])
+        else:
+            return
         w.update(t)
+
+    def on_text_selected(self, event) -> None:
+        """Textual fires this when the user drag-selects message text — surface the
+        copy hint in the tip line right away (not just on the 16s tip rotation)."""
+        self._render_tip()
 
     # ---- focus: a click anywhere (or re-entering the app) lands on the
     #      composer, so the user never has to aim at the box, and IME /
@@ -2575,8 +2593,6 @@ class Cockpit(App):
             self.action_refresh_now(); return
         if low in ("/clear", "/cls"):
             self.action_clear_chat(); return
-        if low in ("/copy", "/yank"):
-            self.action_copy_selection(); return
         if low == "/forget":
             self.action_forget(); return
         if low == "/rewind":
@@ -3027,10 +3043,10 @@ class Cockpit(App):
         self.notify(f"key saved · {choice.key_env}", severity="information")
 
     def action_copy_selection(self) -> None:
-        """Ctrl+Y / `/copy`: copy the current text selection to the system clipboard.
-        Textual's drag-select highlights message text in the app; this copies it as
-        clean text — no chrome (role-bar / borders), works over tmux/SSH.
-        Ctrl+C stays bound to quit, so it's never ambiguous."""
+        """Ctrl+Y: copy the current text selection to the system clipboard. Textual's
+        drag-select highlights message text in the app; this copies it as clean text
+        — no chrome (role-bar / borders), works over tmux/SSH. Ctrl+C stays bound to
+        quit, so it's never ambiguous."""
         try:
             text = self.screen.get_selected_text()
         except Exception:
@@ -3041,6 +3057,7 @@ class Cockpit(App):
             return
         self._put_on_clipboard(text)
         self.clear_selection()
+        self._render_tip()                           # selection gone → drop the copy hint
         n = len(text)
         self.notify(f"copied {n} char{'' if n == 1 else 's'} to the clipboard")
 

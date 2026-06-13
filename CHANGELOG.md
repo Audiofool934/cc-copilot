@@ -3,10 +3,11 @@
 ## Unreleased
 
 **Copying text from the cockpit is now one key.** Drag to select any message
-text, then **Ctrl+Y** (or `/copy`) copies it to your system clipboard — clean
-text, no role-bar or borders. It works locally *and* over tmux/SSH: OSC 52 for
-the remote case, plus a local `pbcopy` / `wl-copy` / `xclip`, so it also works in
-terminals where OSC 52 no-ops (notably macOS Terminal.app). This replaces the
+text — the tip line above the composer prompts *"Ctrl+Y to copy"* — then
+**Ctrl+Y** copies it to your system clipboard as clean text (no role-bar or
+borders). It works locally *and* over tmux/SSH: OSC 52 for the remote case, plus
+a local `pbcopy` / `wl-copy` / `xclip`, so it also works in terminals where OSC 52
+no-ops (notably macOS Terminal.app). This replaces the
 over-engineered `/select` / `/copy-mode` / Ctrl+N "release the mouse to the
 terminal" mode and its paragraph of Option/Fn/⌘C instructions, all removed.
 Ctrl+C stays bound to quit so it's never ambiguous; ⌘C is intercepted by the
