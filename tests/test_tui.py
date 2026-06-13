@@ -1122,70 +1122,71 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                         "chat 800", "memory 120", "index 90", "trimmed"):
                 self.assertIn(tok, visible, f"{tok} CLIPPED (not on screen) at 32 cols")
 
-    async def test_select_mode_releases_mouse_and_shows_banner(self):
-        """Ctrl+S / `/select` releases the mouse to the terminal (so native
-        drag-select + ⌘C work) and shows a banner; toggling back restores it."""
-        from textual.widgets import Static
-        sess = self._session("sess-A")
-        app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test(size=(90, 30)) as pilot:
-            await pilot.pause()
-            calls = []
-            # the headless test driver lacks these; inject stubs to observe the toggle
-            app._driver._enable_mouse_support = lambda: calls.append("enable")
-            app._driver._disable_mouse_support = lambda: calls.append("disable")
-
-            self.assertFalse(app._select_mode)
-            self.assertIn("/select", [c for c, *_ in tui._SLASH_CMDS])
-            app._meta("/select")                       # enter via the slash command
-            await pilot.pause()
-            self.assertTrue(app._select_mode)
-            self.assertEqual(calls, ["disable"])       # mouse handed to the terminal
-            self.assertIn("SELECT MODE",
-                          str(app.query_one("#status", Static).content))
-
-            app.action_toggle_select_mode()            # exit via the key action
-            await pilot.pause()
-            self.assertFalse(app._select_mode)
-            self.assertEqual(calls, ["disable", "enable"])   # mouse restored
-            self.assertNotIn("SELECT MODE",
-                             str(app.query_one("#status", Static).content))
-
-    async def test_ctrl_n_toggles_select_mode_from_composer(self):
-        sess = self._session("sess-A")
-        app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test(size=(92, 30)) as pilot:
-            await pilot.pause()
-            app._driver._enable_mouse_support = lambda: None
-            app._driver._disable_mouse_support = lambda: None
-            app.query_one("#composer").focus()
-            await pilot.pause()
-            self.assertFalse(app._select_mode)
-            await pilot.press("ctrl+n")               # bubbles past the composer
-            await pilot.pause()
-            self.assertTrue(app._select_mode)
-
-    async def test_ctrl_n_navigates_open_picker_not_select_mode(self):
-        """Codex regression: when a modal picker is open, Ctrl+N must move the
-        highlight (the picker stops the event) — NOT toggle select mode. The
-        select-mode binding is non-priority precisely so the focused picker wins."""
+    async def test_ctrl_n_navigates_open_picker(self):
+        """Ctrl+N moves the highlight down inside an open picker (Emacs-style nav);
+        the picker stops the event."""
         from textual.widgets import OptionList
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test(size=(92, 30)) as pilot:
             await pilot.pause()
-            app._driver._enable_mouse_support = lambda: None
-            app._driver._disable_mouse_support = lambda: None
             picker = tui.Picker("pick", [("Alpha", "a"), ("Beta", "b"), ("Gamma", "g")])
             await app.push_screen(picker)
             await pilot.pause()
             ol = picker.query_one("#picker-list", OptionList)
             self.assertEqual(ol.highlighted, 0)
-            before = app._select_mode
             await pilot.press("ctrl+n")
             await pilot.pause()
             self.assertEqual(ol.highlighted, 1)        # picker navigated
-            self.assertEqual(app._select_mode, before)  # select mode NOT toggled
+
+    async def test_ctrl_y_copies_selection_and_ctrl_c_stays_quit(self):
+        """Ctrl+Y / /copy copies the current text selection (clean text → clipboard
+        via OSC 52); with nothing selected it just says so. Ctrl+C is bound to quit,
+        never copy — so quitting is never ambiguous. Replaces the removed select-mode."""
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            copied = []
+            app._put_on_clipboard = lambda t: copied.append(t)
+            app.clear_selection = lambda: None
+            # a live selection → copy it
+            app.screen.get_selected_text = lambda: "hello world"
+            app.action_copy_selection()
+            self.assertEqual(copied, ["hello world"])
+            # /copy is the same path
+            copied.clear()
+            app._meta("/copy")
+            self.assertEqual(copied, ["hello world"])
+            # nothing selected → no copy, no crash
+            copied.clear()
+            app.screen.get_selected_text = lambda: ""
+            app.action_copy_selection()
+            self.assertEqual(copied, [])
+        actions = {b.key: b.action for b in tui.Cockpit.BINDINGS}
+        self.assertEqual(actions.get("ctrl+c"), "quit")            # quit, never copy
+        self.assertEqual(actions.get("ctrl+y"), "copy_selection")  # copy is its own key
+
+    async def test_put_on_clipboard_uses_osc52_and_a_local_command(self):
+        """The clipboard write is belt-and-suspenders: OSC 52 (for SSH/tmux) AND a
+        local command (pbcopy/…), since OSC 52 no-ops on e.g. macOS Terminal.app."""
+        import shutil as _shutil
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            osc, ran = [], []
+            app.copy_to_clipboard = lambda t: osc.append(t)
+            real_which, real_run = _shutil.which, tui.subprocess.run
+            _shutil.which = lambda name: "/bin/pbcopy" if name == "pbcopy" else None
+            tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
+            try:
+                app._put_on_clipboard("grab me")
+            finally:
+                _shutil.which, tui.subprocess.run = real_which, real_run
+        self.assertEqual(osc, ["grab me"])             # OSC 52 attempted (remote/tmux)
+        self.assertEqual(ran[0][0], ["pbcopy"])        # local command attempted…
+        self.assertEqual(ran[0][1], b"grab me")        # …with the text piped to stdin
 
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa
@@ -1833,7 +1834,7 @@ class TestCockpitTips(unittest.IsolatedAsyncioTestCase):
         show = {b.key: b.show for b in tui.Cockpit.BINDINGS}
         for hidden in ("shift+up", "shift+down", "ctrl+r", "ctrl+l"):
             self.assertFalse(show.get(hidden), hidden)   # decluttered (the user's ask)
-        for kept in ("ctrl+t", "ctrl+n", "ctrl+c"):
+        for kept in ("ctrl+t", "ctrl+y", "ctrl+c"):
             self.assertTrue(show.get(kept), kept)        # the few high-value keys stay
 
     def test_next_tip_covers_every_tip_before_repeating(self):

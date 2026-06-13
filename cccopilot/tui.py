@@ -187,23 +187,22 @@ _HELP_TEXT = (
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
-    "  /select                 release the mouse for native drag-select + ⌘C copy (Ctrl+N)\n"
     "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
     "  /use <n|id>  /refresh   /clear   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
+    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+Y copy · Shift+↑/↓ resize · Ctrl+C quit\n"
     "      Empty input: ←/→ jumps between prior prompts in chat.\n"
     "      Esc clears input; Esc twice on empty opens rewind.\n"
-    "copy: Ctrl+N (or /select) releases the mouse so the terminal selects — drag, then ⌘C.\n"
-    "      one-off without toggling: hold Option (iTerm2) / Fn (Terminal.app) while dragging.")
+    "copy: drag to select, then Ctrl+Y — clean text to your clipboard (works over tmux/SSH).\n"
+    "      Ctrl+C quits. ⌘C does your terminal's own copy of the terminal's selection.")
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
 # Only the primary spelling of each command is listed. Short convenience aliases
-# (/q /? /cls /exit /copy /copy-mode /onboard /new-cockpit) AND the power-user
-# evidence commands /scope and /history are dispatched in _meta() but intentionally
-# kept OUT of autocomplete — the visual /sessions picker is the blessed way to
-# scope in the cockpit (see test_deprecated_control_shortcuts_*). Keep it scannable.
+# (/q /? /cls /exit /onboard /new-cockpit) AND the power-user evidence commands
+# /scope and /history are dispatched in _meta() but intentionally kept OUT of
+# autocomplete — the visual /sessions picker is the blessed way to scope in the
+# cockpit (see test_deprecated_control_shortcuts_*). Keep it scannable.
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
     ("/now", "recommend the next step (LLM; deterministic fallback)", False),
@@ -220,13 +219,13 @@ _SLASH_CMDS = [
     ("/resume", "browse & resume cockpit sessions", False),
     ("/new", "start a new independent cockpit session (alias: /new-cockpit)", False),
     ("/theme", "switch cockpit palette", False),
-    ("/select", "release the mouse for native drag-select + ⌘C copy (Ctrl+N)", False),
     ("/model", "switch the LLM backend", True),
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
     ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
     ("/forget", "delete THIS cockpit session's saved resume state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
+    ("/copy", "copy the selected text to the clipboard (Ctrl+Y)", False),
     ("/help", "show help", False),
     ("/quit", "exit the cockpit", False),
 ]
@@ -254,7 +253,6 @@ _TIPS = [
     "/model switches the backend — Claude, Codex or an API",
     "/init reopens the model picker; /theme switches the palette",
     "/resume reopens a past cockpit · /new starts fresh; Q&A stays",
-    "/select or Ctrl+N frees the mouse for native drag-select",
     "Empty input: Left/Right jumps between prior prompts",
     "Shift+Up/Down resizes the activity timeline",
     "/clear or Ctrl+L wipes the view, saved history stays",
@@ -1298,14 +1296,12 @@ class Cockpit(App):
     # composer (see _TIPS / _rotate_tip), which is where discovery now lives.
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit"),
+        # Ctrl+Y copies the current text selection (Textual's native drag-select →
+        # system clipboard via OSC 52, works over tmux/SSH). Copy gets its own key
+        # so Ctrl+C is never ambiguous about quitting; ⌘C is intercepted by the
+        # terminal and never reaches us. (ctrl+n still moves down in an open Picker.)
+        Binding("ctrl+y", "copy_selection", "copy"),
         Binding("ctrl+t", "model", "model"),
-        # release the mouse so the TERMINAL does native selection + copy (⌘C):
-        # Textual captures the mouse for scroll/click, which blocks the terminal's
-        # own click-drag selection. ctrl+n (not ctrl+s — XOFF; not ctrl+b — tmux
-        # prefix). NOT priority: an open Picker/MultiPicker uses ctrl+n to move to
-        # the next row and stops the event, so it keeps nav; with no modal open
-        # the composer lets ctrl+n bubble here to toggle select mode.
-        Binding("ctrl+n", "toggle_select_mode", "select"),
         Binding("ctrl+r", "refresh_now", "refresh", show=False),
         Binding("ctrl+l", "clear_chat", "clear view", show=False),
         # resize the activity timeline (the chat fills the rest); persisted.
@@ -1356,7 +1352,6 @@ class Cockpit(App):
         self._watch_size = -1
         self._watch_state = None
         self._timeline_sig = None       # evidence identity of the last rebuild
-        self._select_mode = False       # True = mouse released to the terminal for native select/copy
 
     # ---- prompt history (composer ↑/↓, terminal-style) ----
     def _prompt_history_from_session(self) -> list:
@@ -2066,20 +2061,7 @@ class Cockpit(App):
         status.update(self._status_text(w))
 
     def _status_text(self, w: int) -> Text:
-        """The status bar — the reflowed body, with a select-mode banner on top
-        when the mouse has been released to the terminal for native selection."""
-        body = self._status_body(w)
-        if not self._select_mode:
-            return body
-        banner = _assemble([
-            (" ⌗ SELECT MODE ", f"bold {_PAL['bg']} on {_PAL['warning']}"),
-            ("  drag to select · ⌘C copies · Ctrl+N exits", _PAL["warning"]),
-        ])
-        t = Text()
-        t.append_text(banner)
-        t.append("\n")
-        t.append_text(body)
-        return t
+        return self._status_body(w)
 
     def _status_body(self, w: int) -> Text:
         """The status bar, reflowed to width ``w``. Every field is an atomic styled
@@ -2589,12 +2571,12 @@ class Cockpit(App):
             return
         if low == "/init" or low == "/onboard":
             self.action_onboard(); return
-        if low in ("/select", "/copy", "/copy-mode"):
-            self.action_toggle_select_mode(); return
         if low == "/refresh":
             self.action_refresh_now(); return
         if low in ("/clear", "/cls"):
             self.action_clear_chat(); return
+        if low in ("/copy", "/yank"):
+            self.action_copy_selection(); return
         if low == "/forget":
             self.action_forget(); return
         if low == "/rewind":
@@ -3044,32 +3026,45 @@ class Cockpit(App):
         self._commit_backend(name, BK.resolve(name), after_model, offer_default=False)
         self.notify(f"key saved · {choice.key_env}", severity="information")
 
-    def action_toggle_select_mode(self) -> None:
-        """Release / re-grab the mouse. Textual captures the mouse for scroll and
-        clicks, which stops the terminal from doing its own click-drag selection —
-        so ⌘C has nothing to copy. Releasing it hands selection back to the
-        terminal: drag highlights natively and ⌘C copies, exactly like a non-TUI
-        shell. Toggle back to restore wheel-scroll / clicks."""
-        drv = getattr(self, "_driver", None)
-        enable = getattr(drv, "_enable_mouse_support", None)
-        disable = getattr(drv, "_disable_mouse_support", None)
-        if not callable(enable) or not callable(disable):
-            self.notify("native selection isn't available on this terminal driver",
-                        severity="warning")
-            return
-        self._select_mode = not self._select_mode
+    def action_copy_selection(self) -> None:
+        """Ctrl+Y / `/copy`: copy the current text selection to the system clipboard.
+        Textual's drag-select highlights message text in the app; this copies it as
+        clean text — no chrome (role-bar / borders), works over tmux/SSH.
+        Ctrl+C stays bound to quit, so it's never ambiguous."""
         try:
-            (disable if self._select_mode else enable)()
-        except Exception as e:                      # pragma: no cover - driver-specific
-            self.notify(f"couldn't toggle the mouse: {e}", severity="error")
-            self._select_mode = not self._select_mode
+            text = self.screen.get_selected_text()
+        except Exception:
+            text = None
+        if not text:
+            self.notify("nothing selected — drag to select text, then Ctrl+Y",
+                        severity="information")
             return
-        if self._select_mode:
-            self.notify("SELECT MODE on — drag to select, ⌘C to copy. Ctrl+N to exit "
-                        "(mouse scroll/click are off until then).", timeout=6)
-        else:
-            self.notify("SELECT MODE off — mouse restored.")
-        self._update_status()
+        self._put_on_clipboard(text)
+        self.clear_selection()
+        n = len(text)
+        self.notify(f"copied {n} char{'' if n == 1 else 's'} to the clipboard")
+
+    def _put_on_clipboard(self, text: str) -> None:
+        """Copy ``text`` to the system clipboard robustly: OSC 52 (Textual) so it
+        reaches the OUTER terminal over SSH/tmux, AND a local clipboard command —
+        because OSC 52 silently no-ops in some terminals (notably macOS Terminal.app,
+        per Textual's own copy_to_clipboard docs). Each covers what the other can't;
+        both are best-effort."""
+        try:
+            self.copy_to_clipboard(text)                 # OSC 52 — remote / SSH / tmux
+        except Exception:
+            pass
+        import shutil
+        for argv in (["pbcopy"], ["wl-copy"],
+                     ["xclip", "-selection", "clipboard"],
+                     ["xsel", "--clipboard", "--input"], ["clip"]):
+            if shutil.which(argv[0]):
+                try:
+                    subprocess.run(argv, input=text.encode("utf-8"), timeout=2,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+                break                                    # first available tool wins
 
     def action_refresh_now(self):
         self.session.refresh()

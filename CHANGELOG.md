@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Copying text from the cockpit is now one key.** Drag to select any message
+text, then **Ctrl+Y** (or `/copy`) copies it to your system clipboard — clean
+text, no role-bar or borders. It works locally *and* over tmux/SSH: OSC 52 for
+the remote case, plus a local `pbcopy` / `wl-copy` / `xclip`, so it also works in
+terminals where OSC 52 no-ops (notably macOS Terminal.app). This replaces the
+over-engineered `/select` / `/copy-mode` / Ctrl+N "release the mouse to the
+terminal" mode and its paragraph of Option/Fn/⌘C instructions, all removed.
+Ctrl+C stays bound to quit so it's never ambiguous; ⌘C is intercepted by the
+terminal and can't reach the app.
+
 **Switching model in the cockpit can now update your default.** After a `/model`
 switch (backend or model), the cockpit asks *"make this the default for new
 cockpit sessions?"* — answer yes and it writes the new `backend`/`model` to
