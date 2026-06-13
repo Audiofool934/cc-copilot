@@ -146,6 +146,28 @@ def timeline_lines(path: str, st: Optional[S.State] = None,
     return out
 
 
+def next_step(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
+              sessions=None) -> str:
+    """Deterministic 'what should I do next' — the LLM-free fallback for `/now`.
+
+    Reuses the observer's ranked attention model: the top-ranked session drives
+    the primary recommendation; any other session that still needs attention is
+    appended so a fleet glance never silently buries a stalled sibling."""
+    report = build(path, st, scope, sessions)
+    if not report.items:
+        return "→ no live session evidence in this scope — attach a live session or narrow the scope."
+    qualified = report.scope != SC.SESSION
+    _level, decision = _decision(report.items[0], qualified)
+    lines = [f"→ {decision}"]
+    for item in report.items[1:]:
+        if _needs_attention(item):
+            _lvl, text = _decision(item, qualified)
+            lines.append(f"  also: {text}")
+        if len(lines) >= 4:
+            break
+    return "\n".join(lines)
+
+
 def _item(ref, st: S.State) -> ObservationItem:
     sid = (getattr(st.tr, "session_id", "") or getattr(ref, "session_id", "")
            or os.path.basename(getattr(ref, "path", ""))[:-6])

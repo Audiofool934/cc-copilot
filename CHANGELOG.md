@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+**Slash-command organization pass.** A multi-surface audit (REPL / cockpit TUI /
+CLI / docs) drove a round of consistency fixes:
+
+- **`/now` owns "what next."** `/since`'s recap and the `--narrate` orientation no
+  longer also prescribe the next action — they recap and orient; the next-step
+  recommendation is `/now`'s sole job. Removed the dead `narrate()` /
+  `narrate_brief()` helpers (zero callers; only the `--narrate` streaming path
+  survives).
+- **`/session` → `/target`.** The singular readout was one keystroke from
+  `/sessions` and meant different things on different surfaces (a readout in the
+  REPL, an alias of `/sessions` in the cockpit). It is now `/target` everywhere —
+  a single, consistent "current cockpit target" readout — and `/sessions` is the
+  sole evidence picker.
+- **`/status` in the cockpit.** The fleet board (every session in the project,
+  neediest first) is now reachable from the REPL and the cockpit, not just
+  `cc-copilot status`. The board renderer is shared across all three.
+- **Help-text consistency.** Aligned the one-liners for `observe` / `brief` /
+  `check` / `handoff` / `since` across every surface (incl. the `1d` `/since`
+  window the TUI and README had omitted), gave `/now` its `(LLM; deterministic
+  fallback)` marker in the cockpit autocomplete, listed `/clear` in the cockpit
+  help, and documented the intentionally-hidden power aliases (`/scope`,
+  `/history`, and the short spellings) in a comment rather than leaving them
+  silently undiscoverable.
+
+**New `/now` command — "what should I do next?"** After running something
+through an agent, `/now` recommends the next step: an LLM recommendation grounded
+in the read-only evidence of the completed work (it keeps the `[L…]` citations
+and never invents), with a deterministic next-step — the observer's ranked
+decision — as the always-true fallback when no backend is available, on error, or
+with `--raw`. Scope-aware like `/brief` / `/observe` / `/check`, and available on
+every surface: the chat REPL (`/now`), the cockpit TUI (`/now`, the command
+palette, and `/` autocomplete; the model call runs off the UI thread and is
+dropped if you switch evidence while it runs), and the CLI (`cc-copilot now`,
+`--raw` for the deterministic next-step alone).
+
 **Sibling discovery no longer drops sessions in a different projects bucket.**
 `_candidate_refs` found the watched agent's own Claude sessions two ways — a scan
 of the anchor's directory plus a `cwd`-based lookup — and wrongly assumed the

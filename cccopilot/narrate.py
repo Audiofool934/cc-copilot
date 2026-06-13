@@ -42,10 +42,11 @@ use any tools or read any files.\
 """
 
 _NARRATE_TASK = (
-    "Orient the returning human in 3–5 sentences: what did this agent do while "
-    "they were away, does it look safe to let it keep running (use the Safety "
-    "verdict), and the single most important thing to look at next? "
-    "Keep citations for specific observed claims."
+    "Orient the returning human in 3–4 sentences: what did this agent do while "
+    "they were away, and does it look safe to let it keep running (use the Safety "
+    "verdict)? Point them at the observed evidence that most warrants a look, but "
+    "do NOT prescribe the next action to take. Keep citations for specific "
+    "observed claims."
 )
 
 
@@ -166,14 +167,6 @@ def run_brief_stream(brief_text: str, task: str, model: str = None,
     return StreamHandle(be, be.stream(prompt, model=model, timeout=timeout))
 
 
-def narrate(state, model: str = None, backend=None) -> str:
-    return run(state, _NARRATE_TASK, model=model, backend=backend)
-
-
-def narrate_brief(brief_text: str, model: str = None, backend=None) -> str:
-    return run_brief(brief_text, _NARRATE_TASK, model=model, backend=backend)
-
-
 def narrate_brief_stream(brief_text: str, model: str = None, backend=None) -> StreamHandle:
     return run_brief_stream(brief_text, _NARRATE_TASK, model=model, backend=backend)
 
@@ -183,9 +176,10 @@ _SINCE_RECAP_TASK = (
     "returning human last looked at this agent. Recap it for them in 3–5 "
     "sentences: what the agent did (asks answered, commands run, failures, files "
     "changed), whether it looks safe to let it keep running (use any Safety "
-    "transition shown), and the single most important thing to look at next. Use "
-    "ONLY this evidence; keep the [L…] citations for specific observed claims. If "
-    "the evidence shows nothing changed, say so in one line."
+    "transition shown), and which change most warrants a closer look. Recap and "
+    "orient only — do NOT prescribe the next action to take. Use ONLY this "
+    "evidence; keep the [L…] citations for specific observed claims. If the "
+    "evidence shows nothing changed, say so in one line."
 )
 
 
@@ -195,6 +189,33 @@ def recap_since(since_text: str, model: str = None, backend=None) -> str:
     Same faithful contract as :func:`narrate` — the model sees only the cited
     delta and keeps its ``[L…]`` citations; it does not invent."""
     return run_brief(since_text, _SINCE_RECAP_TASK, model=model, backend=backend)
+
+
+_NEXT_STEP_TASK = (
+    "The evidence below is the work this coding agent has just completed, plus "
+    "its current status. The returning human wants to know what to do NEXT. "
+    "Recommend the next step in 2–4 sentences: lead with any blocker that must "
+    "clear first (a failure, an unanswered human turn, a stalled or mid-run "
+    "agent), then give ONE concrete primary next action — the instruction to "
+    "give the agent next, or what to verify / run / commit yourself — and at "
+    "most one alternative. Ground every recommendation in the cited evidence and "
+    "keep the [L…] citations. If the agent is still mid-run, say to let it "
+    "finish rather than inventing busywork. Be concrete and actionable; no "
+    "preamble, no recap of what already happened."
+)
+
+
+def next_step_brief(brief_text: str, model: str = None, backend=None) -> str:
+    """Recommend the next step from a deterministic evidence recap.
+
+    Same faithful contract as :func:`narrate`: the model sees only the cited
+    evidence and keeps its ``[L…]`` citations; it recommends, it doesn't invent."""
+    return run_brief(brief_text, _NEXT_STEP_TASK, model=model, backend=backend)
+
+
+def next_step_brief_stream(brief_text: str, model: str = None, backend=None) -> StreamHandle:
+    """Streaming sibling of :func:`next_step_brief` — identical grounding."""
+    return run_brief_stream(brief_text, _NEXT_STEP_TASK, model=model, backend=backend)
 
 
 def ask(state, question: str, model: str = None, backend=None) -> str:

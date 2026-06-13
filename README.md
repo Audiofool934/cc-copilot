@@ -63,15 +63,18 @@ Inside the cockpit:
 ```text
 /sessions   choose one or more agent sessions (incl. your own live session)
 /here       observe the session you're running inside of
+/target     show the current cockpit target (id, evidence session, scope)
+/status     fleet board — every session in this project, neediest first
 /observe    attention queue and next human decision
-/since      recap since you last looked (or 30m / 2h; --raw = cited delta)
+/now        recommend the next step from the completed work (LLM; deterministic fallback)
+/since      recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
 /handoff    shareable Markdown handoff (brief + what changed)
 /brief      deterministic recap with citations
 /check      safety / off-track verdict
 /diff       changes since last turn
 /model      choose backend/model
 /init       reopen the model picker (Claude / Codex / an API key)
-/resume     resume a Cockpit Session
+/resume     browse & resume a cockpit session
 ```
 
 ## Install
@@ -173,13 +176,15 @@ design cues from [opencode](https://github.com/sst/opencode).
 cc-copilot cockpit                 # open the TUI
 cc-copilot sessions                # list project sessions
 cc-copilot status                  # fleet board, neediest first
-cc-copilot observe                 # attention queue
-cc-copilot brief                   # deterministic recap
-cc-copilot check                   # safety verdict
+cc-copilot observe                 # attention queue + next human decision
+cc-copilot now                     # grounded LLM recommendation of the next step
+cc-copilot now --raw               # deterministic next-step, no model call
+cc-copilot brief                   # deterministic recap with citations
+cc-copilot check                   # safety / off-track verdict
 cc-copilot since                   # grounded LLM recap since you last looked
-cc-copilot since 30m               # …or within a time window
+cc-copilot since 30m               # …or within a time window (30m / 2h / 1d)
 cc-copilot since --raw             # the deterministic cited delta, no model call
-cc-copilot handoff --out h.md      # shareable Markdown handoff
+cc-copilot handoff --out h.md      # shareable Markdown handoff (brief + what changed)
 cc-copilot watch --notify          # desktop alert when the agent needs you
 cc-copilot ask "what changed?"     # one-shot grounded Q&A
 cc-copilot chat                    # plain terminal chat mode

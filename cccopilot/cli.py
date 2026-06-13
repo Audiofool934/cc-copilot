@@ -498,64 +498,12 @@ def cmd_backends(args) -> int:
     return 2 if active_error else 0
 
 
-def _fleet_rank(status, verdict):
-    """Sort key so the sessions that need you float to the top."""
-    if status == "stalled" or verdict == "intervene":
-        return 0
-    if status == "awaiting-agent":
-        return 1
-    if status == "running":
-        return 2 if verdict == "review" else 3
-    if verdict == "review":
-        return 4            # idle, but had unresolved friction
-    if status == "idle":
-        return 5
-    return 6                # empty
-
-
 def cmd_status(args) -> int:
-    from .assess import assess
-    from .chat import _GLYPH, _dur
+    from .chat import render_fleet
     cwd = args.cwd or os.getcwd()
-    all_refs = SRC.list_sessions(cwd, include_own=True)
-    refs = [r for r in all_refs if not r.own]
-    hidden = len(all_refs) - len(refs)
-    if not refs:
-        note = f"  ({hidden} cc-copilot helper session(s) hidden)" if hidden else ""
-        print(f"(no work sessions for {cwd}){note}\n  dir: {locate.project_dir_for(cwd)}")
-        return 1
-    want = len(refs) if getattr(args, "all", False) else args.limit
-    rows = []
-    for r in refs:
-        if len(rows) >= want:
-            break          # collected enough parsed rows; a skipped ref never ate a slot
-        try:
-            tr = SRC.parse(r.path)
-            st = S.build(tr)
-        except OSError:
-            continue       # a session deleted/rotated mid-scan: skip it, try the next ref
-        a = assess(st)
-        sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
-        if sigs:
-            head = sigs[0].message + (f" [L{sigs[0].evidence[0]}]" if sigs[0].evidence else "")
-        elif st.intents:
-            head = st.intents[-1].text
-        else:
-            head = tr.title or ""
-        rows.append((r, st, a, head))
-    rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
-                             x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
-    hnote = f", {hidden} helper hidden" if hidden else ""
-    print(f"cc-copilot status — {cwd}  ({len(rows)} of {len(refs)} sessions{hnote})")
-    multi_agent = len({r.agent for r, *_ in rows}) > 1
-    for r, st, a, head in rows:
-        g = _GLYPH.get(st.status, "?")
-        idle = _dur(st.idle_seconds)
-        clip = " ".join((head or "").split())[:56]
-        tag = f"{r.agent:<6} " if multi_agent else ""
-        print(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev  "
-              f"{tag}{r.session_id[:8]}  {clip}")
-    return 0
+    text, n = render_fleet(cwd, limit=args.limit, show_all=getattr(args, "all", False))
+    print(text)
+    return 0 if n else 1
 
 
 def cmd_check(args) -> int:
@@ -933,6 +881,43 @@ def cmd_since(args) -> int:
     return 0
 
 
+def cmd_now(args) -> int:
+    """Recommend the next step from the completed work: an LLM recommendation
+    grounded in the cited evidence, with a deterministic next-step (the
+    observer's ranked decision) for `--raw` or when no backend is available."""
+    from . import narrate as N
+    if not getattr(args, "raw", False):
+        _maybe_first_run_nudge()
+    path, tr, st = _load(args)
+    if getattr(args, "path", False):
+        sys.stderr.write(f"# transcript: {path}\n")
+    scope = getattr(args, "scope", SC.SESSION)
+    sessions = getattr(args, "scope_sessions", "")
+    try:
+        det = O.next_step(path, st, scope, sessions=sessions)
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    be = getattr(args, "backend", None)
+    if getattr(args, "raw", False) or not N.available(be):
+        print(det)
+        return 0
+    try:
+        ev = SC.render_evidence(path, st, scope, sessions=sessions)
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    sys.stderr.write(f"# next step via {N.backend_name(be)} …\n")
+    try:
+        _stream_out(N.next_step_brief_stream(ev.text, model=getattr(args, "model", None),
+                                             backend=be),
+                    header="# 🧭 next step  _(LLM, grounded in the cited evidence)_\n\n")
+    except Exception as e:
+        sys.stderr.write(f"# next-step failed ({e}); showing deterministic suggestion\n")
+        print(det)
+    return 0
+
+
 def cmd_handoff(args) -> int:
     from . import handoff as HO, lastlook as LL, since as SI
     path = _resolve_or_die(args)
@@ -1055,6 +1040,18 @@ def build_parser() -> argparse.ArgumentParser:
     session_args(sp)
     scope_arg(sp)
     sp.set_defaults(func=cmd_observe)
+
+    sp = sub.add_parser("now",
+                        help="recommend the next step from the completed work "
+                             "(LLM; --raw = deterministic next-step, no model call)")
+    session_args(sp)
+    scope_arg(sp)
+    sp.add_argument("--raw", action="store_true",
+                    help="deterministic next-step only — no LLM recommendation")
+    sp.add_argument("--model", help="model for the recommendation (passed to the backend)")
+    sp.add_argument("--backend",
+                    help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
+    sp.set_defaults(func=cmd_now)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
     common(sp)

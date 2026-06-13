@@ -67,6 +67,77 @@ class TestObserveReport(unittest.TestCase):
         self.assertEqual(args.scope, SC.PROJECT)
 
 
+class TestNextStep(unittest.TestCase):
+    """`observe.next_step` is the deterministic, LLM-free fallback behind `/now`."""
+
+    def test_idle_session_recommends_reading_the_closing_message(self):
+        p = write([user("document it", 60), asst("all done", 5)])
+        st = S.build(T.parse(p))
+        out = O.next_step(p, st)
+        self.assertTrue(out.startswith("→ "))
+        self.assertIn("closing message", out)           # READY decision
+
+    def test_stalled_session_recommends_intervening(self):
+        p = write([user("fix the build", 4000),
+                   tool("Bash", {"command": "make"}, "t1", 3700),
+                   result("t1", "boom", is_error=True, ago=3600)])   # mid-turn, >180s old
+        st = S.build(T.parse(p))
+        out = O.next_step(p, st)
+        self.assertIn("Intervene", out)
+
+    def test_no_live_evidence_is_a_clean_suggestion_not_a_crash(self):
+        out = O.next_step("/does/not/exist.jsonl", st=None)
+        self.assertIn("no live session evidence", out)
+
+    def test_multi_scope_leads_with_the_neediest_and_appends_siblings(self):
+        cwd = tempfile.mkdtemp(prefix="ccnext-proj-")
+        d = tempfile.mkdtemp(prefix="ccnext-sessions-")
+        stalled = _write_at(os.path.join(d, "sess-A.jsonl"), [
+            user("fix tests", 4000, sessionId="sess-A", cwd=cwd),
+            tool("Bash", {"command": "pytest"}, "t1", 3700),
+            result("t1", "failed", is_error=True, ago=3600),
+        ])
+        _write_at(os.path.join(d, "sess-B.jsonl"), [
+            user("ship it", 3000, sessionId="sess-B", cwd=cwd),
+            tool("Bash", {"command": "deploy"}, "t2", 2800),     # also mid-turn/stalled
+            result("t2", "no", is_error=True, ago=2700),
+        ])
+        st = S.build(T.parse(stalled))
+        out = O.next_step(stalled, st, "multi-session")
+        self.assertTrue(out.startswith("→ "))            # primary decision
+        self.assertIn("sess-A", out)                     # neediest leads
+        self.assertIn("also:", out)                      # the second needy sibling surfaces
+
+
+class TestFleetBoard(unittest.TestCase):
+    """`chat.render_fleet` backs `cc-copilot status`, REPL `/status`, cockpit `/status`."""
+
+    def test_ranks_neediest_first_and_counts(self):
+        from cccopilot import chat as C
+        stalled = write([user("fix", 4000),
+                         tool("Bash", {"command": "x"}, "t1", 3700),
+                         result("t1", "boom", is_error=True, ago=3600)])
+        idle = write([user("doc", 120), asst("all done", 5)])
+
+        class _R:
+            def __init__(s, p, sid):
+                s.path, s.session_id, s.own, s.agent = p, sid, False, "claude"
+
+        refs = [_R(idle, "idle0000"), _R(stalled, "stall000")]
+        with mock.patch.object(C.SRC, "list_sessions", return_value=refs):
+            text, n = C.render_fleet("/proj")
+        self.assertEqual(n, 2)
+        self.assertIn("cc-copilot status", text)
+        self.assertLess(text.index("stall000"), text.index("idle0000"))  # neediest first
+
+    def test_no_sessions_is_a_clean_message_and_zero_count(self):
+        from cccopilot import chat as C
+        with mock.patch.object(C.SRC, "list_sessions", return_value=[]):
+            text, n = C.render_fleet("/empty/proj")
+        self.assertEqual(n, 0)
+        self.assertIn("no work sessions", text)
+
+
 class TestRecentEvidenceOrdering(unittest.TestCase):
     def test_recent_evidence_orders_across_sessions_by_time_not_line(self):
         # OLD: a stale failure buried at a HIGH line number.

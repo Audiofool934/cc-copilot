@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from cccopilot import cli, lastlook as LL, sources as SRC
+from cccopilot import cli, lastlook as LL, scope as SC, sources as SRC
 from tests.util import asst, result, tool, user, write
 
 
@@ -167,6 +167,76 @@ class TestSinceHandoffCli(unittest.TestCase):
         rc, out = self._run(["handoff", p])
         self.assertEqual(rc, 0)
         self.assertIn("# Handoff —", out)
+
+
+class TestNowCli(unittest.TestCase):
+    """`cc-copilot now` recommends the next step: LLM with a deterministic fallback."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k)
+                       for k in ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY")}
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="ccnow-")
+        os.environ.pop("CC_COPILOT_HISTORY", None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _session(self):
+        # ends on an agent message → idle → the READY decision ("read the closing
+        # message and decide the next instruction").
+        return write([user("add a parser", 200),
+                      tool("Edit", {"file_path": "cli.py"}, "t1", 40),
+                      result("t1", "ok", ago=39),
+                      asst("done — added the subcommand.", 5)])
+
+    def _run(self, argv):
+        from cccopilot import config as CFG
+        args = cli.build_parser().parse_args(argv)
+        CFG.apply_defaults(args)
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            rc = args.func(args)
+        return rc, buf.getvalue()
+
+    def test_raw_prints_deterministic_next_step_without_a_model_call(self):
+        p = self._session()
+        with mock.patch("cccopilot.narrate.next_step_brief_stream") as stream:
+            rc, out = self._run(["now", p, "--raw"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.lstrip().startswith("→"))
+        self.assertIn("closing message", out)            # READY decision
+        stream.assert_not_called()                       # --raw never hits the backend
+
+    def test_no_backend_falls_back_to_the_deterministic_next_step(self):
+        p = self._session()
+        with mock.patch("cccopilot.narrate.available", return_value=False), \
+             mock.patch("cccopilot.narrate.next_step_brief_stream") as stream:
+            rc, out = self._run(["now", p])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.lstrip().startswith("→"))
+        stream.assert_not_called()
+
+    def test_backend_available_streams_the_grounded_recommendation(self):
+        p = self._session()
+        with mock.patch("cccopilot.narrate.available", return_value=True), \
+             mock.patch("cccopilot.narrate.backend_name", return_value="fake"), \
+             mock.patch("cccopilot.narrate.next_step_brief_stream",
+                        return_value=["next: add a test for the parser [L2]"]) as stream:
+            rc, out = self._run(["now", p])
+        self.assertEqual(rc, 0)
+        self.assertIn("next step", out)                  # heading printed by _stream_out
+        self.assertIn("add a test for the parser", out)  # the streamed recommendation
+        stream.assert_called_once()
+
+    def test_parser_accepts_scope_and_raw(self):
+        args = cli.build_parser().parse_args(["now", "--scope", "repo", "--raw"])
+        self.assertEqual(args.cmd, "now")
+        self.assertEqual(args.scope, SC.PROJECT)
+        self.assertTrue(args.raw)
 
 
 class TestTuiRuntimeBootstrapGate(unittest.TestCase):

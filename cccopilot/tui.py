@@ -177,11 +177,13 @@ _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter · history: ↑/↓ · clear: Esc)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
-    "  /since [30m] [--raw]    recap since you last looked (--raw = cited delta)\n"
+    "  /now                    recommend the next step (LLM; deterministic fallback)\n"
+    "  /since [30m|1d] [--raw] recap since you last looked (--raw = cited delta)\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
-    "  /sessions               choose evidence sessions\n"
-    "  /here                   observe your own current (live) session\n"
+    "  /status                 fleet board — every session, neediest first\n"
+    "  /sessions  /here         choose evidence session(s) · watch your own live one\n"
+    "  /target                 show the current cockpit target (id · evidence · scope)\n"
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
@@ -189,33 +191,41 @@ _HELP_TEXT = (
     "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
-    "  /use <n|id>  /refresh   /forget   /quit\n"
+    "  /use <n|id>  /refresh   /clear   /forget   /quit\n"
     "keys: Ctrl+R refresh · Ctrl+L clear view · Ctrl+N select/copy · Shift+↑/↓ resize · Ctrl+C quit\n"
     "      Empty input: ←/→ jumps between prior prompts in chat.\n"
     "      Esc clears input; Esc twice on empty opens rewind.\n"
-    "copy: Ctrl+N (or /select) frees the mouse so the terminal selects — drag, then ⌘C.\n"
+    "copy: Ctrl+N (or /select) releases the mouse so the terminal selects — drag, then ⌘C.\n"
     "      one-off without toggling: hold Option (iTerm2) / Fn (Terminal.app) while dragging.")
 
 # Slash commands, shown in the `/` autocomplete (name, one-line help, takes-arg).
+# Only the primary spelling of each command is listed. Short convenience aliases
+# (/q /? /cls /exit /copy /copy-mode /onboard /new-cockpit) AND the power-user
+# evidence commands /scope and /history are dispatched in _meta() but intentionally
+# kept OUT of autocomplete — the visual /sessions picker is the blessed way to
+# scope in the cockpit (see test_deprecated_control_shortcuts_*). Keep it scannable.
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
-    ("/since", "recap since you last looked (or 30m / 2h; --raw = cited delta)", True),
+    ("/now", "recommend the next step (LLM; deterministic fallback)", False),
+    ("/since", "recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
+    ("/status", "fleet board — every session in this project, neediest first", False),
     ("/sessions", "choose one or more evidence sessions", False),
+    ("/use", "change evidence session by number / id", True),
     ("/here", "observe your own current (live) session", False),
+    ("/target", "current cockpit target (id, evidence session, scope)", False),
     ("/resume", "browse & resume cockpit sessions", False),
-    ("/new", "start a new independent cockpit session", False),
+    ("/new", "start a new independent cockpit session (alias: /new-cockpit)", False),
     ("/theme", "switch cockpit palette", False),
-    ("/select", "free the mouse for native drag-select + ⌘C copy (Ctrl+N)", False),
+    ("/select", "release the mouse for native drag-select + ⌘C copy (Ctrl+N)", False),
     ("/model", "switch the LLM backend", True),
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
-    ("/use", "change evidence session by number / id", True),
     ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
-    ("/forget", "delete THIS cockpit session's saved state", False),
+    ("/forget", "delete THIS cockpit session's saved resume state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
     ("/help", "show help", False),
     ("/quit", "exit the cockpit", False),
@@ -1682,11 +1692,16 @@ class Cockpit(App):
                 yield command
         yield SystemCommand("Observe", "Attention queue + next human decision",
                             self.action_observe)
+        yield SystemCommand("Now", "Recommend the next step (LLM; deterministic fallback)",
+                            self.action_now)
         yield SystemCommand("Brief", "Evidence-cited recap", self.action_brief)
         yield SystemCommand("Check", "Safety / off-track assessment", self.action_check)
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
+        yield SystemCommand("Status", "Fleet board — every session in this project, neediest first",
+                            self.action_status)
         yield SystemCommand("Evidence", "Choose one or more agent sessions",
                             self.action_sessions)
+        yield SystemCommand("Target", "Show the current cockpit target", self.action_target)
         yield SystemCommand("Resume", "Browse resumable cockpit sessions", self.action_history)
         yield SystemCommand("Rewind", "Fork the chat from an earlier message", self.action_rewind)
         yield SystemCommand("Model", "Switch the LLM backend", self.action_model)
@@ -2496,14 +2511,20 @@ class Cockpit(App):
             self._collapsible("/help", _HELP_TEXT); return
         if low == "/observe":
             self.action_observe(); return
+        if low == "/now":
+            self.action_now(); return
         if low == "/brief":
             self.action_brief(); return
         if low == "/check":
             self.action_check(); return
         if low == "/diff":
             self.action_diff(); return
-        if low in ("/sessions", "/session"):
+        if low == "/status":
+            self.action_status(); return
+        if low == "/sessions":
             self.action_sessions(); return
+        if low == "/target":
+            self.action_target(); return
         if low == "/here":
             if not self.session.switch_to_here():
                 self.notify("no current Claude/Codex session detected",
@@ -2649,6 +2670,59 @@ class Cockpit(App):
         self._collapsible(f"/observe — {self.session.scope_label()}", body)
         self._refresh_scope_view()
 
+    # ---- /now: deterministic next-step, recommended via a grounded LLM call ----
+    def action_now(self):
+        """Recommend the next step. Deterministic-instant when there's no backend
+        or a turn is already running; otherwise the model call runs off the UI
+        thread and is dropped if the user switches evidence while it runs."""
+        self.session.refresh()
+        if self._no_live():
+            return
+        try:
+            det = O.next_step(self.session.path, self.session.st, self.session.scope,
+                              sessions=self.session.scope_sessions)
+        except ValueError as e:
+            self.notify(str(e), severity="warning")
+            return
+        title = f"/now — {self.session.scope_label()}"
+        if not N.available(self.backend) or self._busy:
+            self._collapsible(title, det)        # deterministic, instant
+            self._update_status()
+            return
+        # Snapshot the evidence on the UI thread BEFORE the worker starts. Reading
+        # session.evidence() inside the worker would let a switch-away/switch-back
+        # race (which passes the origin check) recommend from the WRONG session's
+        # evidence under the original title — so capture it here, like /since does
+        # with its deterministic view.
+        ev_text = self.session.evidence().text
+        self._busy = True
+        self._busy_frame = 0
+        self._chat(self._role(
+            Text("🧭 thinking about the next step — grounded in the evidence…",
+                 style=_PAL["muted"]), "role-event"))
+        self._update_status()
+        self._now_recap(title, det, ev_text, (self._evidence_sig(), self.session.store))
+
+    @work(thread=True)
+    def _now_recap(self, title, det, ev_text, origin):
+        try:
+            rec = N.next_step_brief(ev_text, model=self.model, backend=self.backend)
+            out = self.session._compose_now(rec, det)
+        except Exception as e:
+            out = det + f"\n\n> _next-step recap unavailable ({e}); deterministic suggestion above._"
+        self.call_from_thread(self._now_done, title, out, origin)
+
+    def _now_done(self, title, out, origin):
+        self._busy = False
+        self._busy_frame = 0
+        sig, store = origin
+        if self._evidence_sig() == sig and self.session.store is store:
+            self._collapsible(title, out)
+        else:
+            self.notify(f"dropped {title} — you switched while it ran",
+                        severity="warning")
+        self._update_status()
+
     def action_check(self):
         self.session.refresh()
         if self._no_live():
@@ -2664,6 +2738,19 @@ class Cockpit(App):
             return
         self._collapsible("/diff — changes since last turn",
                           self._diff_renderable(S.diff(self.session.prev, self.session.st)))
+
+    def action_status(self):
+        """Fleet board across the whole project — independent of the pinned
+        evidence, so it works even in history-only mode."""
+        from .chat import render_fleet
+        cwd = self.session.cwd or os.getcwd()
+        self._collapsible("/status — fleet board", render_fleet(cwd)[0])
+
+    def action_target(self):
+        s = self.session
+        body = (f"cockpit: {s.store.conv_id}\ntarget: {s.path}\n"
+                f"evidence: {s.scope_label()}\n{s.banner()}")
+        self._collapsible("/target — current cockpit target", body)
 
     @work
     async def action_sessions(self):
