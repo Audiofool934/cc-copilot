@@ -2734,6 +2734,14 @@ class Cockpit(App):
         qs = [t for r, t in hist if r == "user"]
         if not (0 <= k < len(qs)):
             return
+        if self._busy and self._same_conv(self._answer_store, self.session.store):
+            # an in-flight answer FOR THIS conversation must not re-paint into the
+            # fork or re-persist its (now-abandoned) turn when it completes —
+            # abandon it exactly like action_forget (_answer_done drops it).
+            self._answer_abandoned = True
+            h = self._answer_handle
+            if h is not None:
+                h.cancel()
         question = qs[k]
         self.session.history = hist[:2 * k]             # turns are user/assistant pairs
         self.session.store.truncate(k)                  # persist the fork

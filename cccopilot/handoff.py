@@ -48,7 +48,7 @@ def render(st: S.State, *, agent: str = "claude", generated_at: str = "",
     L.extend(meta)
     push("")
 
-    if since_view is not None and since_view.has_changes:
+    if since_view is not None and not since_view.nothing_new:
         push("## While you were away")
         push("")
         # the since body has its own H1 → demote 2 levels so it nests as H3

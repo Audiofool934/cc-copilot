@@ -460,12 +460,26 @@ def cmd_backends(args) -> int:
     from . import models as MODELS
     from . import narrate as N
     from . import onboard as OB
-    active = BK.resolve(getattr(args, "backend", None)).name
+    active_error = ""
+    try:
+        active = BK.resolve(getattr(args, "backend", None)).name
+    except BK.BackendError as e:
+        active = ""
+        active_error = str(e)
+        sys.stderr.write(f"cc-copilot: {active_error}\n")
+
+    def status_for(be):
+        if not be.available():
+            return False, f"needs: {be.reason()}"
+        if isinstance(be, BK.OpenAICompatBackend) and not be.needs_key:
+            ok, why = be.endpoint_health()
+            return ok, (why if ok else f"needs: {why}")
+        return True, "ready"
+
     print("LLM backends (default selection marked ▶; the deterministic core needs none):")
     for name, be in sorted(BK.registry().items()):
-        ok = be.available()
+        ok, status = status_for(be)
         mark = "▶" if name == active else " "
-        status = "ready" if ok else f"needs: {be.reason()}"
         choice = OB.choice_for_or_none(name)
         label = _ansi_label(f"{name:<11}", choice.brand_hex if choice else "")
         print(f"  {mark} {label} {'✓' if ok else '·'} {status}")
@@ -473,12 +487,15 @@ def cmd_backends(args) -> int:
             for mi in MODELS.models_for(name):
                 note = f" — {mi.note}" if mi.note else ""
                 print(f"      · {mi.id}{note}")
-    print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
+    if active_error:
+        print(f"\nactive: {active_error}")
+    else:
+        print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
     print("pick with --backend <name>, env CC_COPILOT_BACKEND, or a custom "
           "CC_COPILOT_LLM_CMD / CC_COPILOT_API_BASE."
           + ("" if getattr(args, "models", False)
              else "  `--models` lists each provider's curated models."))
-    return 0
+    return 2 if active_error else 0
 
 
 def _fleet_rank(status, verdict):
@@ -507,11 +524,16 @@ def cmd_status(args) -> int:
         note = f"  ({hidden} cc-copilot helper session(s) hidden)" if hidden else ""
         print(f"(no work sessions for {cwd}){note}\n  dir: {locate.project_dir_for(cwd)}")
         return 1
-    chosen = refs if getattr(args, "all", False) else refs[:args.limit]
+    want = len(refs) if getattr(args, "all", False) else args.limit
     rows = []
-    for r in chosen:
-        tr = SRC.parse(r.path)
-        st = S.build(tr)
+    for r in refs:
+        if len(rows) >= want:
+            break          # collected enough parsed rows; a skipped ref never ate a slot
+        try:
+            tr = SRC.parse(r.path)
+            st = S.build(tr)
+        except OSError:
+            continue       # a session deleted/rotated mid-scan: skip it, try the next ref
         a = assess(st)
         sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
         if sigs:
@@ -524,7 +546,7 @@ def cmd_status(args) -> int:
     rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
     hnote = f", {hidden} helper hidden" if hidden else ""
-    print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions{hnote})")
+    print(f"cc-copilot status — {cwd}  ({len(rows)} of {len(refs)} sessions{hnote})")
     multi_agent = len({r.agent for r, *_ in rows}) > 1
     for r, st, a, head in rows:
         g = _GLYPH.get(st.status, "?")
@@ -590,7 +612,7 @@ def cmd_chat(args) -> int:
 
     if getattr(args, "next", False) and not getattr(args, "session", None):
         try:
-            _wait_for_next_session(args.cwd or os.getcwd())
+            args.session = _wait_for_next_session(args.cwd or os.getcwd())
         except KeyboardInterrupt:
             sys.stderr.write("\n")
             return 130
@@ -823,17 +845,24 @@ def cmd_watch(args) -> int:
                 size = -1
             if size != last_size:
                 last_size = size
-                tr = SRC.parse(path)
-                st = S.build(tr)
-                if notify and prev is not None:
-                    from .notify import alert_for_diff, desktop_notify
-                    msg = alert_for_diff(S.diff(prev, st))
-                    if msg:
-                        desktop_notify(f"cc-copilot · {base}", msg)
-                prev = st
-                os.system("clear" if os.name != "nt" else "cls")
-                print(B.render(st))
-                print(f"\n_(watching{mode} · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
+                try:
+                    tr = SRC.parse(path)
+                    st = S.build(tr)
+                    if notify and prev is not None:
+                        from .notify import alert_for_diff, desktop_notify
+                        msg = alert_for_diff(S.diff(prev, st))
+                        if msg:
+                            desktop_notify(f"cc-copilot · {base}", msg)
+                    prev = st
+                    os.system("clear" if os.name != "nt" else "cls")
+                    print(B.render(st))
+                    print(f"\n_(watching{mode} · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
+                except OSError:
+                    # transcript deleted/rotated mid-watch: force a re-parse on the
+                    # next poll instead of leaving last_size committed to a size we
+                    # never actually parsed (which would skip it until a later write).
+                    last_size = -1
+                    sys.stderr.write(f"# transcript unavailable ({time.strftime('%H:%M:%S')}) — waiting…\n")
             time.sleep(interval)
     except KeyboardInterrupt:
         sys.stderr.write("\n# stopped\n")

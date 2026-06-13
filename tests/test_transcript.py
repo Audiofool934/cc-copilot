@@ -43,5 +43,15 @@ class TestTranscript(unittest.TestCase):
         self.assertEqual(tr.title, "test-session-A")
 
 
+class TestTranscriptRobustness(unittest.TestCase):
+    def test_slash_only_command_name_does_not_crash(self):
+        # a command name made only of slashes used to IndexError in _ingest
+        for name in ("/", "//", "///"):
+            tr = T.parse(write([user(f"<command-name>{name}</command-name>", 60),
+                                asst("ok", 1)]))
+            texts = [r.text for r in tr.records if r.kind == "agent_text"]
+            self.assertIn("ok", texts)   # parse got past the slash-only line
+
+
 if __name__ == "__main__":
     unittest.main()

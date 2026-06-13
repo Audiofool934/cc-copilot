@@ -175,7 +175,15 @@ def agents_enabled():
         if isinstance(v, (list, tuple)):
             names = [str(x).strip().lower() for x in v if str(x).strip()]
         else:
-            names = [p.strip().lower() for p in str(v).replace(",", " ").split() if p.strip()]
+            # Fallback parser (no stdlib tomllib on 3.9/3.10) hands us the raw
+            # text `["claude", "codex"]`; unwrap the brackets and per-token
+            # quotes so it doesn't degrade to ['["claude"', '"codex"]'].
+            raw = str(v).strip()
+            if raw.startswith("[") and raw.endswith("]"):
+                raw = raw[1:-1]
+            names = [tok.strip().strip("'\"").lower()
+                     for tok in raw.replace(",", " ").split()]
+            names = [n for n in names if n]
         return names or None
     return None
 

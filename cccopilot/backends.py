@@ -23,13 +23,17 @@ Selection precedence (see :func:`resolve`):
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import re
 import shutil
+import shlex
 import subprocess
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import models as MODELS
@@ -282,10 +286,58 @@ def _cli_help(argv) -> str:
     return out
 
 
+def _flag_supported(help_text: str, flag: str) -> bool:
+    # Token-boundary match so "--tools" does not match "--tools-config" and
+    # "--sandbox" does not match "--sandbox-mode" in a CLI's help text — a
+    # substring hit would launch the narrator with a flag the CLI rejects.
+    return re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])",
+                     help_text or "") is not None
+
+
+def _claude_safety_args(argv) -> list:
+    """Disable Claude Code's ambient agent surfaces when used as a narrator.
+
+    The prompt already instructs the model not to use tools, but cc-copilot's
+    read-only contract should not rely on prompt obedience. Gate every flag on
+    the installed CLI's help so older Claude builds still run.
+    """
+    help_text = _cli_help(argv)
+    extra = []
+    if _flag_supported(help_text, "--tools"):
+        extra += ["--tools", ""]
+    if _flag_supported(help_text, "--no-session-persistence"):
+        extra.append("--no-session-persistence")
+    if _flag_supported(help_text, "--safe-mode"):
+        extra.append("--safe-mode")
+    if _flag_supported(help_text, "--no-chrome"):
+        extra.append("--no-chrome")
+    if _flag_supported(help_text, "--strict-mcp-config"):
+        extra.append("--strict-mcp-config")
+    if _flag_supported(help_text, "--disable-slash-commands"):
+        extra.append("--disable-slash-commands")
+    return extra
+
+
+def _codex_safety_args(argv) -> list:
+    """Keep Codex exec in a read-only, non-persistent narrator mode."""
+    help_text = _cli_help(argv)
+    extra = []
+    if _flag_supported(help_text, "--sandbox"):
+        extra += ["--sandbox", "read-only"]
+    if _flag_supported(help_text, "--ephemeral"):
+        extra.append("--ephemeral")
+    if _flag_supported(help_text, "--ignore-rules"):
+        extra.append("--ignore-rules")
+    if _flag_supported(help_text, "--ignore-user-config"):
+        extra.append("--ignore-user-config")
+    return extra
+
+
 # ── CLI backends ─────────────────────────────────────────────────────────
 
 class CliBackend(Backend):
-    def __init__(self, name, argv, model_args=None, cwd=None, flavor=None):
+    def __init__(self, name, argv, model_args=None, cwd=None, flavor=None,
+                 safety_args=None):
         self.name = name
         self.argv = [a for a in argv if a]
         # model_args: callable(model)->list[str], inserted before the prompt
@@ -297,6 +349,9 @@ class CliBackend(Backend):
         # flavor: which native JSONL stream dialect the CLI speaks ("claude" /
         # "codex"); None = no native streaming, stream() falls back to complete().
         self.flavor = flavor
+        # safety_args: callable(argv)->list[str], inserted before model/prompt
+        # args to keep agent CLIs from becoming ambient tool-using agents.
+        self.safety_args = safety_args
 
     def _bin(self):
         return self.argv[0] if self.argv else ""
@@ -309,7 +364,10 @@ class CliBackend(Backend):
         return f"`{self._bin()}` not found on PATH"
 
     def _full_argv(self, prompt, model, extra=None):
-        argv = list(self.argv) + list(extra or [])
+        argv = list(self.argv)
+        if self.safety_args:
+            argv += list(self.safety_args(self.argv))
+        argv += list(extra or [])
         if model and self.model_args:
             argv += list(self.model_args(model))
         return argv + [prompt]
@@ -445,6 +503,38 @@ class OpenAICompatBackend(Backend):
     def reason(self) -> str:
         return f"set {self.key_env}" if self.needs_key else "endpoint unreachable"
 
+    def endpoint_health(self, timeout: float = 0.6) -> tuple:
+        """Lightweight reachability probe for no-key local/custom endpoints.
+
+        This intentionally does not call /chat/completions with a model: the
+        status command only needs to avoid claiming "ready" when there is no
+        server listening. Any HTTP response from the origin means the endpoint
+        is reachable; connection failures mean it is not.
+        """
+        if self.needs_key and not self._key():
+            return False, self.reason()
+        try:
+            u = urllib.parse.urlsplit(self.endpoint)
+            if u.scheme not in ("http", "https") or not u.netloc:
+                return False, "invalid endpoint"
+            origin = urllib.parse.urlunsplit((u.scheme, u.netloc, "/", "", ""))
+            req = urllib.request.Request(origin, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout):
+                return True, "endpoint reachable"
+        except ValueError:
+            # urlsplit() itself raises on a malformed URL (e.g. an unterminated
+            # IPv6 literal like "http://[::1") before any request is made.
+            return False, "invalid endpoint"
+        except urllib.error.HTTPError:
+            return True, "endpoint reachable"
+        except urllib.error.URLError as e:
+            return False, f"endpoint unreachable: {getattr(e, 'reason', e)}"
+        except (TimeoutError, OSError, http.client.HTTPException) as e:
+            # http.client.HTTPException (BadStatusLine, RemoteDisconnected, ...)
+            # is NOT an OSError, so a port that accepts TCP but speaks no HTTP
+            # would otherwise crash the status command instead of reporting it.
+            return False, f"endpoint unreachable: {e}"
+
     def _headers(self):
         headers = {"Content-Type": "application/json"}
         key = self._key()
@@ -484,8 +574,10 @@ class OpenAICompatBackend(Backend):
                 output_tokens=u.get("completion_tokens", 0) or 0,
                 cached_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0)
         try:
+            # content is None for tool-call-only responses; .strip() would then
+            # raise AttributeError, so fold it into the unexpected-shape path.
             return data["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, TypeError):
+        except (KeyError, IndexError, TypeError, AttributeError):
             raise BackendError(f"{self.name} unexpected response: "
                                f"{json.dumps(data, ensure_ascii=False)[:200]}")
 
@@ -583,13 +675,15 @@ def registry() -> dict:
         # cwd=tmp so their per-call session logs don't pollute your project list.
         "claude": CliBackend("claude", [_claude_bin(), "-p"],
                              model_args=lambda m: ["--model", m],
-                             cwd=tempfile.gettempdir(), flavor="claude"),
+                             cwd=tempfile.gettempdir(), flavor="claude",
+                             safety_args=_claude_safety_args),
         # --skip-git-repo-check: we run codex in a neutral temp dir (not the
         # watched repo), so it must not insist on being inside a git project.
         "codex":  CliBackend("codex", [shutil.which("codex") or "codex", "exec",
                                        "--skip-git-repo-check"],
                              model_args=lambda m: ["-c", f"model={m}"],
-                             cwd=tempfile.gettempdir(), flavor="codex"),
+                             cwd=tempfile.gettempdir(), flavor="codex",
+                             safety_args=_codex_safety_args),
         "gemini": CliBackend("gemini", [shutil.which("gemini") or "gemini", "-p"],
                              model_args=lambda m: ["-m", m]),
         "llm":    CliBackend("llm", [shutil.which("llm") or "llm"],
@@ -654,7 +748,14 @@ def resolve(name: str = None) -> Backend:
     if env:
         return resolve(env)
     if os.environ.get("CC_COPILOT_LLM_CMD", "").strip():
-        return CliBackend("custom-cli", os.environ["CC_COPILOT_LLM_CMD"].split())
+        try:
+            cmd = shlex.split(os.environ["CC_COPILOT_LLM_CMD"])
+        except ValueError as e:
+            raise BackendError(
+                f"CC_COPILOT_LLM_CMD is not valid shell syntax: {e}")
+        if not cmd:
+            raise BackendError("CC_COPILOT_LLM_CMD is empty after parsing")
+        return CliBackend("custom-cli", cmd)
     if "custom" in reg:
         return reg["custom"]
     return reg["codex"]   # default backend: codex via ChatGPT OAuth

@@ -30,6 +30,18 @@ def _now_iso() -> str:
     import datetime
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
+
+def _same_file(a: str, b: str) -> bool:
+    """samefile() that degrades to a path comparison when a side is missing.
+
+    In history-only mode the observed transcript can be deleted while the
+    cockpit keeps its path, so os.path.samefile would raise FileNotFoundError.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.abspath(a) == os.path.abspath(b)
+
 _HELP = """commands (LLM-free except questions and the /since recap — /since --raw stays deterministic):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
@@ -490,7 +502,7 @@ class ChatSession:
         out = ["agent sessions in this project (newest first — `/use <n|id>` changes evidence):"]
         for i, r in enumerate(refs, 1):
             p = r.path
-            cur = "*" if os.path.samefile(p, self.path) else " "
+            cur = "*" if _same_file(p, self.path) else " "
             title = (r.title or "(untitled)")[:50]
             out.append(f" {cur}{i:>2}. {title:<50}  {r.session_id[:8]}  {r.size // 1024:>6} KB")
         return "\n".join(out)
@@ -501,7 +513,7 @@ class ChatSession:
         self._siblings()
         refs = getattr(self, "_session_refs", [])
         target = None
-        if arg.isdigit():
+        if arg.isascii() and arg.isdigit():
             i = int(arg) - 1
             if 0 <= i < len(refs):
                 target = refs[i].path
@@ -512,7 +524,7 @@ class ChatSession:
                     break
         if target is None:
             return f"no session matching {arg!r} — try /sessions"
-        if os.path.samefile(target, self.path):
+        if _same_file(target, self.path):
             return "already attached to that session"
         self.switch_path(target)
         return (f"evidence session → {os.path.basename(target)[:-6][:8]} "
@@ -539,6 +551,9 @@ class ChatSession:
         if os.path.abspath(cur) == os.path.abspath(self.path):
             return "already observing your live session"
         p = self.switch_to_here()
+        if not p:      # the live session vanished between the two detect calls
+            return ("no current session detected — run cc-copilot inside a live "
+                    "Claude Code or Codex session.")
         return (f"now observing your live session → "
                 f"{os.path.basename(p)[:-6][:8]}\n{self.banner()}")
 

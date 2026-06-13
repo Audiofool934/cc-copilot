@@ -2,9 +2,10 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from cccopilot import cli, observe as O, scope as SC, state as S, transcript as T
-from tests.util import asst, result, tool, user, write
+from tests.util import asst, result, state, tool, user, write
 
 
 def _write_at(path, events):
@@ -64,6 +65,39 @@ class TestObserveReport(unittest.TestCase):
         args = cli.build_parser().parse_args(["observe", "--scope", "repo"])
         self.assertEqual(args.cmd, "observe")
         self.assertEqual(args.scope, SC.PROJECT)
+
+
+class TestRecentEvidenceOrdering(unittest.TestCase):
+    def test_recent_evidence_orders_across_sessions_by_time_not_line(self):
+        # OLD: a stale failure buried at a HIGH line number.
+        old = [user("old session", 4000)]
+        for i in range(8):
+            old += [asst(f"step {i}", 3900 - i * 10)]
+        old += [tool("Bash", {"command": "make"}, "t1", 3700),
+                result("t1", "boom", is_error=True, ago=3600)]
+        # NEW: a fresh failure at a LOW line number.
+        new = [user("new session", 100),
+               tool("Bash", {"command": "pytest"}, "t2", 60),
+               result("t2", "fail", is_error=True, ago=30)]
+
+        item_old = O.ObservationItem(ref=None, st=state(old), assessment=None,
+                                     session_id="OLD", title="")
+        item_new = O.ObservationItem(ref=None, st=state(new), assessment=None,
+                                     session_id="NEW", title="")
+        fails = [r for r in O._recent_evidence([item_old, item_new], True)
+                 if "failed" in r]
+        order = ["NEW" if "`NEW`" in r else "OLD" for r in fails]
+        self.assertEqual(order.index("NEW"), 0)   # fresh failure first, not the long stale one
+
+
+class TestTimelineRobustness(unittest.TestCase):
+    def test_unreadable_transcript_is_a_clean_warn(self):
+        # build() parses the anchor transcript unconditionally; a non-ValueError
+        # (e.g. PermissionError on a vanished/locked file) used to escape.
+        with mock.patch("cccopilot.observe.os.path.isfile", return_value=True), \
+             mock.patch.object(O.SRC, "parse", side_effect=PermissionError("nope")):
+            lines = O.timeline_lines("/tmp/whatever.jsonl", st=None, scope="session")
+        self.assertEqual(lines, [("warn", "attention: transcript unavailable")])
 
 
 if __name__ == "__main__":

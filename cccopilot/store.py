@@ -199,6 +199,26 @@ class Store:
     def memory_path(self) -> str:
         return os.path.join(self.dir, "memory.json")
 
+    @property
+    def lock_path(self) -> str:
+        # A stable per-conversation lock file. We hold the exclusive lock on
+        # THIS (never replaced) rather than on turns.jsonl, so truncate()'s
+        # atomic os.replace of the log cannot orphan the lock and silently drop
+        # a concurrent append — flock is per-inode, and replace swaps the inode.
+        return os.path.join(self.dir, ".lock")
+
+    @contextlib.contextmanager
+    def _dir_locked(self):
+        """Hold this conversation's exclusive lock across a whole write critical
+        section. Every mutator (append / truncate / state) takes it, so they
+        serialize across threads AND processes (two cockpits on one session),
+        and across the inode swap truncate() performs on turns.jsonl."""
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "r+", encoding="utf-8") as lock_fh:
+            with _locked(lock_fh):
+                yield
+
     # ---- write (best-effort) ----
     def record_turn(self, q: str, a: str, st=None, backend=None, model=None,
                     usage=None) -> bool:
@@ -223,16 +243,17 @@ class Store:
                 self.scope = scope
             if scope_sessions is not None:
                 self.scope_sessions = list(scope_sessions or [])
-            os.makedirs(self.dir, mode=0o700, exist_ok=True)
-            _chmod(self.dir, 0o700)
-            _chmod(_conv_root(), 0o700)
-            _chmod(state_home(), 0o700)
-            prev = _read_json(self.meta_path) or {}
-            now = time.time()
-            self._write_meta(int(prev.get("turns", 0) or 0),
-                             prev.get("last_q", ""), prev.get("last_a_head", ""),
-                             backend or prev.get("backend"),
-                             model or prev.get("model"))
+            with self._dir_locked():
+                _chmod(self.dir, 0o700)
+                _chmod(_conv_root(), 0o700)
+                _chmod(state_home(), 0o700)
+                prev = _read_json(self.meta_path) or {}
+                # Re-derive the count from the LOG under the lock — writing back
+                # a stale meta count could stomp a concurrent turn's increment.
+                self._write_meta(self._count_turns(),
+                                 prev.get("last_q", ""), prev.get("last_a_head", ""),
+                                 backend or prev.get("backend"),
+                                 model or prev.get("model"))
             return True
         except Exception as e:
             _warn_once(f"cc-copilot: cockpit state write failed ({e}); continuing in-memory only")
@@ -246,15 +267,15 @@ class Store:
             self.title = (getattr(tr, "title", "") or "") or self.title
 
     def _write(self, q, a, st, backend, model, usage=None):
-        os.makedirs(self.dir, mode=0o700, exist_ok=True)
-        _chmod(self.dir, 0o700)
-        _chmod(_conv_root(), 0o700)
-        _chmod(state_home(), 0o700)
-        fd = os.open(self.turns_path, os.O_RDWR | os.O_CREAT, 0o600)
-        # errors="replace" so a torn (partial multibyte) final line from a prior
-        # crash can't make our own read raise; newline="" so endswith("\n") is exact.
-        with os.fdopen(fd, "r+", encoding="utf-8", errors="replace", newline="") as fh:
-            with _locked(fh):
+        with self._dir_locked():
+            _chmod(self.dir, 0o700)
+            _chmod(_conv_root(), 0o700)
+            _chmod(state_home(), 0o700)
+            fd = os.open(self.turns_path, os.O_RDWR | os.O_CREAT, 0o600)
+            # errors="replace" so a torn (partial multibyte) final line from a
+            # prior crash can't make our own read raise; newline="" so
+            # endswith("\n") is exact.
+            with os.fdopen(fd, "r+", encoding="utf-8", errors="replace", newline="") as fh:
                 fh.seek(0)
                 existing = fh.read()
                 prefix = ""
@@ -280,6 +301,15 @@ class Store:
             if obj is not None and obj.get("kind") == "turn":
                 n += 1
         return n
+
+    def _count_turns(self) -> int:
+        """Turn count read straight from the log (0 if absent). Call under
+        _dir_locked so it reflects committed state, never a stale meta cache."""
+        try:
+            with open(self.turns_path, "r", encoding="utf-8", errors="replace") as fh:
+                return self._count_turns_locked(fh)
+        except OSError:
+            return 0
 
     def _head(self) -> dict:
         return {"kind": "head", "schema": 2, "conv_id": self.conv_id,
@@ -408,9 +438,9 @@ class Store:
         if not self.enabled or not os.path.isfile(self.turns_path):
             return False
         try:
-            fd = os.open(self.turns_path, os.O_RDWR, 0o600)
-            with os.fdopen(fd, "r+", encoding="utf-8", errors="replace", newline="") as fh:
-                with _locked(fh):
+            with self._dir_locked():
+                fd = os.open(self.turns_path, os.O_RDWR, 0o600)
+                with os.fdopen(fd, "r+", encoding="utf-8", errors="replace", newline="") as fh:
                     fh.seek(0)
                     head_line, turns = None, []
                     for line in fh:
@@ -431,6 +461,8 @@ class Store:
                         tf.writelines(nl for nl, _ in kept)
                         tf.flush()
                         os.fsync(tf.fileno())
+                    # Safe under _dir_locked: the lock is on the stable .lock
+                    # file, not on this inode that replace is about to swap.
                     os.replace(tmp, self.turns_path)
                     _fsync_dir(self.dir)
                     last = kept[-1][1] if kept else {}
@@ -571,9 +603,12 @@ def _parse(line):
 def _read_json(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+            d = json.load(fh)
     except (OSError, ValueError):
         return None
+    # Callers (header/from_meta, list_conversations) index this like a dict; an
+    # externally-edited or legacy non-object meta.json must not crash them.
+    return d if isinstance(d, dict) else None
 
 
 def _title_from(q: str) -> str:

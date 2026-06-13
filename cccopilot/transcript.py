@@ -241,7 +241,8 @@ def _ingest(tr: Transcript, line: int, obj: dict) -> None:
                 if cmd:
                     # the user's real action: they invoked /foo (we drop the
                     # separate isMeta line carrying the expanded template body)
-                    base = cmd.lstrip("/").split()[0].lower() if cmd else ""
+                    parts = cmd.lstrip("/").split()
+                    base = parts[0].lower() if parts else ""
                     tr.records.append(Record(line, "human", ts, _raw(obj),
                                              text=cmd, housekeeping=base in LOCAL_COMMANDS))
                 elif _looks_like_human_prompt(content):

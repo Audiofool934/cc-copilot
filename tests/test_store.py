@@ -9,7 +9,9 @@ import os
 import stat
 import tempfile
 import threading
+import time
 import unittest
+from unittest import mock
 
 from cccopilot import store as ST
 
@@ -333,6 +335,86 @@ class TestDurability(_Base):
         finally:
             os.fsync = real
         self.assertGreaterEqual(len(calls), 2)            # log fd + meta tmp fd
+
+
+class TestConcurrentWrites(_Base):
+    def test_truncate_does_not_lose_a_concurrent_turn(self):
+        # Two cockpits on one session: A rewinds (truncate) while B records a
+        # turn. The lock must serialize them on a stable file so B's turn lands
+        # in the post-truncate log instead of an orphaned inode (the C1 bug).
+        path = "/x/sess-uuid.jsonl"
+        seed = ST.Store.open_for(path, enabled=True, tr=_Tr())
+        for i in range(4):
+            seed.record_turn(f"q{i}", "a", st=_St(_Tr()))
+
+        real_replace = os.replace
+        in_replace = threading.Event()
+
+        def slow_replace(src, dst, *a, **k):
+            if str(dst).endswith("turns.jsonl"):
+                in_replace.set()      # A is inside truncate, holding the lock…
+                time.sleep(0.4)       # …give B time to block on that same lock
+            return real_replace(src, dst, *a, **k)
+
+        errors = []
+
+        def do_truncate():
+            try:
+                with mock.patch("cccopilot.store.os.replace", side_effect=slow_replace):
+                    ST.Store.open_for(path, enabled=True, tr=_Tr()).truncate(2)
+            except Exception as e:                       # pragma: no cover
+                errors.append(("truncate", e))
+
+        def do_record():
+            try:
+                in_replace.wait(2)    # only append once A holds the lock
+                ST.Store.open_for(path, enabled=True, tr=_Tr()).record_turn(
+                    "BNEW", "a", st=_St(_Tr()))
+            except Exception as e:                       # pragma: no cover
+                errors.append(("record", e))
+
+        ta = threading.Thread(target=do_truncate)
+        tb = threading.Thread(target=do_record)
+        ta.start(); tb.start(); ta.join(); tb.join()
+        self.assertEqual(errors, [])
+
+        qs = []
+        with open(seed.turns_path, encoding="utf-8") as fh:
+            for line in fh:
+                o = ST._parse(line)
+                if o and o.get("kind") == "turn":
+                    qs.append(o.get("q"))
+        meta = ST._read_json(seed.meta_path)
+        self.assertIn("BNEW", qs)                         # the concurrent turn survived
+        self.assertEqual(meta["turns"], len(qs))          # meta matches the visible log
+
+    def test_record_state_rederives_count_from_log_not_stale_meta(self):
+        # record_state must not write back a stale meta count (the C4 stomp) —
+        # it re-derives the count from the actual log under the lock.
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        for i in range(3):
+            s.record_turn(f"q{i}", "a", st=_St(_Tr()))
+        meta = ST._read_json(s.meta_path)
+        meta["turns"] = 99                               # simulate a divergent/stale meta
+        with open(s.meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+        s.record_state(_St(_Tr()), scope="session")
+        self.assertEqual(ST._read_json(s.meta_path)["turns"], 3)
+
+
+class TestReadJson(unittest.TestCase):
+    def test_non_dict_json_is_rejected(self):
+        # an externally-edited / legacy meta.json that is not an object must not
+        # crash header()/list_conversations(), which index it like a dict.
+        d = tempfile.mkdtemp(prefix="ccstore-rj-")
+        p = os.path.join(d, "meta.json")
+        for bad in ("[1, 2, 3]", '"text"', "42", "null"):
+            with open(p, "w") as f:
+                f.write(bad)
+            self.assertIsNone(ST._read_json(p))
+        with open(p, "w") as f:
+            f.write('{"turns": 3}')
+        self.assertEqual(ST._read_json(p), {"turns": 3})
 
 
 if __name__ == "__main__":

@@ -283,7 +283,7 @@ def _select_records(sources: list, question: str, history: list, terms: list) ->
             add(src, src.by_line.get(f.call_line), 67, "failed tool call")
 
     # Expand explicit citations or line references from the question/history.
-    cited_text = question + "\n" + "\n".join(t for _role, t in history)
+    cited_text = question + "\n" + "\n".join((t or "") for _role, t in history)
     for sid, line in _line_refs(cited_text):
         for src in _matching_sources(sources, sid):
             add(src, src.by_line.get(line), 90, "cited line", window=LINE_WINDOW_RADIUS)

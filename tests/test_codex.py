@@ -217,5 +217,27 @@ class TestCodexDiscovery(unittest.TestCase):
         self.assertFalse(src.owns("/home/u/.claude/projects/p/sess.jsonl"))
 
 
+class TestCodexStructuredOutput(unittest.TestCase):
+    def test_image_tool_output_does_not_leak_base64(self):
+        # a tool whose output is a list of content blocks (image) used to
+        # json.dumps the whole list, dumping multi-KB base64 into the brief.
+        big_b64 = "iVBORw0KGgo" + "A" * 6000
+        call = U.envelope("response_item",
+                          {"type": "function_call", "name": "screenshot",
+                           "call_id": "img1", "arguments": "{}"})
+        out_blocks = [{"type": "input_text", "text": "screenshot captured"},
+                      {"type": "input_image",
+                       "image_url": f"data:image/png;base64,{big_b64}"}]
+        result = U.envelope("response_item",
+                            {"type": "function_call_output",
+                             "call_id": "img1", "output": out_blocks})
+        tr, _ = _state([call, result])
+        bodies = [r.text for r in tr.records if r.kind == "tool_result"]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn("[image]", bodies[0])
+        self.assertIn("screenshot captured", bodies[0])
+        self.assertNotIn(big_b64[:24], bodies[0])    # base64 never reaches the body
+
+
 if __name__ == "__main__":
     unittest.main()

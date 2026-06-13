@@ -2094,6 +2094,33 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
         # the completed turn must NOT re-create the files /forget removed
         self.assertFalse(os.path.exists(sess.store.turns_path))
 
+    async def test_rewind_midstream_aborts_and_does_not_resurrect(self):
+        from cccopilot import backends as BK
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for i in range(2):                           # two committed turns
+                app._answer_done(f"q{i}", f"a{i} [L1]", True,
+                                 app.session.st, app.session.store)
+                await pilot.pause()
+            app._busy = True                             # a third answer is mid-stream…
+            app._answer_store = sess.store               # …for THIS conversation
+            app._answer_chunk(sess.store, "doomed partial ")
+            await pilot.pause()
+            app._rewind_to(1)                            # fork back before the in-flight turn
+            await pilot.pause()
+            self.assertTrue(app._answer_abandoned)
+            app._answer_done("q2", "doomed answer", True, sess.st, sess.store,
+                             BK.Usage(10, 5))            # late completion: dropped
+            await pilot.pause()
+            self.assertFalse(app._busy)
+            self.assertFalse(app._answer_abandoned)      # consumed
+        # the fork kept only turn #0; the abandoned turn never reached history/disk
+        self.assertEqual(sess.history, [("user", "q0"), ("assistant", "a0 [L1]")])
+        self.assertEqual(sess.store.load_history(),
+                         [("user", "q0"), ("assistant", "a0 [L1]")])
+
     async def test_forget_other_conv_leaves_inflight_answer_alone(self):
         # answer running for conversation A; user switches to B and /forgets B —
         # A's unrelated turn must NOT be cancelled or dropped
