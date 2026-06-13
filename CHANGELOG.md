@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 — 2026-06-13
 
 **Copying text from the cockpit is now one key.** Drag to select any message
 text — the tip line above the composer prompts *"Ctrl+Y to copy"* — then
