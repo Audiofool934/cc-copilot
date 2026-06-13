@@ -45,18 +45,20 @@ def _same_file(a: str, b: str) -> bool:
 _HELP = """commands (LLM-free except questions and the /since recap — /since --raw stays deterministic):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
+  /now              recommend the next step from the completed work (LLM; deterministic fallback)
   /since [when]     recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
   /refresh          re-read evidence now
   /scope [name]     show or set evidence range: session, multi-session, project
-  /session          current cockpit target
+  /status           fleet board — every session in this project, neediest first
+  /target           current cockpit target (id, evidence session, scope)
   /sessions         list agent sessions available as evidence
   /here             observe your own current (live) session
   /use <n|id>       change the current evidence session (keeps this cockpit chat)
   /resume           resume another cockpit session
-  /new              start a new independent cockpit session
+  /new              start a new independent cockpit session  (alias: /new-cockpit)
   /history          alias for /resume; with no args shows this cockpit's turns
   /forget           delete THIS cockpit session's saved resume state
   /rewind [n]       fork from an earlier message (list, or re-ask #n)
@@ -124,6 +126,65 @@ def _fmt_conv_list(headers, scope="") -> str:
         out.append(f"  {h.conv_id[:8]}  {LOC.ago(h.updated):>5} ago  {h.turns:>3}t  "
                    f"{(h.title or '(untitled)')[:40]:<40}  {proj}{gone}")
     return "\n".join(out)
+
+
+def _fleet_rank(status, verdict):
+    """Sort key so the sessions that need you float to the top."""
+    if status == "stalled" or verdict == "intervene":
+        return 0
+    if status == "awaiting-agent":
+        return 1
+    if status == "running":
+        return 2 if verdict == "review" else 3
+    if verdict == "review":
+        return 4            # idle, but had unresolved friction
+    if status == "idle":
+        return 5
+    return 6                # empty
+
+
+def render_fleet(cwd, limit=10, show_all=False):
+    """Fleet board: every work session in the project, neediest first. Shared by
+    `cc-copilot status`, the REPL `/status`, and the cockpit `/status`. Returns
+    ``(text, session_count)`` so callers can set an exit code on emptiness."""
+    all_refs = SRC.list_sessions(cwd, include_own=True)
+    refs = [r for r in all_refs if not r.own]
+    hidden = len(all_refs) - len(refs)
+    if not refs:
+        note = f"  ({hidden} cc-copilot helper session(s) hidden)" if hidden else ""
+        return (f"(no work sessions for {cwd}){note}\n  dir: {LOC.project_dir_for(cwd)}", 0)
+    want = len(refs) if show_all else limit
+    rows = []
+    for r in refs:
+        if len(rows) >= want:
+            break          # collected enough parsed rows; a skipped ref never ate a slot
+        try:
+            tr = SRC.parse(r.path)
+            st = S.build(tr)
+        except OSError:
+            continue       # a session deleted/rotated mid-scan: skip it, try the next ref
+        a = A.assess(st)
+        sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
+        if sigs:
+            head = sigs[0].message + (f" [L{sigs[0].evidence[0]}]" if sigs[0].evidence else "")
+        elif st.intents:
+            head = st.intents[-1].text
+        else:
+            head = tr.title or ""
+        rows.append((r, st, a, head))
+    rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
+                             x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
+    hnote = f", {hidden} helper hidden" if hidden else ""
+    out = [f"cc-copilot status — {cwd}  ({len(rows)} of {len(refs)} sessions{hnote})"]
+    multi_agent = len({r.agent for r, *_ in rows}) > 1
+    for r, st, a, head in rows:
+        g = _GLYPH.get(st.status, "?")
+        idle = _dur(st.idle_seconds)
+        clip = " ".join((head or "").split())[:56]
+        tag = f"{r.agent:<6} " if multi_agent else ""
+        out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev  "
+                   f"{tag}{r.session_id[:8]}  {clip}")
+    return "\n".join(out), len(rows)
 
 
 class ChatSession:
@@ -262,6 +323,8 @@ class ChatSession:
             return self.evidence().text
         if c == "/observe":
             return O.render(self.path, self.st, self.scope, sessions=self.scope_sessions)
+        if c == "/now":
+            return self._now()
         if c == "/since" or c.startswith("/since "):
             return self._since(cmd.strip()[6:].strip())
         if c == "/handoff" or c.startswith("/handoff "):
@@ -272,8 +335,10 @@ class ChatSession:
             return self.banner() + "  (refreshed)"
         if c == "/scope" or c.startswith("/scope "):
             return self._scope(cmd.strip()[6:].strip())
-        if c == "/session":
+        if c == "/target":
             return f"cockpit: {self.store.conv_id}\ntarget: {self.path}\nevidence: {self.scope_label()}\n{self.banner()}"
+        if c == "/status":
+            return render_fleet(self.cwd or os.getcwd())[0]
         if c == "/sessions":
             return self._list_sessions()
         if c == "/here":
@@ -463,6 +528,32 @@ class ChatSession:
         body = view.text.split("\n", 1)[1] if view.text.startswith("#") else view.text
         return (f"# 🛰  recap — since {view.label}\n\n{recap.strip()}\n\n"
                 f"---\n_evidence — every `[L…]` is a transcript line:_\n{body}")
+
+    # ---- /now: recommend the next step from the completed work --------------
+    def _now(self) -> str:
+        """What to do next: an LLM recommendation grounded in the evidence, with a
+        deterministic next-step (the observer's ranked decision) as the always-true
+        fallback when no backend is available or the recap fails."""
+        if self.st is None:
+            return "(no live session — transcript gone; nothing to recommend)"
+        det = O.next_step(self.path, self.st, self.scope, sessions=self.scope_sessions)
+        if not N.available(self.backend):
+            return det
+        try:
+            rec = N.next_step_brief(self.evidence().text, model=self.model, backend=self.backend)
+        except Exception as e:
+            return det + f"\n\n> _next-step recap unavailable ({e}); deterministic suggestion above._"
+        return self._compose_now(rec, det)
+
+    @staticmethod
+    def _compose_now(rec: str, det: str) -> str:
+        """LLM recommendation on top, the deterministic next-step beneath it as a
+        grounded anchor (its first line — the primary ranked decision)."""
+        body = f"# 🧭 next step\n\n{rec.strip()}"
+        foot = det.splitlines()[0].strip() if det else ""
+        if foot:
+            body += f"\n\n---\n_deterministic next-step:_ {foot}"
+        return body
 
     def _handoff(self, arg: str):
         if self.st is None:

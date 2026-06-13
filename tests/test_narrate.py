@@ -41,6 +41,19 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertNotIn("current brief", prompt.lower())
         self.assertNotIn("=== BRIEF", prompt)
 
+    def test_next_step_prompt_asks_for_the_next_step_grounded_in_evidence(self):
+        backend = CaptureBackend()
+
+        out = N.next_step_brief("# 🛰  cc-copilot brief — demo\nbody [L7]", backend=backend)
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("do NEXT", prompt)                # the next-step task
+        self.assertIn("cited evidence", prompt)
+        self.assertIn("=== EVIDENCE CONTEXT", prompt)   # grounding pack present
+        self.assertIn("[L7]", prompt)                   # citations preserved
+        self.assertNotIn("# 🛰  cc-copilot brief", prompt)   # identity cues stripped
+
     def test_chat_history_uses_budget_instead_of_fixed_turn_count(self):
         backend = CaptureBackend()
         history = []
@@ -54,6 +67,26 @@ class TestNarratePrompt(unittest.TestCase):
         prompt = backend.prompts[0]
         self.assertIn("question 0", prompt)
         self.assertIn("answer 9", prompt)
+
+
+class TestNextStepReconciliation(unittest.TestCase):
+    """`/now` (`_NEXT_STEP_TASK`) is the sole home of the next-step recommendation;
+    `/since` and `--narrate` recap + orient but no longer prescribe the next action."""
+
+    def test_since_recap_cedes_next_step_to_now(self):
+        self.assertNotIn("thing to look at next", N._SINCE_RECAP_TASK)
+        self.assertIn("do NOT prescribe the next action", N._SINCE_RECAP_TASK)
+
+    def test_narrate_task_cedes_next_step_to_now(self):
+        self.assertNotIn("thing to look at next", N._NARRATE_TASK)
+        self.assertIn("do NOT prescribe the next action", N._NARRATE_TASK)
+
+    def test_dead_narrate_helpers_removed(self):
+        # narrate() / narrate_brief() had zero callers; only the streaming sibling
+        # (the --narrate path) survives.
+        self.assertFalse(hasattr(N, "narrate"))
+        self.assertFalse(hasattr(N, "narrate_brief"))
+        self.assertTrue(hasattr(N, "narrate_brief_stream"))
 
 
 if __name__ == "__main__":

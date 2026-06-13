@@ -541,6 +541,72 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.recap_since, N.available = real_recap, real_avail
 
+    async def test_cockpit_now_renders_grounded_next_step_async(self):
+        """/now recommends the next step on a worker thread (no UI freeze) and
+        renders the recommendation with the deterministic anchor beneath it."""
+        from cccopilot import narrate as N
+        real_next, real_avail = N.next_step_brief, N.available
+        N.available = lambda be=None: True
+        N.next_step_brief = lambda text, model=None, backend=None: "DO_THIS_NEXT [L3]"
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/now")                             # starts the worker
+                await app.workers.wait_for_complete()         # let the thread finish
+                await pilot.pause()                           # process call_from_thread
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertIn("DO_THIS_NEXT", blob)           # the recommendation landed
+                self.assertIn("next step", blob)              # the heading
+                self.assertIn("deterministic next-step", blob)  # grounded anchor beneath
+                self.assertFalse(app._busy)                   # spinner cleared
+        finally:
+            N.next_step_brief, N.available = real_next, real_avail
+
+    async def test_status_and_target_render_in_chat(self):
+        """/status pulls the fleet board (independent of pinned evidence); /target
+        shows the current cockpit readout."""
+        from cccopilot import chat as C
+        real = C.render_fleet
+        C.render_fleet = lambda cwd, **k: ("cc-copilot status — DEMO\n 🔴 stalled", 1)
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/target")
+                await pilot.pause()
+                app._meta("/status")
+                await pilot.pause()
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertIn("cockpit:", blob)                   # /target readout
+                self.assertIn("cc-copilot status — DEMO", blob)   # /status board
+        finally:
+            C.render_fleet = real
+
+    async def test_cockpit_now_without_backend_is_instant_deterministic(self):
+        """With no backend, /now shows the deterministic next-step immediately and
+        never enters the busy/worker path."""
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/now")
+                await pilot.pause()
+                blob = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+                self.assertIn("→", blob)                      # deterministic decision shown
+                self.assertFalse(app._busy)                   # never went busy
+        finally:
+            N.available = real_avail
+
     async def test_cockpit_since_recap_dropped_after_evidence_switch(self):
         """If the user switches evidence while a /since recap runs, the result —
         whose citations are about the OLD session — must be dropped, not rendered
