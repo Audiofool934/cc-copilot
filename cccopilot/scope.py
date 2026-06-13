@@ -34,12 +34,36 @@ _SKIP_DIRS = {
     ".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "dist", "build",
     "target", ".next", ".turbo", ".cache", "coverage", ".idea", ".vscode",
+    ".aws", ".azure", ".docker", ".gnupg", ".gcloud", "gcloud",
+    ".kube", ".ssh", ".terraform", ".pulumi",
 }
+_SKIP_REL_PREFIXES = (".config/gcloud/",)
 _SECRET_NAMES = {
     ".env", ".env.local", ".envrc", "id_rsa", "id_dsa", "id_ecdsa",
-    "id_ed25519", "credentials.json", "secrets.json",
+    "id_ed25519", ".npmrc", ".pypirc", ".netrc", "_netrc",
+    ".pgpass", ".htpasswd", ".dockercfg", ".dockerconfigjson",
+    "credentials", "credentials.json", "credentials.ini",
+    "credentials.yaml", "credentials.yml", "secrets.json",
+    "secrets.yaml", "secrets.yml", "token.json", "auth.json",
+    "application_default_credentials.json", "google_application_credentials.json",
+    "service-account.json", "service_account.json", "firebase-service-account.json",
+    "terraform.tfvars",
+    ".bash_history", ".zsh_history", ".sh_history", ".python_history",
+    ".node_repl_history", ".irb_history", ".mysql_history", ".psql_history",
+    ".sqlite_history", ".rediscli_history",
 }
-_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".sqlite", ".db")
+_SECRET_SUFFIXES = (
+    ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore",
+    ".secret", ".secrets", ".token", ".credentials",
+    ".tfvars", ".tfvars.json", ".sqlite", ".db",
+)
+# Credential blobs whose basename varies (firebase-adminsdk-ab12.json,
+# my-service-account-prod.json). Matched only against *.json so ordinary source
+# named service_account.go / secrets_test.py is not swept up — see _skip_file.
+_SECRET_NAME_FRAGMENTS = (
+    "application_default_credentials", "service-account", "service_account",
+    "firebase-adminsdk",
+)
 _TEXT_EXTS = {
     ".py", ".md", ".toml", ".txt", ".json", ".yaml", ".yml", ".ini", ".cfg",
     ".sh", ".bash", ".zsh", ".js", ".jsx", ".ts", ".tsx", ".css", ".html",
@@ -474,7 +498,8 @@ def _git(root: str, *args: str) -> str:
 def _text_files(root: str, max_files: int) -> list:
     out = []
     for base, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".cache"))
+        dirs[:] = sorted(d for d in dirs
+                         if d not in _SKIP_DIRS and not d.startswith(".cache"))
         for name in sorted(files):
             p = os.path.join(base, name)
             rel = os.path.relpath(p, root)
@@ -489,9 +514,17 @@ def _text_files(root: str, max_files: int) -> list:
 
 def _skip_file(name: str, rel: str) -> bool:
     low = name.lower()
+    rel_low = rel.replace(os.sep, "/").lower()
+    parts = rel_low.split("/")
+    if any(rel_low.startswith(prefix) for prefix in _SKIP_REL_PREFIXES):
+        return True
+    if any(part in _SKIP_DIRS for part in parts[:-1]):
+        return True
     if low in _SECRET_NAMES or low.startswith(".env."):
         return True
     if low.endswith(_SECRET_SUFFIXES):
+        return True
+    if low.endswith(".json") and any(f in low for f in _SECRET_NAME_FRAGMENTS):
         return True
     if rel.startswith(".git" + os.sep):
         return True

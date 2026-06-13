@@ -460,12 +460,26 @@ def cmd_backends(args) -> int:
     from . import models as MODELS
     from . import narrate as N
     from . import onboard as OB
-    active = BK.resolve(getattr(args, "backend", None)).name
+    active_error = ""
+    try:
+        active = BK.resolve(getattr(args, "backend", None)).name
+    except BK.BackendError as e:
+        active = ""
+        active_error = str(e)
+        sys.stderr.write(f"cc-copilot: {active_error}\n")
+
+    def status_for(be):
+        if not be.available():
+            return False, f"needs: {be.reason()}"
+        if isinstance(be, BK.OpenAICompatBackend) and not be.needs_key:
+            ok, why = be.endpoint_health()
+            return ok, (why if ok else f"needs: {why}")
+        return True, "ready"
+
     print("LLM backends (default selection marked ▶; the deterministic core needs none):")
     for name, be in sorted(BK.registry().items()):
-        ok = be.available()
+        ok, status = status_for(be)
         mark = "▶" if name == active else " "
-        status = "ready" if ok else f"needs: {be.reason()}"
         choice = OB.choice_for_or_none(name)
         label = _ansi_label(f"{name:<11}", choice.brand_hex if choice else "")
         print(f"  {mark} {label} {'✓' if ok else '·'} {status}")
@@ -473,12 +487,15 @@ def cmd_backends(args) -> int:
             for mi in MODELS.models_for(name):
                 note = f" — {mi.note}" if mi.note else ""
                 print(f"      · {mi.id}{note}")
-    print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
+    if active_error:
+        print(f"\nactive: {active_error}")
+    else:
+        print(f"\nactive: {N.backend_name(getattr(args, 'backend', None))}")
     print("pick with --backend <name>, env CC_COPILOT_BACKEND, or a custom "
           "CC_COPILOT_LLM_CMD / CC_COPILOT_API_BASE."
           + ("" if getattr(args, "models", False)
              else "  `--models` lists each provider's curated models."))
-    return 0
+    return 2 if active_error else 0
 
 
 def _fleet_rank(status, verdict):
@@ -590,7 +607,7 @@ def cmd_chat(args) -> int:
 
     if getattr(args, "next", False) and not getattr(args, "session", None):
         try:
-            _wait_for_next_session(args.cwd or os.getcwd())
+            args.session = _wait_for_next_session(args.cwd or os.getcwd())
         except KeyboardInterrupt:
             sys.stderr.write("\n")
             return 130

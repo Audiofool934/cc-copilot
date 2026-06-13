@@ -322,6 +322,32 @@ class TestCmdChatNext(unittest.TestCase):
                 rc = cli.cmd_chat(self._args(["cockpit", "--next", sess]))
             self.assertEqual(rc, 2)   # ValueError path: got past the wait
 
+    def test_next_uses_the_path_returned_by_wait(self):
+        with tempfile.TemporaryDirectory() as td:
+            waited = os.path.join(td, "waited.jsonl")
+            raced = os.path.join(td, "raced.jsonl")
+            for p in (waited, raced):
+                with open(p, "w") as f:
+                    f.write("{}\n")
+            resolved_sessions = []
+
+            def fake_resolve(cwd_arg, session_arg=None, **kw):
+                self.assertEqual(cwd_arg, td)
+                resolved_sessions.append(session_arg)
+                return session_arg if session_arg else raced
+
+            session = mock.Mock()
+            with mock.patch.object(cli, "_wait_for_next_session", return_value=waited), \
+                 mock.patch.object(cli.SRC, "resolve", side_effect=fake_resolve), \
+                 mock.patch("cccopilot.onboard.needs_onboarding", return_value=False), \
+                 mock.patch("cccopilot.chat.ChatSession", return_value=session):
+                rc = cli.cmd_chat(self._args(["chat", "--next", "--cwd", td,
+                                              "--no-persist"]))
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(resolved_sessions, [waited])
+            self.assertEqual(session.loop.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
