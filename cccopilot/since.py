@@ -47,8 +47,13 @@ def parse_duration(s: str) -> Optional[float]:
 
 
 def cutoff_line_for_seconds(tr: Transcript, seconds: float) -> int:
-    """The line such that records *after* it are within the last ``seconds``."""
-    threshold = datetime.now(timezone.utc).astimezone() - timedelta(seconds=seconds)
+    """The line such that records *after* it are within the last ``seconds``.
+    A window so large it overflows datetime arithmetic (e.g. ``/since 999999999d``)
+    means "since the start" — every record is within it, so the cutoff is 0."""
+    try:
+        threshold = datetime.now(timezone.utc).astimezone() - timedelta(seconds=seconds)
+    except (OverflowError, OSError, ValueError):
+        return 0
     cutoff = 0
     for r in tr.records:
         if r.ts is not None and r.ts >= threshold:
@@ -152,14 +157,35 @@ def _clip(s: str, n: int = 160) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _cutoff_hhmm(tr: Transcript, cutoff: int) -> str:
+    """Local ``HH:MM`` of the last activity at/before the cutoff — i.e. roughly
+    when the returning human last looked. ``""`` when nothing timestamped sits
+    before the cutoff (e.g. a whole-session recap from line 0)."""
+    seen = ""
+    for r in tr.records:
+        if r.line > cutoff:
+            break
+        if r.ts is not None:
+            seen = r.hhmm
+    return seen
+
+
 def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg) -> str:
     tr = st.tr
     L = []
     push = L.append
     push(f"# 🛰  cc-copilot — since {label}")
     sid = tr.session_id[:8] if tr.session_id else "?"
-    push(f"`{tr.cwd or '?'}`  ·  session `{sid}…`  ·  watching up to L{cutoff} → "
-         f"now L{tr.records[-1].line if tr.records else cutoff}")
+    # Time-anchored, consistent with the cockpit's HH:MM convention (was the raw
+    # `L0 → now L9` line span). "since <clock time you last looked> · N new lines".
+    last = tr.records[-1].line if tr.records else cutoff
+    new_lines = max(0, last - cutoff)
+    when = _cutoff_hhmm(tr, cutoff)
+    since = f"since {when}" if when else ("since start" if cutoff == 0 else "")
+    span = (f"{new_lines} new line{'' if new_lines == 1 else 's'}"
+            if new_lines else "")
+    tail = "  ·  ".join(p for p in (since, span) if p)
+    push(f"`{tr.cwd or '?'}`  ·  session `{sid}…`" + (f"  ·  {tail}" if tail else ""))
     push("")
 
     nothing = not (humans or agent or cmds or fails or chg

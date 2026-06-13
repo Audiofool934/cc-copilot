@@ -32,8 +32,9 @@ class TestSinceRecap(unittest.TestCase):
         os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="ccsincestate-")
         self.calls = []
 
-        def fake_recap(text, model=None, backend=None):
+        def fake_recap(text, model=None, backend=None, instruction=""):
             self.calls.append(text)
+            self.last_instruction = instruction
             return "RECAP: the agent ran some commands [L4]; safe to continue."
         N.recap_since = fake_recap
         N.available = lambda be=None: True
@@ -79,7 +80,7 @@ class TestSinceRecap(unittest.TestCase):
         self.assertNotIn("# 🛰  recap", out)
 
     def test_recap_failure_falls_back_to_evidence(self):
-        def boom(text, model=None, backend=None):
+        def boom(text, model=None, backend=None, instruction=""):
             raise RuntimeError("backend exploded")
         N.recap_since = boom
         out = self.sess._since("30m")
@@ -93,6 +94,32 @@ class TestSinceRecap(unittest.TestCase):
         self.assertTrue(raw)
         self.assertTrue(view.has_changes)
         self.assertTrue(callable(commit))
+
+    def test_split_since_arg_separates_window_from_instruction(self):
+        split = self.sess._split_since_arg
+        self.assertEqual(split("2h in spanish"), ("2h", "in spanish"))
+        self.assertEqual(split("in spanish"), ("", "in spanish"))   # no window → default
+        self.assertEqual(split("30m"), ("30m", ""))                 # window only
+        self.assertEqual(split(""), ("", ""))
+        self.assertEqual(split("last-look just the blocker"),
+                         ("last-look", "just the blocker"))
+        # --raw stays with the window half so _since_view still detects it
+        self.assertEqual(split("--raw 2h as bullets"), ("--raw 2h", "as bullets"))
+
+    def test_instruction_threads_to_the_recap_model(self):
+        self.sess._since("2h in spanish")
+        self.assertEqual(self.last_instruction, "in spanish")       # steer reached the model
+        self.assertEqual(len(self.calls), 1)
+
+    def test_instruction_without_window_uses_default_and_steers(self):
+        # `/since in spanish` → no window token, the whole tail is the instruction,
+        # the window defaults to last-look (needs a prior mark to have a delta)
+        from cccopilot import lastlook as LL
+        from cccopilot.chat import _now_iso
+        LL.mark(self.sess._lastlook_key(), 1, "", _now_iso())
+        self.sess._since("in spanish")
+        self.assertEqual(self.last_instruction, "in spanish")
+        self.assertEqual(len(self.calls), 1)
 
     def test_since_view_edge_message_is_str(self):
         # an unknown duration is an edge-case string, not a (view, raw, commit) tuple

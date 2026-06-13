@@ -45,8 +45,8 @@ def _same_file(a: str, b: str) -> bool:
 _HELP = """commands (LLM-free except questions and the /since recap — /since --raw stays deterministic):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
-  /now              recommend the next step from the completed work (LLM; deterministic fallback)
-  /since [when]     recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
+  /now [steer]      recommend the next step (LLM; e.g. /now in spanish; deterministic fallback)
+  /since [when] [steer]  recap since you last looked (30m / 2h / 1d; --raw = cited delta)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
@@ -323,8 +323,8 @@ class ChatSession:
             return self.evidence().text
         if c == "/observe":
             return O.render(self.path, self.st, self.scope, sessions=self.scope_sessions)
-        if c == "/now":
-            return self._now()
+        if c == "/now" or c.startswith("/now "):
+            return self._now(cmd.strip()[4:].strip())
         if c == "/since" or c.startswith("/since "):
             return self._since(cmd.strip()[6:].strip())
         if c == "/handoff" or c.startswith("/handoff "):
@@ -459,15 +459,33 @@ class ChatSession:
         return SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
                         label="last look")
 
+    @staticmethod
+    def _split_since_arg(arg: str):
+        """Separate an optional leading window token (a duration like ``30m`` /
+        ``2h`` / ``1d`` or a ``last-look`` keyword) from a trailing free-text
+        instruction, e.g. ``2h in spanish`` → ``("2h", "in spanish")`` and
+        ``in spanish`` → ``("", "in spanish")`` (window defaults to last-look).
+        ``--raw`` stays with the window part so :meth:`_since_view` still sees
+        it. Lets ``/since`` act on a prompt, not just a window."""
+        toks = [t for t in (arg or "").split() if t]
+        raw = [t for t in toks if t == "--raw"]
+        rest = [t for t in toks if t != "--raw"]
+        window = []
+        if rest and (rest[0].lower() in ("last-look", "lastlook", "last")
+                     or SI.parse_duration(rest[0]) is not None):
+            window = [rest.pop(0)]
+        return " ".join(raw + window).strip(), " ".join(rest).strip()
+
     def _since(self, arg: str):
         """Sync entry (REPL / CLI): the recap-or-raw result as one string. The TUI
         uses :meth:`_since_view` + :meth:`_compose_since` so the model call can run
         off the UI thread."""
-        res = self._since_view(arg)
+        window_arg, instruction = self._split_since_arg(arg)
+        res = self._since_view(window_arg)
         if isinstance(res, str):
             return res
         view, raw, commit = res
-        out = self._since_finish(view, raw)
+        out = self._since_finish(view, raw, instruction)
         commit()                                   # shown now → advance the marker
         return out
 
@@ -508,7 +526,7 @@ class ChatSession:
             view = SI.build(self.st.tr, self.st, seconds=secs, label=when)
         return (view, raw, commit)
 
-    def _since_finish(self, view, raw: bool) -> str:
+    def _since_finish(self, view, raw: bool, instruction: str = "") -> str:
         """Recap-by-default: an LLM recap grounded in the delta with the cited
         evidence kept beneath it. The deterministic delta is returned verbatim
         when ``--raw``, when no backend is available, or when nothing changed
@@ -516,7 +534,8 @@ class ChatSession:
         if raw or view.nothing_new or not N.available(self.backend):
             return view.text
         try:
-            recap = N.recap_since(view.text, model=self.model, backend=self.backend)
+            recap = N.recap_since(view.text, model=self.model, backend=self.backend,
+                                  instruction=instruction)
         except Exception as e:
             return view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
         return self._compose_since(recap, view)
@@ -530,17 +549,19 @@ class ChatSession:
                 f"---\n_evidence — every `[L…]` is a transcript line:_\n{body}")
 
     # ---- /now: recommend the next step from the completed work --------------
-    def _now(self) -> str:
+    def _now(self, instruction: str = "") -> str:
         """What to do next: an LLM recommendation grounded in the evidence, with a
         deterministic next-step (the observer's ranked decision) as the always-true
-        fallback when no backend is available or the recap fails."""
+        fallback when no backend is available or the recap fails. ``instruction``
+        is an optional free-text steer (`/now in spanish`) for the recommendation."""
         if self.st is None:
             return "(no live session — transcript gone; nothing to recommend)"
         det = O.next_step(self.path, self.st, self.scope, sessions=self.scope_sessions)
         if not N.available(self.backend):
             return det
         try:
-            rec = N.next_step_brief(self.evidence().text, model=self.model, backend=self.backend)
+            rec = N.next_step_brief(self.evidence().text, model=self.model,
+                                    backend=self.backend, instruction=instruction)
         except Exception as e:
             return det + f"\n\n> _next-step recap unavailable ({e}); deterministic suggestion above._"
         return self._compose_now(rec, det)

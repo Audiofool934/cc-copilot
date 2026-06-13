@@ -53,6 +53,29 @@ class TestRoundTrip(_Base):
             ("user", "q3"), ("assistant", "a3"),
         ])
 
+    def test_turn_times_align_with_history(self):
+        s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
+        st = _St(_Tr())
+        s.record_turn("q1", "a1", st=st, backend="codex")
+        s.record_turn("q2", "a2", st=st, backend="codex")
+        reopened = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True)
+        times = reopened.load_turn_times()
+        hist = reopened.load_history()
+        self.assertEqual(len(times), len(hist))                 # 1:1 with history
+        self.assertEqual(times[0], times[1])                    # same stamp q & a
+        for hhmm in times:
+            self.assertRegex(hhmm, r"^\d{2}:\d{2}$")            # real HH:MM
+
+    def test_turn_times_empty_when_disabled(self):
+        self.assertEqual(ST.Store("disabled-conv", enabled=False).load_turn_times(), [])
+
+    def test_turn_time_tolerates_out_of_range_ts(self):
+        # a corrupt/hand-edited ts (inf / overflow) must blank out, not crash
+        self.assertEqual(ST._hhmm_local(float("inf")), "")
+        self.assertEqual(ST._hhmm_local(1e308 * 10), "")
+        self.assertEqual(ST._hhmm_local("not-a-number"), "")
+        self.assertEqual(ST._hhmm_local(None), "")
+
     def test_head_written_once(self):
         s = ST.Store.open_for("/x/sess-uuid.jsonl", enabled=True, tr=_Tr())
         for i in range(4):

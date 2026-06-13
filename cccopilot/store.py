@@ -387,6 +387,28 @@ class Store:
             return []
         return out
 
+    def load_turn_times(self) -> list:
+        """Per-turn local ``HH:MM`` strings, aligned 1:1 with :meth:`load_history`
+        (two identical entries per turn — the same turn time for the user row and
+        its answer row). Used only for restored-history display; empty when the
+        store is disabled or unreadable, and entries are ``""`` when a turn has no
+        recorded ``ts`` so callers simply show no time."""
+        if not self.enabled:
+            return []
+        out = []
+        try:
+            with open(self.turns_path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    obj = _parse(line)
+                    if obj is None or obj.get("kind") != "turn":
+                        continue
+                    hhmm = _hhmm_local(obj.get("ts"))
+                    out.append(hhmm)
+                    out.append(hhmm)
+        except OSError:
+            return []
+        return out
+
     def load_memory(self) -> str:
         """Durable structured memory for older cockpit turns, if present."""
         if not self.enabled:
@@ -587,6 +609,17 @@ def _host() -> str:
         return socket.gethostname() or "host"
     except Exception:
         return "host"
+
+
+def _hhmm_local(ts) -> str:
+    """A stored epoch ``ts`` → local ``HH:MM``; ``""`` when missing/unparseable.
+    A corrupt/out-of-range ``ts`` (e.g. ``1e9999`` → ``inf`` from a hand-edited
+    state file) makes ``localtime`` raise OverflowError/OSError — caught here so a
+    bad turn record never crashes history restore, it just shows no time."""
+    try:
+        return time.strftime("%H:%M", time.localtime(float(ts))) if ts else ""
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
 
 
 def _parse(line):

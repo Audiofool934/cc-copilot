@@ -30,6 +30,30 @@ def _timeline_text(app):
 
 
 @unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
+class TestTurnHeader(unittest.TestCase):
+    """The per-message header puts the role on the left and the dim time hard
+    against the right edge, at any width."""
+
+    def _render(self, renderable, width=40):
+        import io
+        from rich.console import Console
+        c = Console(file=io.StringIO(), width=width, color_system=None)
+        c.print(renderable)
+        return c.file.getvalue()
+
+    def test_head_grid_label_left_time_right(self):
+        out = self._render(tui.Cockpit._head_grid("you", "white", "14:32"))
+        self.assertIn("you", out)
+        self.assertIn("14:32", out)
+        self.assertLess(out.index("you"), out.index("14:32"))     # time on the right
+        self.assertTrue(out.rstrip().endswith("14:32"))           # hard against the edge
+
+    def test_head_grid_tolerates_missing_time(self):
+        out = self._render(tui.Cockpit._head_grid("copilot", "white", ""))
+        self.assertIn("copilot", out)                              # no crash, no '--:--'
+
+
+@unittest.skipUnless(HAVE_TEXTUAL, "textual extra not installed")
 class TestComposerCJK(unittest.IsolatedAsyncioTestCase):
     """The composer must accept multilingual input verbatim and submit it."""
 
@@ -512,7 +536,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         from cccopilot.chat import ChatSession
         real_recap, real_avail = N.recap_since, N.available
         N.available = lambda be=None: True
-        N.recap_since = lambda text, model=None, backend=None: "RECAP_NARRATIVE [L4]"
+        N.recap_since = lambda text, model=None, backend=None, instruction="": "RECAP_NARRATIVE [L4]"
         try:
             d = tempfile.mkdtemp(prefix="cctsince-")
             p = os.path.join(d, "s.jsonl")
@@ -547,7 +571,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         from cccopilot import narrate as N
         real_next, real_avail = N.next_step_brief, N.available
         N.available = lambda be=None: True
-        N.next_step_brief = lambda text, model=None, backend=None: "DO_THIS_NEXT [L3]"
+        N.next_step_brief = lambda text, model=None, backend=None, instruction="": "DO_THIS_NEXT [L3]"
         try:
             sess = self._session("sess-A")
             app = tui.Cockpit(sess, poll=999, alerts=False)
@@ -564,6 +588,50 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app._busy)                   # spinner cleared
         finally:
             N.next_step_brief, N.available = real_next, real_avail
+
+    async def test_meta_results_render_as_inline_markdown_not_a_box(self):
+        """/now (and its /since, /brief siblings) render through the Markdown
+        widget — rendered headings, no collapsible box, no literal '#'/'**' left
+        sitting in a raw Static."""
+        from cccopilot import narrate as N
+        from textual.widgets import Markdown, Collapsible
+        real_next, real_avail = N.next_step_brief, N.available
+        N.available = lambda be=None: True
+        N.next_step_brief = lambda text, model=None, backend=None, instruction="": "DO_THIS_NEXT [L3]"
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/now")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                mds = app.query_one("#chat").query(Markdown)
+                srcs = "\n".join(getattr(m, "source", "") for m in mds)
+                self.assertIn("# 🧭 next step", srcs)      # heading went to a Markdown widget
+                self.assertIn("DO_THIS_NEXT", srcs)
+                self.assertEqual(len(app.query(Collapsible)), 0)  # no box layer
+        finally:
+            N.next_step_brief, N.available = real_next, real_avail
+
+    async def test_now_without_backend_renders_text_not_markdown(self):
+        # the deterministic next-step is plain text with indented `also:` siblings;
+        # it must NOT route through Markdown (which flattens the indentation).
+        from cccopilot import narrate as N
+        from textual.widgets import Markdown
+        real_avail = N.available
+        N.available = lambda be=None: False
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/now")
+                await pilot.pause()
+                self.assertEqual(len(app.query_one("#chat").query(Markdown)), 0)
+                self.assertGreaterEqual(len(app.query("#chat .role-meta")), 1)
+        finally:
+            N.available = real_avail
 
     async def test_status_and_target_render_in_chat(self):
         """/status pulls the fleet board (independent of pinned evidence); /target
@@ -636,7 +704,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app = tui.Cockpit(sess, poll=999, alerts=False)
             N.available = lambda be=None: True
             # the model call "takes a while" during which the user switches evidence
-            def recap_then_switch(text, model=None, backend=None):
+            def recap_then_switch(text, model=None, backend=None, instruction=""):
                 app.session.path = "/some/other/session.jsonl"   # evidence changed
                 return "STALE_RECAP [L4]"
             N.recap_since = recap_then_switch
@@ -2175,6 +2243,45 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
         turns = sess.store._load_turns()
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0]["usage"]["output_tokens"], 42)
+
+    async def test_chat_turns_carry_timestamp_headers(self):
+        from textual.widgets import Markdown
+        self._stub_stream(["answer [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted("what happened?"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # exactly one user prompt and one copilot header (above the answer)
+            self.assertEqual(len(app.query("#chat .role-user")), 1)
+            heads = app.query("#chat .turn-head")
+            self.assertEqual(len(heads), 1)
+            kids = list(app.query_one("#chat").children)
+            i = next(k for k, w in enumerate(kids) if "turn-head" in w.classes)
+            self.assertIsInstance(kids[i + 1], Markdown)        # header sits on the answer
+
+    async def test_clear_racing_answer_done_strands_no_header(self):
+        # /clear sets md._pruning synchronously; _answer_done landing in the SAME
+        # tick must NOT mount a header before the doomed md — that header would
+        # outlive the prune as an orphaned 'copilot HH:MM' with no answer.
+        from textual.widgets import Markdown
+        self._stub_stream(["half"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._answer_chunk(sess.store, "half")        # mount the streaming md
+            await pilot.pause()
+            self.assertTrue(app._stream_md.is_attached)
+            app.action_clear_chat()                       # prune (sets _pruning), no yield
+            app._answer_done("q", "half", True, sess.st, sess.store,
+                             origin={"hhmm": "09:00"})     # same tick as the clear
+            await pilot.pause()                           # let the prune complete
+            self.assertEqual(len(app.query("#chat .turn-head")), 0)   # no orphan header
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), 0)
+        self.assertEqual(sess.history[-1], ("assistant", "half"))     # still persisted
 
     async def test_midstream_error_keeps_partial_persists_nothing(self):
         self._stub_stream(["partial text ", "never arrives"], fail_after=1)

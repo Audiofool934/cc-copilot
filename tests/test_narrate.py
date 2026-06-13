@@ -54,6 +54,33 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertIn("[L7]", prompt)                   # citations preserved
         self.assertNotIn("# 🛰  cc-copilot brief", prompt)   # identity cues stripped
 
+    def test_instruction_is_folded_into_next_step_with_grounding_intact(self):
+        backend = CaptureBackend()
+
+        N.next_step_brief("# 🛰  cc-copilot brief — demo\nbody [L7]",
+                          backend=backend, instruction="in spanish")
+
+        prompt = backend.prompts[0]
+        self.assertIn("in spanish", prompt)             # the steer reached the model
+        self.assertIn("instruction for how to answer", prompt)
+        self.assertIn("never invent facts", prompt)     # grounding contract restated
+        self.assertIn("do NEXT", prompt)                # base task still present
+
+    def test_instruction_is_folded_into_since_recap(self):
+        backend = CaptureBackend()
+
+        N.recap_since("# delta\nchanged [L3]", backend=backend,
+                      instruction="just the blocker")
+
+        prompt = backend.prompts[0]
+        self.assertIn("just the blocker", prompt)
+        self.assertIn("never invent facts", prompt)
+
+    def test_empty_instruction_leaves_the_task_unchanged(self):
+        self.assertEqual(N._with_instruction("BASE TASK", ""), "BASE TASK")
+        self.assertEqual(N._with_instruction("BASE TASK", "   "), "BASE TASK")
+        self.assertIn("loud", N._with_instruction("BASE TASK", "be loud"))
+
     def test_chat_history_uses_budget_instead_of_fixed_turn_count(self):
         backend = CaptureBackend()
         history = []

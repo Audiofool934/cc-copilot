@@ -95,6 +95,21 @@ def _prompt(brief_text: str, task: str) -> str:
             + "\n=== END EVIDENCE CONTEXT ===\n\n" + task)
 
 
+def _with_instruction(task: str, instruction: str = "") -> str:
+    """Fold a returning-human instruction (`/now in spanish`, `/since just the
+    blocker`, `… as bullets`) into a recap/recommend task. The instruction
+    shapes HOW the grounded answer reads — language, tone, length, focus — but
+    the grounding contract is restated so it can never license inventing facts
+    beyond the cited evidence."""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        return task
+    return (task + "\n\nThe returning human added an instruction for how to "
+            'answer: "' + instruction + '". Honor it for language, tone, '
+            "length, or focus — but stay grounded in the evidence above and "
+            "keep the [L…] citations; never invent facts to satisfy it.")
+
+
 def run(state, task: str, model: str = None, backend=None, timeout: int = 180) -> str:
     return run_brief(render(state), task, model=model, backend=backend, timeout=timeout)
 
@@ -183,12 +198,16 @@ _SINCE_RECAP_TASK = (
 )
 
 
-def recap_since(since_text: str, model: str = None, backend=None) -> str:
+def recap_since(since_text: str, model: str = None, backend=None,
+                instruction: str = "") -> str:
     """Narrate a deterministic ``/since`` delta into a grounded re-entry recap.
 
     Same faithful contract as :func:`narrate` — the model sees only the cited
-    delta and keeps its ``[L…]`` citations; it does not invent."""
-    return run_brief(since_text, _SINCE_RECAP_TASK, model=model, backend=backend)
+    delta and keeps its ``[L…]`` citations; it does not invent. ``instruction``
+    is an optional free-text steer (`/since in spanish`) that shapes the wording
+    without loosening the grounding."""
+    return run_brief(since_text, _with_instruction(_SINCE_RECAP_TASK, instruction),
+                     model=model, backend=backend)
 
 
 _NEXT_STEP_TASK = (
@@ -205,17 +224,23 @@ _NEXT_STEP_TASK = (
 )
 
 
-def next_step_brief(brief_text: str, model: str = None, backend=None) -> str:
+def next_step_brief(brief_text: str, model: str = None, backend=None,
+                    instruction: str = "") -> str:
     """Recommend the next step from a deterministic evidence recap.
 
     Same faithful contract as :func:`narrate`: the model sees only the cited
-    evidence and keeps its ``[L…]`` citations; it recommends, it doesn't invent."""
-    return run_brief(brief_text, _NEXT_STEP_TASK, model=model, backend=backend)
+    evidence and keeps its ``[L…]`` citations; it recommends, it doesn't invent.
+    ``instruction`` is an optional free-text steer (`/now in spanish`) that
+    shapes the wording without loosening the grounding."""
+    return run_brief(brief_text, _with_instruction(_NEXT_STEP_TASK, instruction),
+                     model=model, backend=backend)
 
 
-def next_step_brief_stream(brief_text: str, model: str = None, backend=None) -> StreamHandle:
+def next_step_brief_stream(brief_text: str, model: str = None, backend=None,
+                           instruction: str = "") -> StreamHandle:
     """Streaming sibling of :func:`next_step_brief` — identical grounding."""
-    return run_brief_stream(brief_text, _NEXT_STEP_TASK, model=model, backend=backend)
+    return run_brief_stream(brief_text, _with_instruction(_NEXT_STEP_TASK, instruction),
+                            model=model, backend=backend)
 
 
 def ask(state, question: str, model: str = None, backend=None) -> str:

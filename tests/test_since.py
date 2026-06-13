@@ -77,6 +77,31 @@ class TestSinceByLine(unittest.TestCase):
         self.assertIn("second ask", v.text)
         self.assertNotIn("first ask", v.text)
 
+    def test_header_is_time_anchored_not_line_span(self):
+        tr, st = _tr_st([
+            user("go", 300), asst("working", 240),
+            tool("Bash", {"command": "pytest"}, "t1", 180), asst("done", 60),
+        ])
+        header = SI.build(tr, st, since_line=2, label="last look").text.splitlines()[1]
+        self.assertNotIn("watching up to", header)        # the old line-span jargon is gone
+        self.assertNotIn("→ now", header)
+        self.assertRegex(header, r"since \d{2}:\d{2}")    # clock-time anchor
+        self.assertIn("new line", header)                 # how much changed
+
+    def test_header_since_start_for_whole_session(self):
+        tr, st = _tr_st([user("go", 300), asst("done", 60)])
+        header = SI.build(tr, st, since_line=0, label="all").text.splitlines()[1]
+        self.assertIn("since start", header)              # no record before line 0
+
+    def test_pathological_huge_duration_does_not_overflow(self):
+        # `/since 999999999d` overflows datetime arithmetic — must degrade to
+        # "since start" (cutoff 0, whole session), never crash.
+        tr, st = _tr_st([user("go", 300), asst("done", 60)])
+        secs = SI.parse_duration("999999999d")
+        self.assertEqual(SI.cutoff_line_for_seconds(tr, secs), 0)
+        v = SI.build(tr, st, seconds=secs, label="999999999d")    # no OverflowError
+        self.assertTrue(v.has_changes)
+
     def test_command_completed_after_cutoff_is_new(self):
         # call before the cutoff, result after — it finished while you were away
         tr, st = _tr_st([

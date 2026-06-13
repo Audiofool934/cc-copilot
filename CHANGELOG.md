@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.21.0 — 2026-06-13
+
+**Slash commands take an inline steer.** `/now` and `/since` now accept free
+text after the command — `/now in spanish`, `/since 2h just the blocker`,
+`/since as bullets`. The steer shapes *how* the grounded recap/recommendation
+reads (language, tone, length, focus) but can't loosen the evidence grounding:
+the "use only this evidence, never invent facts" contract is restated to the
+model. `/now` keeps its instant bare path; the steer is optional.
+
+**`/command` results render as real Markdown, inline.** `/now`, `/since`,
+`/brief`, `/observe`, `/check`, and `/handoff` output rendered headings, bold,
+and rules — instead of raw `#`/`**`/`---` characters sitting in a plain box. The
+collapsible "layer" is gone; results flow like a reply with an accent gutter bar.
+Pre-formatted boards (`/status`, `/diff`, `/target`, `/help`) keep their columns
+verbatim.
+
+**Chat messages are timestamped.** Each turn shows a dim `HH:MM` hard against the
+right edge, with a `you` / `copilot` role label on the left. Restored history
+uses each turn's real recorded time; live turns stamp the moment they happen.
+
+**`/since` header is time-anchored.** The recap header now reads
+`since 14:31 · 9 new lines` instead of the raw `watching up to L0 → now L9` line
+span — consistent with the cockpit's `HH:MM` convention.
+
+**Notifications moved to the top-right and toned down.** Toasts no longer cover
+the prompt box at the bottom — they sit in the upper-right corner, slimmed to a
+single-row, auto-width chip with the cockpit's accent bar instead of a wide,
+deeply-padded block.
+
 ## 0.20.1 — 2026-06-13
 
 **Fix: Ctrl+Y now actually copies.** The new copy key was bound without priority,

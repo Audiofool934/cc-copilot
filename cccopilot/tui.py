@@ -38,11 +38,13 @@ try:
     from textual.message import Message
     from textual.screen import ModalScreen
     from textual.theme import Theme
-    from textual.widgets import (Button, Collapsible, Footer, Input, Markdown,
+    from textual.widgets import (Button, Footer, Input, Markdown,
                                  OptionList, RadioButton, RadioSet, RichLog,
                                  Static, TextArea)
     from textual.widgets.option_list import Option
     from rich.text import Text
+    from rich.table import Table
+    from rich.console import Group
     from rich.cells import cell_len as _cell_len
 except ImportError:
     raise SystemExit(
@@ -177,8 +179,8 @@ _HELP_TEXT = (
     "ask a question (newline: Ctrl+J · send: Enter · history: ↑/↓ · clear: Esc)\n"
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
-    "  /now                    recommend the next step (LLM; deterministic fallback)\n"
-    "  /since [30m|1d] [--raw] recap since you last looked (--raw = cited delta)\n"
+    "  /now [steer]            recommend the next step (e.g. /now in spanish; LLM)\n"
+    "  /since [30m|1d] [--raw] [steer]  recap since you last looked (--raw = cited delta)\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /status                 fleet board — every session, neediest first\n"
@@ -205,8 +207,8 @@ _HELP_TEXT = (
 # cockpit (see test_deprecated_control_shortcuts_*). Keep it scannable.
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
-    ("/now", "recommend the next step (LLM; deterministic fallback)", False),
-    ("/since", "recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)", True),
+    ("/now", "recommend the next step — add a steer like 'in spanish' (LLM; deterministic fallback)", False),
+    ("/since", "recap since you last looked (30m / 2h / 1d; --raw = cited delta; trailing text steers it)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
@@ -1246,7 +1248,15 @@ class Cockpit(App):
     .role-assistant { border-left: outer $primary;   padding-left: 1; }
     .role-event     { border-left: outer $accent;    padding-left: 1; }
     .role-alert     { border-left: outer $warning;   padding-left: 1; }
-    Collapsible { border-left: outer $accent; }
+    /* /command results render inline (no collapsible box) with an accent bar so
+       they read as cockpit output, distinct from the primary-barred Q&A. The
+       Markdown widget gets no top margin so its bar butts against the header. */
+    .role-meta      { border-left: outer $accent;    padding-left: 1; }
+    Markdown.role-meta { margin: 0; }
+    /* timestamp header row above each chat turn — role label left, dim time right.
+       No bottom margin so it sits flush on its message body (shared gutter bar). */
+    .turn-head { height: 1; margin: 0; }
+    Markdown.role-assistant { margin: 0; }
 
     Picker { align: center middle; }
     MultiPicker { align: center middle; }
@@ -1288,6 +1298,24 @@ class Cockpit(App):
     OptionList > .option-list--option-hover {
         background: $primary 20%;
     }
+
+    /* Notifications. Default Textual toasts dock bottom-RIGHT (over the composer,
+       so they obscured the prompt box) and are a wide, deeply-padded block. Move
+       them to the top-right corner and slim them down to match the cockpit: the
+       same `outer ▌` accent bar as the chat role rows, the $boost surface of the
+       status strip, auto width, and single-row padding — so a toast reads as a
+       quiet cockpit element, not a popup. */
+    ToastRack { dock: top; align: right top; margin: 1 1 0 0; }
+    Toast {
+        width: auto; max-width: 46; min-width: 14;
+        padding: 0 1; margin-top: 1;
+        background: $boost; tint: white 0%;
+        border-left: outer $primary;
+    }
+    Toast.-information { border-left: outer $primary; }
+    Toast.-warning    { border-left: outer $warning; }
+    Toast.-error      { border-left: outer $error; }
+    .toast--title { text-style: bold; }
     """
 
     # Footer shows only the few highest-value keys; the rest are still bound but
@@ -1737,8 +1765,11 @@ class Cockpit(App):
         first = (str(text or "").splitlines() or [""])[0].strip()
         return _short_activity(first or "(empty prompt)", limit)
 
-    def _prompt_widget(self, text: str):
-        w = self._role(Text("› " + str(text or ""), style="bold"), "role-user")
+    def _prompt_widget(self, text: str, hhmm=None):
+        hhmm = self._hhmm_now() if hhmm is None else hhmm
+        body = Group(self._head_grid("you", _PAL["secondary"], hhmm),
+                     Text("› " + str(text or ""), style="bold"))
+        w = self._role(body, "role-user")
         w._cc_prompt_text = str(text or "")
         return w
 
@@ -1963,10 +1994,17 @@ class Cockpit(App):
             chat.mount(self._role(
                 Text(f"── restored {n} prior turn{'s' if n != 1 else ''} ──", "dim"),
                 "role-event"))
-            for role, txt in hist:
+            # per-turn stamps from the store, aligned 1:1 with history; fall back
+            # to no time if the store is off or the two ever drift out of length.
+            times = self.session.store.load_turn_times()
+            if len(times) != len(hist):
+                times = [""] * len(hist)
+            for i, (role, txt) in enumerate(hist):
+                hhmm = times[i]
                 if role == "user":
-                    chat.mount(self._prompt_widget(txt))
+                    chat.mount(self._prompt_widget(txt, hhmm))
                 else:
+                    chat.mount(self._assistant_head(hhmm))
                     chat.mount(Markdown(txt, classes="role-assistant"))
         prompts = self._chat_prompt_widgets()
         if prompts:
@@ -2333,6 +2371,7 @@ class Cockpit(App):
 
     def _answer_origin(self, st, store) -> dict:
         return {
+            "hhmm": self._hhmm_now(),       # when the turn began → the answer's stamp
             "backend": self.backend,
             "model": self.model,
             "scope": self.session.scope,
@@ -2381,7 +2420,14 @@ class Cockpit(App):
                                 else (EC.estimate_tokens(ans) if ok else self._out_tokens))
             self.session.last_output_tokens = self._out_tokens
             self.session.last_usage = usage if ok else None
-        live = md is not None and md.is_attached
+        # `_pruning` is set synchronously by a same-tick remove_children() (a
+        # /clear, or a mid-stream history rebuild) BEFORE the async detach lands,
+        # so is_attached still reads True for a widget about to vanish. Treat a
+        # pruning md as already gone — Textual itself gates on `not is_attached or
+        # _pruning`. Otherwise we'd mount the header before a doomed md and strand
+        # it as an orphaned "copilot HH:MM" with no answer once the prune runs.
+        gone = md is None or not md.is_attached or getattr(md, "_pruning", False)
+        live = not gone
         if ok:
             # the cockpit's single durable write-site (the REPL has its own in
             # ChatSession._finalize_turn); _answer runs on a worker thread, hence here.
@@ -2398,8 +2444,18 @@ class Cockpit(App):
             if same:
                 self.session.history.append(("user", text))
                 self.session.history.append(("assistant", ans))
-                if not live:            # nothing streamed live (fallback path)
+                hhmm = origin.get("hhmm") or self._hhmm_now()
+                if live:                # streamed & still on screen: header on md
+                    self.query_one("#chat", VerticalScroll).mount(
+                        self._assistant_head(hhmm), before=md)
+                elif md is None or not md.is_attached:
+                    # fallback backend (nothing streamed), or md already fully
+                    # detached — render the turn fresh: header + answer.
+                    self._chat(self._assistant_head(hhmm))
                     self._chat(Markdown(ans, classes="role-assistant"))
+                # else: md is mid-prune (the pane was just cleared/rebuilt) —
+                # render nothing so no lone header is stranded; the turn is
+                # persisted and reappears on the next rebuild.
                 self._restore_current_store_meta()
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
@@ -2417,13 +2473,14 @@ class Cockpit(App):
         evidence beneath it; instant deterministic view for `--raw`, no backend,
         nothing-new, or while busy. The model call runs off the UI thread."""
         title = (f"/since {arg}").strip()
-        res = self.session._since_view(arg)
+        window_arg, instruction = self.session._split_since_arg(arg)
+        res = self.session._since_view(window_arg)
         if isinstance(res, str):                 # edge-case message (no mark, etc.)
-            self._collapsible(title, res)
+            self._result(res, markdown=False, title=title)
             return
         view, raw, commit = res
         if raw or view.nothing_new or not N.available(self.backend) or self._busy:
-            self._collapsible(title, view.text)  # deterministic, instant
+            self._result(view.text)              # deterministic markdown, instant
             commit()                             # shown → advance the marker
             return
         self._busy = True
@@ -2437,12 +2494,14 @@ class Cockpit(App):
         # while /new or /resume on the same transcript swaps the conversation store
         # but not the signature. Either makes the result stale, so we drop it (and
         # leave the last-look marker un-consumed) rather than mis-render it.
-        self._since_recap(title, view, (self._evidence_sig(), self.session.store), commit)
+        self._since_recap(title, view, (self._evidence_sig(), self.session.store),
+                          commit, instruction)
 
     @work(thread=True)
-    def _since_recap(self, title, view, origin, commit):
+    def _since_recap(self, title, view, origin, commit, instruction=""):
         try:
-            recap = N.recap_since(view.text, model=self.model, backend=self.backend)
+            recap = N.recap_since(view.text, model=self.model, backend=self.backend,
+                                  instruction=instruction)
             out = self.session._compose_since(recap, view)
         except Exception as e:
             out = view.text + f"\n\n> _recap unavailable ({e}); evidence shown above._"
@@ -2453,7 +2512,7 @@ class Cockpit(App):
         self._busy_frame = 0
         sig, store = origin
         if self._evidence_sig() == sig and self.session.store is store:
-            self._collapsible(title, out)
+            self._result(out)                    # rendered markdown recap
             commit()                             # rendered → advance the marker
         else:
             self.notify(f"dropped {title} recap — you switched while it ran",
@@ -2514,11 +2573,11 @@ class Cockpit(App):
         if low in ("/quit", "/exit", "/q"):
             self.exit(); return
         if low in ("/help", "/?"):
-            self._collapsible("/help", _HELP_TEXT); return
+            self._result(_HELP_TEXT, markdown=False, title="/help"); return
         if low == "/observe":
             self.action_observe(); return
-        if low == "/now":
-            self.action_now(); return
+        if low == "/now" or low.startswith("/now "):
+            self.action_now(cmd.strip()[4:].strip()); return
         if low == "/brief":
             self.action_brief(); return
         if low == "/check":
@@ -2620,13 +2679,44 @@ class Cockpit(App):
             if arg:                              # wrote to a file → just confirm
                 self.notify(str(out).splitlines()[0], severity="information")
             else:
-                self._collapsible("/handoff", out)
+                self._result(out)                # markdown handoff
             return
         self.notify(f"unknown command {cmd!r}", severity="warning")
 
-    def _collapsible(self, title, body):
+    @staticmethod
+    def _hhmm_now() -> str:
+        return time.strftime("%H:%M", time.localtime())
+
+    @staticmethod
+    def _head_grid(label, label_style, hhmm):
+        """Header row for a chat turn — role label on the left, dim time on the
+        right. An expanding grid hugs the time to the right edge at any width."""
+        grid = Table.grid(expand=True)
+        grid.add_column(justify="left", ratio=1)
+        grid.add_column(justify="right")
+        grid.add_row(Text(label, style=label_style), Text(hhmm or "", style=_PAL["muted"]))
+        return grid
+
+    def _assistant_head(self, hhmm):
+        """The copilot turn's header as a standalone widget — mounted just above
+        the answer's Markdown so they share the primary gutter bar as one block."""
+        return Static(self._head_grid("copilot", _PAL["primary"], hhmm),
+                      classes="role-assistant turn-head")
+
+    def _result(self, body, *, markdown=True, title=None, cls="role-meta"):
+        """Render a /command result inline in the chat — no collapsible box (the
+        user's render choice). Markdown bodies (headings/bold/rules) render through
+        the Markdown widget like a reply; pre-formatted Rich Text / columnar bodies
+        (fleet board, diff, help) render verbatim with an optional dim title."""
+        if markdown:
+            self._chat(Markdown(str(body), classes=cls))
+            return
         renderable = body if isinstance(body, Text) else Text(str(body))
-        self._chat(Collapsible(Static(renderable), title=title, collapsed=False))
+        if title:
+            head = Text(title + "\n", style=_PAL["muted"])
+            head.append_text(renderable)
+            renderable = head
+        self._chat(self._role(renderable, cls))
 
     def _diff_renderable(self, d):
         if (d.new_events == 0 and not d.new_changed and not d.new_failures
@@ -2657,8 +2747,7 @@ class Cockpit(App):
         self.session.refresh()
         if self._no_live():
             return
-        self._collapsible(f"/brief — {self.session.scope_label()}",
-                          self.session.evidence().text)
+        self._result(self.session.evidence().text)   # markdown brief
         self._update_status()
 
     def action_observe(self):
@@ -2671,14 +2760,15 @@ class Cockpit(App):
         except ValueError as e:
             self.notify(str(e), severity="warning")
             return
-        self._collapsible(f"/observe — {self.session.scope_label()}", body)
+        self._result(body)                            # markdown observe board
         self._refresh_scope_view()
 
     # ---- /now: deterministic next-step, recommended via a grounded LLM call ----
-    def action_now(self):
+    def action_now(self, instruction=""):
         """Recommend the next step. Deterministic-instant when there's no backend
         or a turn is already running; otherwise the model call runs off the UI
-        thread and is dropped if the user switches evidence while it runs."""
+        thread and is dropped if the user switches evidence while it runs.
+        ``instruction`` is an optional free-text steer (`/now in spanish`)."""
         self.session.refresh()
         if self._no_live():
             return
@@ -2689,8 +2779,16 @@ class Cockpit(App):
             self.notify(str(e), severity="warning")
             return
         title = f"/now — {self.session.scope_label()}"
+        if instruction:
+            title += f' · "{instruction}"'
         if not N.available(self.backend) or self._busy:
-            self._collapsible(title, det)        # deterministic, instant
+            # deterministic next-step: plain text with indented `also:` siblings —
+            # NOT markdown, so render verbatim (markdown would flatten the indent).
+            body = det
+            if instruction:                      # can't honor a steer without the model
+                body += ("\n(the instruction needs the model — showing the "
+                         "deterministic next-step)")
+            self._result(body, markdown=False, title=title)
             self._update_status()
             return
         # Snapshot the evidence on the UI thread BEFORE the worker starts. Reading
@@ -2705,12 +2803,14 @@ class Cockpit(App):
             Text("🧭 thinking about the next step — grounded in the evidence…",
                  style=_PAL["muted"]), "role-event"))
         self._update_status()
-        self._now_recap(title, det, ev_text, (self._evidence_sig(), self.session.store))
+        self._now_recap(title, det, ev_text, instruction,
+                        (self._evidence_sig(), self.session.store))
 
     @work(thread=True)
-    def _now_recap(self, title, det, ev_text, origin):
+    def _now_recap(self, title, det, ev_text, instruction, origin):
         try:
-            rec = N.next_step_brief(ev_text, model=self.model, backend=self.backend)
+            rec = N.next_step_brief(ev_text, model=self.model, backend=self.backend,
+                                    instruction=instruction)
             out = self.session._compose_now(rec, det)
         except Exception as e:
             out = det + f"\n\n> _next-step recap unavailable ({e}); deterministic suggestion above._"
@@ -2721,7 +2821,7 @@ class Cockpit(App):
         self._busy_frame = 0
         sig, store = origin
         if self._evidence_sig() == sig and self.session.store is store:
-            self._collapsible(title, out)
+            self._result(out)                    # markdown next-step recap
         else:
             self.notify(f"dropped {title} — you switched while it ran",
                         severity="warning")
@@ -2733,28 +2833,28 @@ class Cockpit(App):
             return
         body = (_check_text(self.session.st) if self.session.scope == SC.SESSION
                 else self.session.evidence().text)
-        self._collapsible(f"/check — {self.session.scope_label()}", body)
+        self._result(body)                            # markdown check verdict
         self._update_status()
 
     def action_diff(self):
         self.session.refresh()
         if self._no_live():
             return
-        self._collapsible("/diff — changes since last turn",
-                          self._diff_renderable(S.diff(self.session.prev, self.session.st)))
+        self._result(self._diff_renderable(S.diff(self.session.prev, self.session.st)),
+                     markdown=False, title="/diff — changes since last turn")
 
     def action_status(self):
         """Fleet board across the whole project — independent of the pinned
         evidence, so it works even in history-only mode."""
         from .chat import render_fleet
         cwd = self.session.cwd or os.getcwd()
-        self._collapsible("/status — fleet board", render_fleet(cwd)[0])
+        self._result(render_fleet(cwd)[0], markdown=False, title="/status — fleet board")
 
     def action_target(self):
         s = self.session
         body = (f"cockpit: {s.store.conv_id}\ntarget: {s.path}\n"
                 f"evidence: {s.scope_label()}\n{s.banner()}")
-        self._collapsible("/target — current cockpit target", body)
+        self._result(body, markdown=False, title="/target — current cockpit target")
 
     @work
     async def action_sessions(self):
