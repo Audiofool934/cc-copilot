@@ -55,5 +55,21 @@ class TestHandoff(unittest.TestCase):
         self.assertIn("codex", name)
 
 
+class TestHandoffSinceGate(unittest.TestCase):
+    def test_transition_only_delta_still_shows_while_away(self):
+        # status/safety flip with zero counted events: new_events==0 but the
+        # since view is NOT "nothing new" — the section must still render.
+        tr, st = _tr_st([user("ship it", 120), asst("done", 5)])
+        sv = SI.SinceView(cutoff_line=1, label="30m", new_events=0,
+                          text="# Since\nstatus changed", nothing_new=False)
+        self.assertIn("While you were away", HO.render(st, since_view=sv))
+
+    def test_truly_empty_delta_is_still_omitted(self):
+        tr, st = _tr_st([user("ship it", 120), asst("done", 5)])
+        sv = SI.SinceView(cutoff_line=1, label="30m", new_events=0,
+                          text="Nothing new", nothing_new=True)
+        self.assertNotIn("While you were away", HO.render(st, since_view=sv))
+
+
 if __name__ == "__main__":
     unittest.main()

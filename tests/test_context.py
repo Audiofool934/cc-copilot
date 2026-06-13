@@ -109,6 +109,44 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("`src/metrics.txt`  [tree]", ctx.text)
         self.assertNotIn("unrelated implementation detail", ctx.text)
 
+    def test_project_context_excludes_common_secret_files(self):
+        cwd = tempfile.mkdtemp(prefix="ccctx-project-secrets-")
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Public Notes\n")
+        secret_files = {
+            ".npmrc": "//registry.npmjs.org/:_authToken=npm_secret_token\n",
+            ".pypirc": "password = pypi_secret_token\n",
+            ".netrc": "machine example.com password netrc_secret_token\n",
+            "service_account.json": '{"private_key": "service_secret_token"}\n',
+            "prod.token": "prod_secret_token\n",
+        }
+        for rel, text in secret_files.items():
+            with open(os.path.join(cwd, rel), "w", encoding="utf-8") as f:
+                f.write(text)
+        p = write([user("inspect project", 60, sessionId="testsess", cwd=cwd),
+                   asst("done", 5)])
+        st = S.build(T.parse(p))
+
+        ctx = EC.build(p, st, "session", question="summarize project",
+                       project_context=True)
+
+        self.assertIn("Public Notes", ctx.text)
+        for rel, text in secret_files.items():
+            self.assertNotIn(rel, ctx.text)
+            self.assertNotIn(text.strip(), ctx.text)
+
+
+class TestContextHistoryRobustness(unittest.TestCase):
+    def test_none_history_text_does_not_crash(self):
+        # a null "q"/"a" in cockpit history used to TypeError the citation join.
+        p = write([user("inspect", 60, sessionId="s", cwd="/test/proj"),
+                   asst("done", 5)])
+        st = S.build(T.parse(p))
+        history = [("user", "earlier ask"), ("assistant", None), ("user", "")]
+        ctx = EC.build(p, st, "session", question="what now?", history=history,
+                       project_context=False)
+        self.assertTrue(ctx.text)
+
 
 if __name__ == "__main__":
     unittest.main()

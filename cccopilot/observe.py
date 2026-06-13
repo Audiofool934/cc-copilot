@@ -131,6 +131,8 @@ def timeline_lines(path: str, st: Optional[S.State] = None,
         report = build(path, st, scope, sessions)
     except ValueError as e:
         return [("warn", "scope error: " + str(e))]
+    except OSError:
+        return [("warn", "attention: transcript unavailable")]
     if not report.items:
         return [("warn", "attention: no live session evidence")]
     qualified = report.scope != SC.SESSION
@@ -271,20 +273,26 @@ def _recent_evidence(items: List[ObservationItem], qualified: bool) -> List[str]
     changes = []
     last_records = []
     for item in items:
+        # Across sessions the JSONL line number is meaningless (a long stale
+        # session outranks a short fresh one), so order by wall-clock time and
+        # only tiebreak on line within a session.
+        ts_by_line = {r.line: (r.ts.timestamp() if r.ts else 0.0)
+                      for r in item.st.tr.records}
         for f in item.st.failures[-2:]:
-            failures.append((f.line, item, f))
+            failures.append((ts_by_line.get(f.line, 0.0), f.line, item, f))
         for fc in item.st.changed_files[:3]:
-            changes.append((fc.last_line, item, fc))
+            changes.append((ts_by_line.get(fc.last_line, 0.0), fc.last_line, item, fc))
         if item.st.last_record is not None:
-            last_records.append((item.st.last_record.line, item, item.st.last_record))
-    failures.sort(reverse=True, key=lambda x: x[0])
-    changes.sort(reverse=True, key=lambda x: x[0])
-    last_records.sort(reverse=True, key=lambda x: x[0])
+            lr = item.st.last_record
+            last_records.append((ts_by_line.get(lr.line, 0.0), lr.line, item, lr))
+    failures.sort(reverse=True, key=lambda x: (x[0], x[1]))
+    changes.sort(reverse=True, key=lambda x: (x[0], x[1]))
+    last_records.sort(reverse=True, key=lambda x: (x[0], x[1]))
 
-    for _line, item, f in failures[:4]:
+    for _ts, _line, item, f in failures[:4]:
         rows.append(f"`{item.session_id}` {f.tool} failed: {_oneline(f.summary, 110)}"
                     f"{_cite(item, f.line, qualified)}")
-    for _line, item, fc in changes[:6]:
+    for _ts, _line, item, fc in changes[:6]:
         kinds = []
         if fc.edits:
             kinds.append(f"{fc.edits} edit{'s' if fc.edits != 1 else ''}")
@@ -292,7 +300,7 @@ def _recent_evidence(items: List[ObservationItem], qualified: bool) -> List[str]
             kinds.append(f"{fc.writes} write{'s' if fc.writes != 1 else ''}")
         rows.append(f"`{item.session_id}` changed `{fc.path}` ({', '.join(kinds)})"
                     f"{_cite(item, fc.last_line, qualified)}")
-    for _line, item, r in last_records[:3]:
+    for _ts, _line, item, r in last_records[:3]:
         rows.append(f"`{item.session_id}` tail: {_record_summary(r)}"
                     f"{_cite(item, r.line, qualified)}")
     return rows or ["(no recent evidence beyond the status board)"]

@@ -100,7 +100,10 @@ def _session_meta_name(session_id: str) -> str:
         n = o.get("name")
         if not isinstance(n, str) or not n.strip():
             continue
-        updated = int(o.get("updatedAt", 0) or 0)
+        try:
+            updated = int(o.get("updatedAt", 0) or 0)
+        except (TypeError, ValueError):
+            updated = 0      # ISO string / fractional-epoch / junk → treat as oldest
         if updated >= best_updated:
             best_name, best_updated = n.strip(), updated
     return best_name

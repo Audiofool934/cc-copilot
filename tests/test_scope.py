@@ -87,10 +87,79 @@ class TestScopeEvidence(_NoAmbientSession):
         self.assertIn("Project Title", brief)
         self.assertIn("[tree]", brief)
 
+    def test_project_brief_excludes_common_secret_files(self):
+        cwd, a, _b = self._project_sessions()
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Safe Project\n")
+        secret_files = {
+            ".npmrc": "//registry.npmjs.org/:_authToken=npm_secret_token\n",
+            ".pypirc": "password = pypi_secret_token\n",
+            ".netrc": "machine example.com password netrc_secret_token\n",
+            "service-account.json": '{"private_key": "service_secret_token"}\n',
+            "deploy.secret": "deploy_secret_token\n",
+        }
+        for rel, text in secret_files.items():
+            with open(os.path.join(cwd, rel), "w", encoding="utf-8") as f:
+                f.write(text)
+        st = S.build(T.parse(a))
+
+        brief = SC.render_evidence(a, st, "project").text
+
+        self.assertIn("Safe Project", brief)
+        for rel, text in secret_files.items():
+            self.assertNotIn(rel, brief)
+            self.assertNotIn(text.strip(), brief)
+
     def test_missing_session_selector_raises(self):
         _cwd, a, _b = self._project_sessions()
         st = S.build(T.parse(a))
         self.assertRaises(ValueError, SC.render_evidence, a, st, "multi", sessions=["nope"])
+
+    def test_unicode_digit_selector_is_a_clean_miss_not_a_value_error(self):
+        # '②' satisfies str.isdigit() but int() would raise; it must fall through
+        # to the normal "no session matching" path, not a stray int() ValueError.
+        _cwd, a, _b = self._project_sessions()
+        st = S.build(T.parse(a))
+        with self.assertRaises(ValueError) as cm:
+            SC.render_evidence(a, st, "multi", sessions=["②"])
+        self.assertIn("no session matching", str(cm.exception))
+        self.assertIn("②", str(cm.exception))
+
+
+class TestSkipFile(unittest.TestCase):
+    """Unit-level contract for the secret/dir filter so the broad-match
+    regressions (source files dropped) and false-negatives (secrets kept) the
+    adversarial review found stay fixed."""
+
+    def test_secret_files_are_skipped(self):
+        for name in (".env", ".env.prod", ".npmrc", ".pgpass", ".htpasswd",
+                     ".dockercfg", ".dockerconfigjson", "id_rsa",
+                     "credentials.yaml", "secrets.yaml", "secrets.yml",
+                     "token.json", "auth.json", "terraform.tfvars",
+                     "service-account.json", "service_account.json",
+                     "firebase-adminsdk-ab12c.json", "my-service-account.json",
+                     "release.keystore", "store.jks", "prod.token",
+                     ".bash_history", ".zsh_history", ".psql_history"):
+            self.assertTrue(SC._skip_file(name, name), f"should skip {name}")
+
+    def test_legitimate_source_is_kept(self):
+        # The substring-fragment and basename-prefix matches used to drop these.
+        for name in ("README.md", "secrets.py", "secrets.md", "secrets.go",
+                     "credentials.py", "credentials.go", "service_account.go",
+                     "service_account_test.py", "service-account-controller.ts",
+                     "application_default_credentials_test.go", "tokenizer.py"):
+            self.assertFalse(SC._skip_file(name, name), f"should keep {name}")
+
+    def test_fragment_match_is_gated_on_json(self):
+        # The varying-basename credential blob is still caught when it is JSON…
+        self.assertTrue(SC._skip_file("firebase-adminsdk-xx.json",
+                                      "firebase-adminsdk-xx.json"))
+        # …but the same fragment in a source file name is not.
+        self.assertFalse(SC._skip_file("service_account.go", "service_account.go"))
+
+    def test_secret_dir_anywhere_in_path_is_skipped(self):
+        self.assertTrue(SC._skip_file("config", os.path.join(".ssh", "config")))
+        self.assertTrue(SC._skip_file("note.txt", os.path.join("a", ".aws", "note.txt")))
 
 
 class TestChatScope(unittest.TestCase):
@@ -163,6 +232,20 @@ class TestScopeCli(unittest.TestCase):
         args = cli.build_parser().parse_args(
             ["brief", "--scope", "multi", "--scope-sessions", "sess-A,sess-B"])
         self.assertEqual(SC.parse_selectors(args.scope_sessions), ["sess-A", "sess-B"])
+
+
+class TestSameFile(unittest.TestCase):
+    def test_same_file_tolerates_a_missing_path(self):
+        # history-only mode: the observed transcript can vanish while the cockpit
+        # keeps its path, so samefile would raise — the helper must degrade.
+        fd, real = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            self.assertTrue(C._same_file(real, real))
+            self.assertFalse(C._same_file(real, "/no/such/path-xyz.jsonl"))
+            self.assertFalse(C._same_file("/gone-a.jsonl", "/gone-b.jsonl"))
+        finally:
+            os.unlink(real)
 
 
 if __name__ == "__main__":

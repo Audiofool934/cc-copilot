@@ -464,7 +464,7 @@ class CodexSource(AgentSource):
     def _ingest_tool_result(self, tr, line, ts, raw_ts, payload, patch_arity):
         call_id = str(payload.get("call_id") or "")
         out = payload.get("output")
-        text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+        text = _normalize_output(out)          # flatten image/structured blocks first
         is_err = _exit_failed(text)            # decide failure from the full wrapper…
         body = _short(_clean_output(text))     # …then show just the real output body
         arity = patch_arity.get(call_id)
@@ -517,6 +517,33 @@ def _exit_failed(output: str) -> bool:
         return int(m.group(1)) != 0
     except ValueError:
         return False
+
+
+def _normalize_output(out) -> str:
+    """Codex tool output is usually a string, but image/structured tools return
+    a list of content blocks. Flatten blocks to their text and substitute a
+    placeholder for image/binary blocks so multi-KB base64 image_url data never
+    lands verbatim in a brief; a string passes through unchanged.
+    """
+    if isinstance(out, str):
+        return out
+    if out is None:
+        return ""
+    if isinstance(out, list):
+        parts = []
+        for b in out:
+            if not isinstance(b, dict):
+                parts.append(str(b))
+                continue
+            kind = b.get("type") or ""
+            if "image" in kind:
+                parts.append("[image]")
+            elif b.get("text") is not None:
+                parts.append(str(b.get("text")))
+            else:
+                parts.append(f"[{kind or 'content'}]")
+        return "\n".join(p for p in parts if p)
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _clean_output(text: str) -> str:

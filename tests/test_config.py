@@ -64,6 +64,24 @@ class TestConfig(unittest.TestCase):
     def test_template_default_matches_runtime_default(self):
         self.assertIn('backend = "codex"', CFG.TEMPLATE)
 
+    def test_agents_enabled_array_from_config_file(self):
+        # On 3.9/3.10 (no tomllib) this exercises the fallback string parser,
+        # which used to yield ['["claude"', '"codex"]'].
+        self._write('[agents]\nenabled = ["claude", "codex"]\n')
+        self.assertEqual(CFG.agents_enabled(), ["claude", "codex"])
+
+    def test_agents_enabled_unwraps_fallback_array_string(self):
+        # Deterministic, version-independent: drive the fallback string branch.
+        import cccopilot.config as C
+        orig = C.load
+        try:
+            C.load = lambda: {"agents": {"enabled": '["claude", "codex"]'}}
+            self.assertEqual(CFG.agents_enabled(), ["claude", "codex"])
+            C.load = lambda: {"agents": {"enabled": "[]"}}
+            self.assertIsNone(CFG.agents_enabled())
+        finally:
+            C.load = orig
+
 
 if __name__ == "__main__":
     unittest.main()

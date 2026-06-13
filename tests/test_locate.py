@@ -183,5 +183,21 @@ class TestTitlePrecedence(unittest.TestCase):
         self.assertEqual(L.read_title(p, "s"), "renamed")
 
 
+class TestSessionMetaRobustness(unittest.TestCase):
+    def test_non_numeric_updated_at_does_not_crash(self):
+        # a sessions/*.json with an ISO-string updatedAt used to raise ValueError
+        # out of int() and crash all session/scope discovery.
+        d = tempfile.mkdtemp(prefix="cclocate-meta-")
+        with open(os.path.join(d, "s.json"), "w") as f:
+            json.dump({"sessionId": "abc123", "name": "My Session",
+                       "updatedAt": "2026-06-13T10:00:00Z"}, f)
+        orig = L.sessions_root
+        try:
+            L.sessions_root = lambda: d
+            self.assertEqual(L._session_meta_name("abc123"), "My Session")
+        finally:
+            L.sessions_root = orig
+
+
 if __name__ == "__main__":
     unittest.main()

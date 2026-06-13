@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+**Robustness pass: 17 crash / data-loss / wrong-output fixes.** A package-wide,
+adversarially-verified audit fixed a batch of pre-existing defects across the
+core runtime:
+
+- *Persistence.* `truncate()` (rewind/fork) held its lock on the very log file
+  it then atomically replaced, so a concurrent turn from a second cockpit — or
+  the TUI's own answer worker thread — could be written into the orphaned inode
+  and silently lost while the stored turn count drifted. The lock now lives on a
+  stable per-conversation lock file held across every mutation, and
+  `record_state` re-derives the turn count from the log instead of writing back
+  a stale cached value.
+- *Missing-file resilience.* `watch`, `status`/`fleet`, `/sessions`, `/use`,
+  `/here`, and the cockpit activity strip no longer crash when an observed
+  transcript is deleted or rotated mid-operation — each degrades and keeps going.
+- *Malformed-input parsing.* A non-numeric session `updatedAt`, a slash-only
+  command name, a Unicode-digit session selector, a non-object `meta.json`, a
+  null cockpit-history entry, and an `[agents]` array under the no-tomllib
+  fallback parser (which silently disabled agent discovery on Python 3.9/3.10)
+  are all handled now instead of raising.
+- *Output correctness.* Multi-session "recent evidence" orders by wall-clock
+  time rather than per-file line number (a long stale session no longer buries a
+  short fresh one); Codex image/structured tool outputs render an `[image]`
+  placeholder instead of dumping kilobytes of base64; a `null` completion body
+  surfaces as a clean backend error; rewinding the chat while an answer is still
+  streaming no longer resurrects that abandoned turn into the fork; and `handoff`
+  keeps its "While you were away" section for status/safety transitions that
+  carry no counted events.
+
+**Read-only narrator is enforced, not just requested.** The Claude and Codex CLI
+backends are now launched with their own read-only/non-persistent flags
+(`--tools ""`, `--no-session-persistence`, `--safe-mode`, `--strict-mcp-config`,
+`--disable-slash-commands` for Claude; `--sandbox read-only`, `--ephemeral`,
+`--ignore-rules`, `--ignore-user-config` for Codex) so the supervision layer
+cannot become a tool-using agent even if a prompt told it to. Every flag is
+gated on the installed CLI's own `--help` — with a token-boundary match so a
+look-alike flag like `--tools-config` never enables a flag the CLI would reject
+— so older builds that lack a flag still run.
+
+**Project evidence is harder to leak secrets through.** The deterministic file
+scanner that feeds `/brief`, chat, and project context now skips a wider set of
+credential files and trees (cloud/k8s/terraform dirs, shell and DB history
+files, `.pgpass`/`.htpasswd`/`.dockercfg`, GCP/Firebase service-account and
+token JSON, keystores). The expanded matching was also tightened so it no longer
+drops ordinary source files — `secrets.py`, `credentials.go`, and
+`service_account.go` stay in the index; the varying-basename credential blobs
+(`firebase-adminsdk-*.json`) are matched only against `*.json`.
+
+**`backends` tells the truth about no-key endpoints.** `cc-copilot backends`
+now probes keyless local/custom OpenAI-compatible endpoints (e.g. Ollama)
+before reporting "ready", reports an invalid active backend as a clean error
+with exit code 2 instead of a traceback, and a malformed `CC_COPILOT_LLM_CMD`
+(unbalanced quotes) now surfaces as a graceful error rather than crashing
+narration. `CC_COPILOT_LLM_CMD` is parsed with shell-style quoting.
+
+**`chat --next` pins the session it waited for.** The session path returned by
+the wait is now actually used, instead of falling back to whatever the resolver
+picked.
+
 **Simpler model picker.** Removed the niche long-tail provider backends from the
 built-in `/model`, `backends`, and `init` surfaces. The public provider list now
 stays focused on Claude, Codex, DeepSeek, Gemini API, GLM, Groq, Grok, Kimi,

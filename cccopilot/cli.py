@@ -524,11 +524,16 @@ def cmd_status(args) -> int:
         note = f"  ({hidden} cc-copilot helper session(s) hidden)" if hidden else ""
         print(f"(no work sessions for {cwd}){note}\n  dir: {locate.project_dir_for(cwd)}")
         return 1
-    chosen = refs if getattr(args, "all", False) else refs[:args.limit]
+    want = len(refs) if getattr(args, "all", False) else args.limit
     rows = []
-    for r in chosen:
-        tr = SRC.parse(r.path)
-        st = S.build(tr)
+    for r in refs:
+        if len(rows) >= want:
+            break          # collected enough parsed rows; a skipped ref never ate a slot
+        try:
+            tr = SRC.parse(r.path)
+            st = S.build(tr)
+        except OSError:
+            continue       # a session deleted/rotated mid-scan: skip it, try the next ref
         a = assess(st)
         sigs = [s for s in a.signals if s.severity in ("alarm", "warn")]
         if sigs:
@@ -541,7 +546,7 @@ def cmd_status(args) -> int:
     rows.sort(key=lambda x: (_fleet_rank(x[1].status, x[2].verdict),
                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
     hnote = f", {hidden} helper hidden" if hidden else ""
-    print(f"cc-copilot status — {cwd}  ({len(chosen)} of {len(refs)} sessions{hnote})")
+    print(f"cc-copilot status — {cwd}  ({len(rows)} of {len(refs)} sessions{hnote})")
     multi_agent = len({r.agent for r, *_ in rows}) > 1
     for r, st, a, head in rows:
         g = _GLYPH.get(st.status, "?")
@@ -840,17 +845,24 @@ def cmd_watch(args) -> int:
                 size = -1
             if size != last_size:
                 last_size = size
-                tr = SRC.parse(path)
-                st = S.build(tr)
-                if notify and prev is not None:
-                    from .notify import alert_for_diff, desktop_notify
-                    msg = alert_for_diff(S.diff(prev, st))
-                    if msg:
-                        desktop_notify(f"cc-copilot · {base}", msg)
-                prev = st
-                os.system("clear" if os.name != "nt" else "cls")
-                print(B.render(st))
-                print(f"\n_(watching{mode} · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
+                try:
+                    tr = SRC.parse(path)
+                    st = S.build(tr)
+                    if notify and prev is not None:
+                        from .notify import alert_for_diff, desktop_notify
+                        msg = alert_for_diff(S.diff(prev, st))
+                        if msg:
+                            desktop_notify(f"cc-copilot · {base}", msg)
+                    prev = st
+                    os.system("clear" if os.name != "nt" else "cls")
+                    print(B.render(st))
+                    print(f"\n_(watching{mode} · {time.strftime('%H:%M:%S')} · {tr.raw_lines} events)_")
+                except OSError:
+                    # transcript deleted/rotated mid-watch: force a re-parse on the
+                    # next poll instead of leaving last_size committed to a size we
+                    # never actually parsed (which would skip it until a later write).
+                    last_size = -1
+                    sys.stderr.write(f"# transcript unavailable ({time.strftime('%H:%M:%S')}) — waiting…\n")
             time.sleep(interval)
     except KeyboardInterrupt:
         sys.stderr.write("\n# stopped\n")

@@ -265,7 +265,7 @@ def resolve_session_refs(path: str, selectors=None) -> list:
         match = None
         if sel in ("all", "*"):
             return refs
-        if sel.isdigit():
+        if sel.isascii() and sel.isdigit():
             i = int(sel) - 1
             if 0 <= i < len(refs):
                 match = refs[i]

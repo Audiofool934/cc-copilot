@@ -5,9 +5,70 @@ import io
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from cccopilot import cli, lastlook as LL, sources as SRC
 from tests.util import asst, result, tool, user, write
+
+
+class _Ref:
+    def __init__(self, path, sid, agent="claude"):
+        self.path, self.session_id, self.own, self.agent = path, sid, False, agent
+
+
+class TestMissingFileResilienceCli(unittest.TestCase):
+    def test_status_limit_skips_deleted_ref_and_shows_the_next_live_one(self):
+        # --limit 1 with the newest ref deleted mid-scan must still surface an
+        # older live session, not exit with an empty board.
+        live = write([user("fix bug", 120), asst("done", 5)])
+        refs = [_Ref("/deleted-newest.jsonl", "newer000"), _Ref(live, "older000")]
+        real_parse = SRC.parse
+
+        def parse(p):
+            if p == "/deleted-newest.jsonl":
+                raise FileNotFoundError(p)
+            return real_parse(p)
+
+        args = cli.build_parser().parse_args(["status", "--limit", "1"])
+        buf = io.StringIO()
+        with mock.patch.object(cli.SRC, "list_sessions", return_value=refs), \
+             mock.patch.object(cli.SRC, "parse", side_effect=parse), \
+             contextlib.redirect_stdout(buf):
+            rc = cli.cmd_status(args)
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("older000", out)            # the live session is shown…
+        self.assertIn("(1 of 2 sessions", out)    # …filling the one requested slot
+
+    def test_watch_reparses_at_same_size_after_a_transient_failure(self):
+        # A parse failure must not leave last_size committed to an unparsed size
+        # (which would skip re-parsing the same-size file until a later write).
+        live = write([user("x", 10), asst("y", 1)])
+        calls = {"parse": 0, "sleep": 0}
+        real_parse = SRC.parse
+
+        def parse(p):
+            calls["parse"] += 1
+            if calls["parse"] == 1:
+                raise PermissionError("transient")     # first poll fails…
+            return real_parse(p)                        # …second must retry at the same size
+
+        def sleep(_):
+            calls["sleep"] += 1
+            if calls["sleep"] >= 2:
+                raise KeyboardInterrupt                 # break the watch loop
+
+        args = cli.build_parser().parse_args(["watch"])
+        with mock.patch.object(cli, "_resolve_or_die", return_value=live), \
+             mock.patch("os.path.getsize", return_value=100), \
+             mock.patch.object(cli.SRC, "parse", side_effect=parse), \
+             mock.patch("os.system"), \
+             mock.patch("time.sleep", side_effect=sleep), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = cli.cmd_watch(args)
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(calls["parse"], 2)
 
 
 class TestSinceHandoffCli(unittest.TestCase):
