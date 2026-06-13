@@ -3,8 +3,10 @@ import os
 import tempfile
 import unittest
 
+import re
+
 from cccopilot import chat as C, scope as SC, state as S, transcript as T, narrate as N
-from tests.util import user, asst, tool, result
+from tests.util import user, asst, tool, result, iso
 
 
 def _write_at(path, events):
@@ -232,6 +234,55 @@ class TestScopeCli(unittest.TestCase):
         args = cli.build_parser().parse_args(
             ["brief", "--scope", "multi", "--scope-sessions", "sess-A,sess-B"])
         self.assertEqual(SC.parse_selectors(args.scope_sessions), ["sess-A", "sess-B"])
+
+
+class TestCandidateRefsCrossBucket(unittest.TestCase):
+    """A new same-cwd Claude session must be discovered even when it lands in a
+    different ~/.claude/projects/<bucket>/ than dirname(anchor) — e.g. the macOS
+    /tmp -> /private/tmp symlink (anchor pinned via the logical path, agent
+    records the physical cwd), or a session started from a subdirectory."""
+
+    _ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID",
+            "CODEX_THREAD_ID", "CODEX_SESSION_ID")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV}
+        self.home = tempfile.mkdtemp(prefix="ccxbucket-")
+        os.environ["CLAUDE_CONFIG_DIR"] = self.home
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is not None:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
+
+    def _sess(self, bucket_cwd, recorded_cwd, sid, ago):
+        d = os.path.join(self.home, "projects",
+                         re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(bucket_cwd)))
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, sid + ".jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "sessionId": sid,
+                                "cwd": recorded_cwd, "timestamp": iso(ago),
+                                "message": {"role": "user", "content": "hi"}}) + "\n")
+        return p
+
+    def test_new_session_in_a_different_bucket_is_still_discovered(self):
+        # anchor A is on disk in the logical bucket but records the physical cwd
+        a = self._sess("/tmp/proj", "/private/tmp/proj", "sessA", 600)
+        # B lands in the physical-cwd bucket — only reachable via the cwd lookup
+        self._sess("/private/tmp/proj", "/private/tmp/proj", "sessB", 60)
+        names = {os.path.basename(r.path) for r in SC._candidate_refs(a)}
+        self.assertIn("sessA.jsonl", names)
+        self.assertIn("sessB.jsonl", names)   # was dropped by the agent-based skip
+
+    def test_same_bucket_has_no_duplicates(self):
+        a = self._sess("/private/tmp/p2", "/private/tmp/p2", "a2", 600)
+        self._sess("/private/tmp/p2", "/private/tmp/p2", "b2", 60)
+        names = [os.path.basename(r.path) for r in SC._candidate_refs(a)]
+        self.assertEqual(sorted(names), ["a2.jsonl", "b2.jsonl"])
+        self.assertEqual(len(names), len(set(names)))
 
 
 class TestSameFile(unittest.TestCase):

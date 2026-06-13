@@ -319,9 +319,18 @@ def _candidate_refs(path: str, inject_current: bool = False) -> list:
         refs = LOC.refs_in_dir(os.path.dirname(path), include_own=True) if path else []
     cwd = SRC.read_cwd(path) if path else ""
     if cwd:
+        # Dedup by PATH, not by agent: the cwd lookup can reach a different
+        # ~/.claude/projects/<bucket>/ than dirname(anchor) — e.g. when the
+        # anchor was resolved through the logical /tmp while the agent records
+        # the physical /private/tmp (macOS symlink), or B was started from a
+        # subdirectory. Skipping every Claude entry here would then drop a real
+        # sibling that refs_in_dir(dirname(anchor)) never saw.
+        seen_paths = {os.path.abspath(r.path) for r in refs}
         for ref in SRC.list_sessions(cwd, include_own=True):
-            if ref.agent == "claude" and anchor_agent == "claude":
-                continue  # already covered by co-located siblings
+            k = os.path.abspath(ref.path)
+            if k in seen_paths:
+                continue
+            seen_paths.add(k)
             refs.append(ref)
 
     refs = [r for r in refs if not r.own or os.path.abspath(r.path) == here]

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Sibling discovery no longer drops sessions in a different projects bucket.**
+`_candidate_refs` found the watched agent's own Claude sessions two ways — a scan
+of the anchor's directory plus a `cwd`-based lookup — and wrongly assumed the
+directory scan was a superset, skipping every Claude entry from the `cwd` lookup.
+When the two reach different `~/.claude/projects/<bucket>/` directories (e.g. a
+moved session, or an anchor whose on-disk directory encodes differently than its
+recorded `cwd`), a real sibling could be dropped. Discovery now unions and dedups
+by path instead.
+
 **Robustness pass: 17 crash / data-loss / wrong-output fixes.** A package-wide,
 adversarially-verified audit fixed a batch of pre-existing defects across the
 core runtime:
