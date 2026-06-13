@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0 — 2026-06-13
 
 **Slash-command organization pass.** A multi-surface audit (REPL / cockpit TUI /
 CLI / docs) drove a round of consistency fixes:
