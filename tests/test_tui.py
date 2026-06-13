@@ -1351,24 +1351,32 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         sess = self._session("sess-A")
         sess.history = [("user", "first question"), ("assistant", "a1 [L1]"),
                         ("user", "second question"), ("assistant", "a2 [L1]")]
-        app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            # The restored history must be painted before we can pin a prompt: if
-            # _chat_prompt_widgets() is still empty, _update_chat_pin leaves the pin
-            # index None and the click becomes a no-op. One pause isn't always
-            # enough on a slow runner (flaked on CI 3.13), so settle until painted.
-            # (No pause AFTER _update_chat_pin: a refresh would resync the pin to the
-            # bottom prompt, so the click would jump there instead of to index 0.)
-            for _ in range(20):
-                if app._chat_prompt_widgets():
-                    break
+        # The 0.35s scroll→pin resync (`set_interval(..., _sync_chat_pin_to_scroll)`)
+        # rewrites _chat_pin_index / nav from the scroll position. On a slow runner
+        # it fires mid-test, after the drift below, so the click jumps to the wrong
+        # index — this is the real cause of the CI 3.13 flake (1 != 0). Neutralize it
+        # for this test (which verifies the click→jump, not the resync) by patching
+        # the class so the value set_interval captures at mount is the no-op.
+        orig_sync = tui.Cockpit._sync_chat_pin_to_scroll
+        tui.Cockpit._sync_chat_pin_to_scroll = lambda self: None
+        try:
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
                 await pilot.pause()
-            app._update_chat_pin(0)                      # pin the first prompt
-            app._chat_prompt_nav_index = 1               # pretend we drifted
-            await pilot.click("#chat-pin")
-            await pilot.pause()
-            self.assertEqual(app._chat_prompt_nav_index, 0)
+                # the restored history must be painted before we can pin a prompt:
+                # an empty _chat_prompt_widgets() leaves the pin index None and the
+                # click a no-op, so settle until it's painted.
+                for _ in range(20):
+                    if app._chat_prompt_widgets():
+                        break
+                    await pilot.pause()
+                app._update_chat_pin(0)                      # pin the first prompt
+                app._chat_prompt_nav_index = 1               # pretend we drifted
+                await pilot.click("#chat-pin")
+                await pilot.pause()
+                self.assertEqual(app._chat_prompt_nav_index, 0)
+        finally:
+            tui.Cockpit._sync_chat_pin_to_scroll = orig_sync
 
     async def test_prompt_jump_moves_the_chat_viewport_and_syncs_count(self):
         from textual.widgets import Static
