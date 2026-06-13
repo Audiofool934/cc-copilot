@@ -1731,6 +1731,24 @@ class TestModelSwitchKeyPrompt(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["env"]["DEEPSEEK_API_KEY"], "sk-deep")
         self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "sk-deep")  # live this run
 
+    async def test_keyprompt_save_persists_the_requested_model_not_just_default(self):
+        # `/model deepseek:deepseek-v4-pro` while the key is captured must save the
+        # REQUESTED model, so the next session starts on it (not the provider default).
+        from textual.widgets import Input
+        from cccopilot import config as CFG
+        app = self._cockpit()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._set_backend("deepseek", after_model="deepseek-v4-pro")
+            await pilot.pause()
+            app.screen.query_one("#keyprompt-key", Input).value = "sk-deep"
+            app.screen._save()
+            await pilot.pause()
+            self.assertEqual(app.model, "deepseek-v4-pro")          # live session
+        data = CFG._load_simple(os.environ["CC_COPILOT_CONFIG"])
+        self.assertEqual(data.get("backend"), "deepseek")
+        self.assertEqual(data.get("model"), "deepseek-v4-pro")      # config matches the live model
+
     async def test_keyprompt_empty_submit_blocks(self):
         from textual.widgets import Input
         app = self._cockpit()
@@ -1856,6 +1874,63 @@ class TestModelCatalogSwitch(unittest.IsolatedAsyncioTestCase):
                            backend=backend, model=model)
         sess.refresh()
         return tui.Cockpit(sess, poll=999, alerts=False)
+
+    async def test_user_switch_offers_to_persist_but_init_does_not(self):
+        app = self._cockpit()                          # codex
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            calls = []
+            app._offer_persist_default = lambda: calls.append(1)   # stub the worker
+            app._set_model("custom-model")             # user model switch → offers
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            app._set_backend("claude")                 # user backend switch (CLI) → offers
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            app._after_onboard(("claude", tui.OB.choice_for("claude")))  # /init → no offer
+            self.assertEqual(calls, [])
+
+    async def test_offer_writes_config_on_yes(self):
+        # The offer only fires when a config already exists (no auto-create); seed
+        # one whose default differs from the live backend so the prompt is shown.
+        with open(os.environ["CC_COPILOT_CONFIG"], "w") as f:
+            f.write('backend = "codex"\n[env]\n[history]\nenabled = true\n')
+        app = self._cockpit(backend="deepseek",
+                            model=tui.MODELS.default_for("deepseek"))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            recorded = []
+
+            async def fake_wait(screen):
+                return "yes"
+
+            app.push_screen_wait = fake_wait
+            real = tui.OB.persist_default
+            tui.OB.persist_default = lambda b, m="", path=None: recorded.append((b, m)) or "/x"
+            try:
+                app._offer_persist_default()
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+            finally:
+                tui.OB.persist_default = real
+        self.assertEqual(recorded, [("deepseek", tui.MODELS.default_for("deepseek"))])
+
+    async def test_pick_model_cancel_still_offers_to_persist_the_switch(self):
+        app = self._cockpit(backend="deepseek",
+                            model=tui.MODELS.default_for("deepseek"))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            calls = []
+            app._offer_persist_default = lambda: calls.append(1)
+
+            async def cancel(screen):
+                return None                            # Esc the model picker
+
+            app.push_screen_wait = cancel
+            app.action_pick_model()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(len(calls), 1)            # the backend switch is still offered
 
     async def test_typed_bare_model_switches_model_only(self):
         app = self._cockpit(backend="deepseek",

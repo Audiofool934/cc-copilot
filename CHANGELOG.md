@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Switching model in the cockpit can now update your default.** After a `/model`
+switch (backend or model), the cockpit asks *"make this the default for new
+cockpit sessions?"* — answer yes and it writes the new `backend`/`model` to
+`~/.cc-copilot.toml` (preserving your `[env]` secrets, history, and agents),
+so the next new session starts where you left off instead of always reverting to
+your original setup choice. It only asks when a config already exists and the
+choice actually differs from the saved default, and never on `/init` or key
+capture (those already write the config). A new `onboard.persist_default` does
+the surgical, atomic, 0600 config update for any backend (including non-curated
+ones like ollama that `/model` can reach).
+
 ## 0.19.0 — 2026-06-13
 
 **Slash-command organization pass.** A multi-surface audit (REPL / cockpit TUI /

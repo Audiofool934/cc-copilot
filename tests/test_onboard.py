@@ -168,5 +168,48 @@ class TestChoiceFor(_Base):
         self.assertIsNone(OB.choice_for_or_none(""))
 
 
+class TestPersistDefault(_Base):
+    """`persist_default` updates the saved default for ANY backend while keeping
+    the rest of the config intact; `saved_default` reads it back."""
+
+    def test_saved_default_empty_when_no_file(self):
+        self.assertEqual(OB.saved_default(), ("", ""))
+
+    def test_persists_backend_and_model_and_reads_back(self):
+        OB.write_choice("deepseek", model="deepseek-chat", key_value="sk-secret")
+        OB.persist_default("claude", "")             # switch the default to a CLI backend
+        self.assertEqual(OB.saved_default(), ("claude", ""))
+        txt = open(self.p, encoding="utf-8").read()
+        self.assertIn('backend = "claude"', txt)
+        self.assertIn('DEEPSEEK_API_KEY = "sk-secret"', txt)   # secret preserved
+
+    def test_persists_non_curated_backend_that_write_choice_rejects(self):
+        # write_choice raises for ollama (no onboarding Choice); persist_default
+        # must accept it — /model can land on non-curated backends.
+        with self.assertRaises(ValueError):
+            OB.write_choice("ollama")
+        OB.write_choice("claude")                    # seed a valid config first
+        OB.persist_default("ollama", "qwen3")
+        self.assertEqual(OB.saved_default(), ("ollama", "qwen3"))
+
+    def test_preserves_history_toggle_dir_and_agents(self):
+        with open(self.p, "w") as f:
+            f.write('backend = "deepseek"\nmodel = "deepseek-chat"\n'
+                    '[env]\nDEEPSEEK_API_KEY = "sk-x"\n'
+                    '[history]\nenabled = false\ndir = "/tmp/ccstate"\n'
+                    '[agents]\nenabled = ["codex"]\n')
+        OB.persist_default("codex", "")
+        txt = open(self.p, encoding="utf-8").read()
+        self.assertIn("enabled = false", txt)        # history toggle preserved
+        self.assertIn('dir = "/tmp/ccstate"', txt)   # custom state dir preserved
+        self.assertIn('"codex"', txt)                # agents list preserved
+        self.assertIn('DEEPSEEK_API_KEY = "sk-x"', txt)
+
+    def test_written_file_is_chmod_600(self):
+        OB.write_choice("claude")
+        OB.persist_default("codex", "")
+        self.assertEqual(stat.S_IMODE(os.stat(self.p).st_mode), 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

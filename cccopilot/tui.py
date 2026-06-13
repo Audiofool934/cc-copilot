@@ -1495,7 +1495,9 @@ class Cockpit(App):
             self.notify("no model set — pick one anytime with /init", severity="information")
             self._update_status()
             return
-        self._set_backend(name)                 # applies to the live session + UI
+        # /init already wrote the config via the onboard screen, so don't follow
+        # up with the "make this your default?" prompt.
+        self._set_backend(name, offer_default=False)   # applies to the live session + UI
         if choice.kind == "api":
             self.model = self.session.model = choice.default_model or self.model
         else:
@@ -2883,17 +2885,20 @@ class Cockpit(App):
             opts.append((f"{m.id:<26} · {m.note}{mark}", m.id))
         opts.append(("custom…  (set any id with `/model <model-id>`)", "__custom__"))
         chosen = await self.push_screen_wait(Picker(f"model for {name}", opts))
-        if not chosen:
-            return                                # Esc keeps the current model
-        if chosen == "__custom__":
-            self.notify("type `/model <model-id>` to set a custom model",
-                        severity="information")
+        if not chosen or chosen == "__custom__":
+            # Esc / custom keeps the model the backend switch already applied (the
+            # provider default). The switch itself stuck, so still offer to persist
+            # it — the guard skips the prompt if it already equals the saved default.
+            if chosen == "__custom__":
+                self.notify("type `/model <model-id>` to set a custom model",
+                            severity="information")
+            self._offer_persist_default()
             return
         self._set_model(chosen)
 
-    def _set_model(self, model_id):
-        """Switch the model on the CURRENT backend (session-scoped, like backend
-        switches; persist a default with `cc-copilot init`)."""
+    def _set_model(self, model_id, offer_default=True):
+        """Switch the model on the CURRENT backend (session-scoped by default; the
+        'make this your default?' prompt can persist it for new sessions)."""
         self.model = self.session.model = (model_id or "").strip() or None
         info = MODELS.find(self.backend or "", self.model or "")
         if info and "deprecated" in (info.note or ""):
@@ -2902,6 +2907,40 @@ class Cockpit(App):
             self.notify(f"model → {self.model or '(backend default)'}",
                         severity="information")
         self._update_status()
+        if offer_default:
+            self._offer_persist_default()
+
+    @work(exclusive=True, group="persist-default")
+    async def _offer_persist_default(self):
+        """After a user-initiated backend/model switch, offer to make it the
+        default for FUTURE new cockpit sessions. 'Ask first', so a one-off override
+        never silently rewrites ~/.cc-copilot.toml. Skipped when the choice already
+        equals the saved default."""
+        backend, model = self.backend, self.model
+        if not backend:
+            return
+        if not os.path.isfile(OB.CFG.path()):
+            return     # no config yet — use /init to set one up; a casual model
+                       # switch shouldn't silently create a config file
+        try:
+            saved_b, saved_m = OB.saved_default()
+        except Exception:
+            saved_b, saved_m = "", ""
+        if backend == saved_b and (model or "") == (saved_m or ""):
+            return                                   # already the saved default
+        label = backend + (f" · {model}" if model else "")
+        chosen = await self.push_screen_wait(Picker(
+            f"make {label} the default for new cockpit sessions?",
+            [("Yes — every new cockpit starts here", "yes"),
+             ("No — just this session", "no")]))
+        if chosen != "yes":
+            return
+        try:
+            OB.persist_default(backend, model)
+        except OSError as e:
+            self.notify(f"could not save default: {e}", severity="error")
+            return
+        self.notify(f"default → {label}", severity="information")
 
     def action_change_theme(self) -> None:
         self.action_theme()
@@ -2934,10 +2973,12 @@ class Cockpit(App):
         label = COCKPIT_THEME_SPECS[name]["label"]
         self.notify(f"theme → {label}", severity="information")
 
-    def _set_backend(self, name, after_model=None):
+    def _set_backend(self, name, after_model=None, offer_default=True):
         """Switch backend. ``after_model``: None = land on the provider default;
         "PICK" = open the model picker after the switch (API + catalog only);
-        any other string = set that model id after the switch."""
+        any other string = set that model id after the switch. ``offer_default``
+        gates the "make this your default?" prompt — off for onboarding / key
+        capture, which already write the config."""
         try:
             be = BK.resolve(name)
         except BK.BackendError as e:
@@ -2952,9 +2993,9 @@ class Cockpit(App):
                              lambda k: self._finish_api_switch(name, choice, k,
                                                                after_model))
             return
-        self._commit_backend(name, be, after_model)
+        self._commit_backend(name, be, after_model, offer_default=offer_default)
 
-    def _commit_backend(self, name, be, after_model=None):
+    def _commit_backend(self, name, be, after_model=None, offer_default=True):
         self.backend = self.session.backend = name
         # Keep the active model coherent with the new backend's kind: an API
         # backend uses its provider default (e.g. deepseek-v4-flash); a CLI
@@ -2967,12 +3008,18 @@ class Cockpit(App):
             self.model = self.session.model = None
         self.notify(f"backend → {name}", severity="information")
         self._update_status()
+        # Offer to persist the new default only once the choice has SETTLED: if we
+        # chain into the model picker / a specific model, that terminal step makes
+        # the offer instead (so the user isn't asked twice in one switch).
+        chained = False
         if after_model and isinstance(be, BK.OpenAICompatBackend):
             if after_model == "PICK":
                 if MODELS.models_for(name):
-                    self.action_pick_model()
+                    self.action_pick_model(); chained = True
             else:
-                self._set_model(after_model)
+                self._set_model(after_model, offer_default=offer_default); chained = True
+        if not chained and offer_default:
+            self._offer_persist_default()
 
     def _finish_api_switch(self, name, choice, key, after_model=None):
         """KeyPrompt callback: persist the entered key, then complete the switch.
@@ -2981,12 +3028,20 @@ class Cockpit(App):
             self.notify(f"kept {self.backend or 'current'} backend — no key entered",
                         severity="warning")
             return
+        # Save the model the user actually asked for — a specific id (from
+        # `/model deepseek:deepseek-v4-pro`) rather than the provider default — so
+        # the saved config matches the live session and the next cockpit starts on
+        # it. ("PICK" / None mean "no specific model yet" → the provider default.)
+        save_model = (after_model if after_model and after_model != "PICK"
+                      else choice.default_model)
         try:
-            OB.write_choice(name, model=choice.default_model, key_value=key)
-            OB.apply_to_env(name, model=choice.default_model, key_value=key)
+            OB.write_choice(name, model=save_model, key_value=key)
+            OB.apply_to_env(name, model=save_model, key_value=key)
         except OSError as e:
             self.notify(f"could not save key: {e}", severity="error"); return
-        self._commit_backend(name, BK.resolve(name), after_model)
+        # write_choice already persisted this backend+model as the default, so
+        # don't also ask "make it your default?".
+        self._commit_backend(name, BK.resolve(name), after_model, offer_default=False)
         self.notify(f"key saved · {choice.key_env}", severity="information")
 
     def action_toggle_select_mode(self) -> None:

@@ -272,10 +272,14 @@ def write_choice(name, model="", key_value="", path=None) -> str:
     text = render_config(backend=(c.name or None), model=model, env=env,
                          history_enabled=hist_enabled, history_dir=hist_dir,
                          agents_enabled=agents_enabled)
-    # Create the temp file 0600 from the start (mkstemp honors that, ignoring
-    # umask) so an API key never lands in a world-readable file — not even in the
-    # window before chmod, and not if we crash mid-write. Same dir as the target
-    # so os.replace stays atomic (same filesystem).
+    return _write_atomic(p, text)
+
+
+def _write_atomic(p: str, text: str) -> str:
+    """Write ``text`` to ``p`` atomically at 0600 (secrets-safe). The temp file is
+    created 0600 from the start (mkstemp honors that, ignoring umask) so an API key
+    never lands in a world-readable file — not even in the window before chmod, and
+    not if we crash mid-write. Same dir as the target so os.replace stays atomic."""
     import tempfile
     d = os.path.dirname(p) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".cc-copilot-", suffix=".tmp")
@@ -296,6 +300,29 @@ def write_choice(name, model="", key_value="", path=None) -> str:
     except OSError:
         pass
     return p
+
+
+def persist_default(backend, model="", path=None) -> str:
+    """Update the saved default backend/model, preserving the rest of the config
+    (``[env]`` secrets, history, agents). Unlike :func:`write_choice` this accepts
+    ANY backend name — the cockpit's ``/model`` can switch to non-curated backends
+    (ollama, a custom endpoint, a free-form id) that have no onboarding Choice."""
+    p = path or CFG.path()
+    existing = _read_existing(p)
+    env = dict(existing.get("env") or {})
+    hist = existing.get("history") if isinstance(existing.get("history"), dict) else {}
+    text = render_config(backend=(backend or None), model=(model or ""), env=env,
+                         history_enabled=bool(hist.get("enabled", True)),
+                         history_dir=str(hist.get("dir") or ""),
+                         agents_enabled=_existing_agents(existing))
+    return _write_atomic(p, text)
+
+
+def saved_default(path=None):
+    """The ``(backend, model)`` currently saved in the config file, or ``("", "")``
+    when none — lets a caller skip a redundant 'make this the default?' prompt."""
+    existing = _read_existing(path or CFG.path())
+    return (str(existing.get("backend") or ""), str(existing.get("model") or ""))
 
 
 def apply_to_env(name, model="", key_value="") -> None:
