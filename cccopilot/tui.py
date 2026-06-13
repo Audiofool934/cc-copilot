@@ -1299,8 +1299,12 @@ class Cockpit(App):
         # Ctrl+Y copies the current text selection (Textual's native drag-select →
         # system clipboard via OSC 52, works over tmux/SSH). Copy gets its own key
         # so Ctrl+C is never ambiguous about quitting; ⌘C is intercepted by the
-        # terminal and never reaches us. (ctrl+n still moves down in an open Picker.)
-        Binding("ctrl+y", "copy_selection", "copy"),
+        # terminal and never reaches us.
+        # priority=True is REQUIRED: the composer (a focused TextArea) otherwise
+        # swallows ctrl+y, so a non-priority app binding never fires. Priority
+        # bindings are checked before the focused widget. (ctrl+n still moves down
+        # in an open Picker — handled in the picker's own key handler.)
+        Binding("ctrl+y", "copy_selection", "copy", priority=True),
         Binding("ctrl+t", "model", "model"),
         Binding("ctrl+r", "refresh_now", "refresh", show=False),
         Binding("ctrl+l", "clear_chat", "clear view", show=False),

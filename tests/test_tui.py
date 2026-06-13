@@ -1163,6 +1163,21 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions.get("ctrl+c"), "quit")            # quit, never copy
         self.assertEqual(actions.get("ctrl+y"), "copy_selection")  # copy is its own key
 
+    async def test_ctrl_y_keypress_fires_copy_from_the_focused_composer(self):
+        """Regression: a real Ctrl+Y keypress must trigger copy while the composer
+        (a TextArea) has focus. The composer swallows ctrl+y, so the binding needs
+        priority to win — a non-priority binding silently never fires."""
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertTrue(app.query_one("#composer").has_focus)   # composer is focused
+            fired = []
+            app.action_copy_selection = lambda: fired.append(1)
+            await pilot.press("ctrl+y")
+            await pilot.pause()
+            self.assertEqual(fired, [1])                            # binding actually fired
+
     async def test_tip_line_prompts_ctrl_y_when_text_is_selected(self):
         from textual.widgets import Static
         sess = self._session("sess-A")

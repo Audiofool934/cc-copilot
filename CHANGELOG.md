@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fix: Ctrl+Y now actually copies.** The new copy key was bound without priority,
+so the focused composer (a `TextArea`) swallowed `ctrl+y` before the app's binding
+could fire — pressing it did nothing. It's now a priority binding (checked before
+the focused widget), with a regression test that presses the key from the focused
+composer. Shipped broken in 0.20.0.
+
 ## 0.20.0 — 2026-06-13
 
 **Copying text from the cockpit is now one key.** Drag to select any message
