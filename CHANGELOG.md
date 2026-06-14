@@ -5,7 +5,12 @@
 **`/since` shows how long you were away.** The re-entry header now reads
 `since 14:31 (away 47m)` — the time-since-your-last-look, computed from the stored
 last-look marker. It's the resumption-lag cue: the bigger the gap, the more you
-need the recap. (First piece of the re-entry trio.)
+need the recap.
+
+**`/since` leads with your unanswered ask.** When the agent still owes you a
+reply, `/since` now opens with `⏳ Your last ask is still unanswered: …` (cited),
+above everything else — the suspended decision is the first thing a returning
+human needs, and it shows even when nothing else changed while you were away.
 
 **Cross-session collision radar.** `/status` now flags when the same file has been
 mutated by 2+ sessions on **different branches** (`⚠ file collision(s) — same

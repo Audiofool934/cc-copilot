@@ -606,7 +606,10 @@ class ChatSession:
         """Narrative on top, the deterministic cited delta beneath it (minus its
         own title, since the recap heading replaces it)."""
         body = view.text.split("\n", 1)[1] if view.text.startswith("#") else view.text
-        return (f"# 🛰  recap — since {view.label}\n\n{recap.strip()}\n\n"
+        # hoist the suspended-ask cue ABOVE the narration so it leads the recap
+        # path too (not just --raw / no-backend / nothing-new).
+        lead = f"{view.pending_ask}\n\n" if getattr(view, "pending_ask", "") else ""
+        return (f"# 🛰  recap — since {view.label}\n\n{lead}{recap.strip()}\n\n"
                 f"---\n_evidence — every `[L…]` is a transcript line:_\n{body}")
 
     # ---- /now: recommend the next step from the completed work --------------

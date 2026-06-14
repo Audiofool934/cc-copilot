@@ -870,7 +870,8 @@ def cmd_since(args) -> int:
         try:
             recap = N.recap_since(view.text, model=getattr(args, "model", None), backend=be)
             body = view.text.split("\n", 1)[1] if view.text.startswith("#") else view.text
-            print(f"# 🛰  recap — since {view.label}\n\n{recap.strip()}\n\n"
+            lead = f"{view.pending_ask}\n\n" if view.pending_ask else ""
+            print(f"# 🛰  recap — since {view.label}\n\n{lead}{recap.strip()}\n\n"
                   f"---\n_evidence — every [L…] is a transcript line:_\n{body}")
         except Exception as e:
             sys.stderr.write(f"# recap failed ({e}); showing evidence\n")

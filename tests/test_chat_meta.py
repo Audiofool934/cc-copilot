@@ -9,6 +9,19 @@ from cccopilot import chat as C
 from tests.util import asst, tool, user, write
 
 
+class TestSinceRecapLeadsWithPendingAsk(unittest.TestCase):
+    def test_compose_hoists_unanswered_ask_above_the_recap(self):
+        from cccopilot import since as SI, state as S, transcript as T
+        p = write([user("first", 300), asst("ok", 250),
+                   user("add the export feature", 20)])
+        st = S.build(T.parse(p))
+        view = SI.build(st.tr, st, since_line=2, label="last look")
+        self.assertTrue(view.pending_ask)                  # cue captured on the view
+        composed = C.ChatSession._compose_since("THE-LLM-RECAP", view)
+        self.assertLess(composed.index("still unanswered"),
+                        composed.index("THE-LLM-RECAP"))    # cue leads the narration
+
+
 class TestSubagentRollup(unittest.TestCase):
     def test_rollup_summarizes_children_by_status_and_flags_needy(self):
         idle_child = write([user("sub task", 200), asst("subagent done", 60)])

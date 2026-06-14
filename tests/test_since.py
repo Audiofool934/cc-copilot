@@ -88,6 +88,18 @@ class TestSinceByLine(unittest.TestCase):
         self.assertRegex(header, r"since \d{2}:\d{2}")    # clock-time anchor
         self.assertIn("new line", header)                 # how much changed
 
+    def test_since_leads_with_unanswered_ask(self):
+        tr, st = _tr_st([user("first", 300), asst("ok", 250),
+                         user("please add the export feature", 20)])
+        text = SI.build(tr, st, since_line=2, label="last look").text
+        self.assertIn("still unanswered", text)
+        self.assertIn("export feature", text)
+
+    def test_no_unanswered_headline_when_agent_replied(self):
+        tr, st = _tr_st([user("add export", 300), asst("done, added export", 20)])
+        self.assertNotIn("still unanswered",
+                         SI.build(tr, st, since_line=1, label="last look").text)
+
     def test_header_shows_away_gap_when_looked_at_known(self):
         import datetime
         tr, st = _tr_st([user("go", 3000), asst("done", 60)])

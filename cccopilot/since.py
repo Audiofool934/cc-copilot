@@ -28,6 +28,7 @@ class SinceView:
     new_events: int
     text: str
     nothing_new: bool = True       # True iff the render is the "Nothing new" line
+    pending_ask: str = ""          # cited "last ask still unanswered" cue, or ""
 
     @property
     def has_changes(self) -> bool:
@@ -150,7 +151,18 @@ def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
     text = _render(label, cutoff, st, d, new_humans, new_agent,
                    new_cmds, new_fail, new_chg, looked_at)
     return SinceView(cutoff_line=cutoff, label=label, new_events=n, text=text,
-                     nothing_new=nothing)
+                     nothing_new=nothing, pending_ask=_pending_ask_line(st))
+
+
+def _pending_ask_line(st: S.State) -> str:
+    """The cited 'your last ask is still unanswered' cue when the agent owes a
+    reply (status awaiting-agent), else ``""``. Exposed on the view so the
+    LLM-recap compose path can hoist it ABOVE the narration, not just the raw."""
+    if st.status == "awaiting-agent" and st.intents:
+        ask = st.intents[-1]
+        return (f"⏳ **Your last ask is still unanswered:** {_clip(ask.text, 120)}"
+                f"  {_cite(ask.line, ask.hhmm)}")
+    return ""
 
 
 def _clip(s: str, n: int = 160) -> str:
@@ -207,6 +219,14 @@ def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg,
     tail = "  ·  ".join(p for p in (since, span) if p)
     push(f"`{tr.cwd or '?'}`  ·  session `{sid}…`" + (f"  ·  {tail}" if tail else ""))
     push("")
+
+    # Lead with the suspended decision: if the agent still owes you a reply, that
+    # is the first thing a returning human needs (the retrieval cue), even when
+    # nothing else changed while you were away.
+    cue = _pending_ask_line(st)
+    if cue:
+        push(cue)
+        push("")
 
     nothing = not (humans or agent or cmds or fails or chg
                    or d.status_from != d.status_to or d.verdict_from != d.verdict_to)
