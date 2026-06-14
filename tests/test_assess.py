@@ -54,6 +54,36 @@ class TestAssess(unittest.TestCase):
         self.assertEqual(A.assess(state(fail_streak())).verdict, "intervene")
 
 
+class TestIntentDrift(unittest.TestCase):
+    def _drift(self, a):
+        return next((s for s in a.signals if s.kind == "intent_drift"), None)
+
+    def _off_topic_session(self, closing):
+        evs = [user("implement the redaction module for secrets", 600)]
+        for i in range(12):
+            evs += [tool("Edit", {"file_path": f"ui/button{i}.tsx"}, f"e{i}", 300 - i * 5),
+                    result(f"e{i}", "ok", ago=299 - i * 5)]
+        evs.append(asst(closing, 2))
+        return state(evs)
+
+    def test_drift_fires_as_info_without_changing_verdict(self):
+        st = self._off_topic_session("tweaked the button colors and spacing")
+        a = A.assess(st)
+        sig = self._drift(a)
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.severity, "info")
+        self.assertEqual(a.verdict, "idle")          # INFO never escalates to review
+
+    def test_no_drift_when_recent_work_references_goal(self):
+        st = self._off_topic_session("the redaction module now scrubs secrets")
+        self.assertIsNone(self._drift(A.assess(st)))
+
+    def test_no_drift_on_short_session(self):
+        st = state([user("implement the redaction module for secrets", 60),
+                    asst("starting on redaction", 2)])
+        self.assertIsNone(self._drift(A.assess(st)))
+
+
 class TestSaysVsDoes(unittest.TestCase):
     """The flagship 'says vs does' wedge: a closing claim the turn doesn't back."""
 

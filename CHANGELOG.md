@@ -17,6 +17,14 @@ agents' fan-out — exactly where a human loses track of what's running:
 (both agents — Codex reads it from `session_meta.git.branch`) makes it obvious
 who's off `main` and which sessions share a branch (a conflict risk).
 
+**Goal-drift heads-up (INFO).** `/observe` and `/check` now surface an info-level
+note when recent work stops referencing the session's *originating* goal
+("recent work no longer references the original goal … — confirm it's still on
+track"). It's the first **INFO-severity** signal: by design it appears in the
+signal list but never moves the CLEAR/REVIEW/INTERVENE verdict, so this
+heuristic (stdlib keyword overlap against the first ask, conservatively gated)
+can't cry wolf. Cross-agent.
+
 ## 0.22.0 — 2026-06-14
 
 **Mid-session autonomy escalations are flagged (Codex).** State previously read

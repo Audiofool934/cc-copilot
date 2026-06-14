@@ -171,5 +171,24 @@ class TestTimelineRobustness(unittest.TestCase):
         self.assertEqual(lines, [("warn", "attention: transcript unavailable")])
 
 
+class TestObserveInfoDrift(unittest.TestCase):
+    def test_drift_shows_in_now_but_not_attention_queue(self):
+        evs = [user("implement the redaction module for secrets", 600)]
+        for i in range(12):
+            evs += [tool("Edit", {"file_path": f"ui/button{i}.tsx"}, f"e{i}", 300 - i * 5),
+                    result(f"e{i}", "ok", ago=299 - i * 5)]
+        evs.append(asst("tweaked the button colors", 2))
+        p = write(evs)
+        st = S.build(T.parse(p))
+
+        out = O.render(p, st)
+
+        # surfaced as an info heads-up in Now …
+        self.assertIn("no longer references the original goal", out)
+        # … but it must not drag the session into the attention queue
+        queue = out.split("## Attention Queue", 1)[1].split("##", 1)[0]
+        self.assertIn("nothing currently needs human attention", queue)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,9 @@ def render(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
         if sig is not None:
             L.append(f"  - {sig.severity}: {_oneline(sig.message, 120)}"
                      f"{_cites(item, sig.evidence, qualified)}")
+        for info in _info_signals(item):
+            L.append(f"  - info: {_oneline(info.message, 120)}"
+                     f"{_cites(item, info.evidence, qualified)}")
     if report.selected > max_sessions:
         L.append(f"- ...and {report.selected - max_sessions} more session(s)")
     L.append("")
@@ -223,6 +226,13 @@ def _primary_signal(item: ObservationItem):
         if sig.severity in ("alarm", "warn"):
             return sig
     return None
+
+
+def _info_signals(item: ObservationItem):
+    """INFO-severity heads-ups (e.g. goal drift). Shown under a session in the
+    Now view but deliberately NOT in the attention queue — they inform, they
+    don't escalate."""
+    return [s for s in item.assessment.signals if s.severity == "info"]
 
 
 def _decision(item: ObservationItem, qualified: bool) -> Tuple[str, str]:

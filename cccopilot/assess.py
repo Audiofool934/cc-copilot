@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import List
 
-from .state import State
+from .state import State, _short
 from .transcript import MUTATING_TOOLS
 
 
@@ -235,6 +235,12 @@ def assess(st: State) -> Assessment:
     if esc is not None:
         signals.append(esc)
 
+    # 11) goal drift — recent work no longer references the originating intent.
+    #     INFO only (never affects the verdict); a heads-up for the human.
+    dr = _intent_drift(st)
+    if dr is not None:
+        signals.append(dr)
+
     # ---- recency: friction near the tail is actionable now; friction the
     #      agent already recovered from (and then kept working / finished) is
     #      a heads-up, not an emergency. ------------------------------------
@@ -245,7 +251,10 @@ def assess(st: State) -> Assessment:
 
     # ---- roll up to a verdict --------------------------------------------
     signals.sort(key=lambda s: (_RANK.get(s.severity, 9), 0 if s.recent else 1))
-    has_signal = bool(signals)
+    # Only alarm/warn drive the verdict. INFO signals are FYIs surfaced in the
+    # signal list (/observe, /check) but must never push a clean session to
+    # REVIEW — that keeps a fuzzy heuristic from ever crying wolf on a verdict.
+    has_signal = any(s.severity in ("alarm", "warn") for s in signals)
     # INTERVENE is reserved for "it's running RIGHT NOW and going wrong":
     # an active session (running/stalled) with a live alarm. A finished/idle
     # session can't be intervened on — its friction is REVIEW at most.
@@ -473,6 +482,65 @@ def _has_network(tc) -> "bool | None":
     if sb == "workspace-write":
         return bool(tc.get("network"))
     return None
+
+
+# Common words that carry no goal signal — dropped before keyword overlap so
+# drift keys on the specific nouns of the ask, not generic task verbs/filler.
+_DRIFT_STOP = {
+    "this", "that", "with", "from", "have", "make", "want", "need", "please",
+    "should", "could", "would", "there", "their", "when", "what", "which",
+    "into", "also", "like", "just", "your", "yours", "then", "than", "them",
+    "they", "will", "does", "done", "about", "some", "more", "most", "very",
+    "really", "actually", "using", "the", "and", "for", "but", "not", "can",
+    "let", "get", "now", "all", "any", "out", "see", "run", "add", "fix",
+    "use", "code", "file", "files", "test", "tests", "work", "working", "thing",
+}
+_WORD_RE = re.compile(r"[a-z][a-z0-9_]{3,}")
+
+
+def _drift_keywords(text: str) -> set:
+    return {w for w in _WORD_RE.findall((text or "").lower())
+            if w not in _DRIFT_STOP}
+
+
+def _drift_terms(r) -> str:
+    """The searchable text of a record for goal-overlap (message, or a tool's
+    target/command/query — where the work actually is)."""
+    if r.kind == "agent_text":
+        return r.text or ""
+    inp = r.tool_input if isinstance(r.tool_input, dict) else {}
+    return " ".join(str(v) for v in (
+        r.tool_name, inp.get("file_path"), inp.get("path"), inp.get("command"),
+        inp.get("description"), inp.get("pattern"), inp.get("query")) if v)
+
+
+def _intent_drift(st: State):
+    """INFO-only heads-up: recent work no longer references the originating goal.
+    Genuine white space (no tool tracks goal alignment) but heuristic (stdlib
+    keyword overlap, not embeddings), so it is INFO — it appears in /observe and
+    the /check signal list but, by design, never moves the CLEAR/REVIEW/INTERVENE
+    verdict. Conservatively gated: a long-enough session, a goal with real
+    keywords, and a recent window (past the start) that mentions none of them."""
+    fi = st.first_intent
+    if fi is None:
+        return None
+    goal = _drift_keywords(fi.text)
+    if len(goal) < 2:                       # goal too vague to track meaningfully
+        return None
+    meaningful = [r for r in st.tr.records if r.kind in ("agent_text", "tool_call")]
+    if len(meaningful) < 12:                # too short to have plausibly drifted
+        return None
+    recent = meaningful[-8:]
+    if recent[0].line <= fi.line:           # window still at the start; not drift
+        return None
+    blob = " ".join(_drift_terms(r) for r in recent).lower()
+    if any(k in blob for k in goal):        # still on-topic
+        return None
+    return Signal(
+        "intent_drift", "info",
+        f"recent work no longer references the original goal "
+        f"(\"{_short(fi.text, 70)}\") — confirm it's still on track",
+        [fi.line, recent[-1].line])
 
 
 def _base(path: str) -> str:

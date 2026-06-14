@@ -62,6 +62,7 @@ class Failure:
 class State:
     tr: Transcript
     intents: list = field(default_factory=list)        # [(Record)] recent human prompts
+    first_intent: Optional[Record] = None              # the originating goal (first real ask)
     todos: list = field(default_factory=list)          # [{content,status}] if TodoWrite used
     todos_line: int = 0
     files: dict = field(default_factory=dict)          # path -> FileChange
@@ -225,6 +226,9 @@ def build(tr: Transcript, intent_window: int = 3, agent_tail: int = 3) -> State:
         if len(distinct) >= intent_window:
             break
     st.intents = list(reversed(distinct))
+    # the ORIGINATING goal (first real ask) — distinct from the rolling last-3,
+    # so a drift check can compare recent work against where the session started.
+    st.first_intent = next((r for r in humans if r.text.strip()), None)
 
     # Latest TodoWrite snapshot, if the session used it at all.
     if todos_seen is not None:
