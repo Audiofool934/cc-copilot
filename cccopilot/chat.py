@@ -193,8 +193,12 @@ def render_fleet(cwd, limit=10, show_all=False):
             fk = f"  ↰{r.forked_from[:8]}" + (f" {r.nickname}" if r.nickname else "")
         elif getattr(r, "nickname", ""):
             fk = f"  ({r.nickname})"
+        # which branch each session is on — fleet awareness: who's off main, who
+        # shares a branch (potential conflict). Both agents record it.
+        br = (st.tr.git_branch or "").strip()
+        brcol = f"⎇{br[:16]}  " if br else ""
         out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev{sub}  "
-                   f"{tag}{r.session_id[:8]}  {clip}{fk}")
+                   f"{tag}{r.session_id[:8]}  {brcol}{clip}{fk}")
         if subs:                          # on-demand board only, so parsing is fine
             out.append("        " + _subagent_rollup(subs))
     return "\n".join(out), len(rows)

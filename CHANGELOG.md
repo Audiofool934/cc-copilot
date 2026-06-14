@@ -13,6 +13,10 @@ agents' fan-out — exactly where a human loses track of what's running:
   (`↰<parent> <nickname>`, e.g. `↰019d9971 Mill`), so a whole worker fleet is
   legible under its origin. No first-party view spans both agents' fan-outs.
 
+**Fleet board shows each session's git branch.** A `⎇<branch>` column on `/status`
+(both agents — Codex reads it from `session_meta.git.branch`) makes it obvious
+who's off `main` and which sessions share a branch (a conflict risk).
+
 ## 0.22.0 — 2026-06-14
 
 **Mid-session autonomy escalations are flagged (Codex).** State previously read

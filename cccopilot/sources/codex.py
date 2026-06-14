@@ -394,6 +394,9 @@ class CodexSource(AgentSource):
                 tr.cwd = str(payload["cwd"])
             if payload.get("cli_version"):
                 tr.version = str(payload["cli_version"])
+            g = payload.get("git")
+            if isinstance(g, dict) and g.get("branch") and not tr.git_branch:
+                tr.git_branch = str(g["branch"])
             return
 
         if typ == "turn_context":

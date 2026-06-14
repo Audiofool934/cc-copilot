@@ -451,6 +451,15 @@ class TestCodexAutonomyEscalation(unittest.TestCase):
         self.assertFalse(self._has(tr))
 
 
+class TestCodexGitBranch(unittest.TestCase):
+    def test_session_meta_git_branch_captured(self):
+        meta = U.envelope("session_meta", {
+            "id": "s1", "cwd": "/test/proj", "model_provider": "openai",
+            "git": {"commit_hash": "abc123", "branch": "feature-x"}})
+        tr = CX.CodexSource().parse(U.write_rollout([meta, U.umsg("hi", ago=5)]))
+        self.assertEqual(tr.git_branch, "feature-x")
+
+
 class TestCodexForkLinks(unittest.TestCase):
     def test_head_links_extracts_fork_and_nickname(self):
         meta = U.envelope("session_meta", {
