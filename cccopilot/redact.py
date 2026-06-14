@@ -80,10 +80,16 @@ _PATTERNS = [
     (re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{12,}\b"), "[redacted:token]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[redacted:token]"),
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"), "[redacted:token]"),
-    (re.compile(r"\bya29\.[0-9A-Za-z_\-]{20,}\b"), "[redacted:token]"),
+    (re.compile(r"\bya29\.[0-9A-Za-z_\-]{10,}\b"), "[redacted:token]"),
+    (re.compile(r"\bSG\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{16,}\b"), "[redacted:token]"),
     # JWTs (three base64url segments) — common in cached auth/tool output.
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\b"),
      "[redacted:jwt]"),
+    # Credentials embedded in a URL / connection string: scheme://user:PASSWORD@host
+    # or the password-only form scheme://:PASSWORD@host — keep scheme/user + host,
+    # scrub the password. (`[^\s:/@]*` so the username may be empty.)
+    (re.compile(r"(?i)([a-z][a-z0-9+.\-]*://[^\s:/@]*:)[^\s@/]+(@)"),
+     r"\1" + _REDACTED + r"\2"),
 ]
 
 

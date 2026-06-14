@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Redaction is measured, and catches more.** A leak-corpus harness
+(`test_redact_corpus.py`) asserts a hard recall floor against ~30 real secret
+shapes in real contexts (env/JSON/YAML/bracketed, tool output, auth headers,
+URLs, with citations) and names any leaker — so a dropped pattern fails loudly
+instead of silently. Building it surfaced and fixed three gaps in the model-bound
+redactor: **credentials in URLs/connection strings** (`postgres://app:PW@…`,
+`https://user:PW@…`), **SendGrid `SG.` keys**, and a too-strict `ya29.` token
+threshold. Ordinary evidence (git SHAs, `[L<n>]` citations, paths) still survives.
+
 **`/since` shows how long you were away.** The re-entry header now reads
 `since 14:31 (away 47m)` — the time-since-your-last-look, computed from the stored
 last-look marker. It's the resumption-lag cue: the bigger the gap, the more you
