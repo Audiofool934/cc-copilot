@@ -395,7 +395,9 @@ class CodexSource(AgentSource):
             if payload.get("cli_version"):
                 tr.version = str(payload["cli_version"])
             g = payload.get("git")
-            if isinstance(g, dict) and g.get("branch") and not tr.git_branch:
+            if isinstance(g, dict) and g.get("branch"):
+                # latest session_meta wins — Codex re-emits it, and the branch can
+                # change mid-session (a checkout), same as Claude's latest-wins.
                 tr.git_branch = str(g["branch"])
             return
 
