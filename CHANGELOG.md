@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**The redaction chokepoint is now enforced.** Two standing guards
+(`test_chokepoint.py`): every narrate entry point (`run_brief`/`ask`/`chat`/
+`recap_since`/`next_step` and their streaming siblings) is verified to scrub an
+injected secret before it reaches the backend, and a tripwire fails CI if any
+module other than `narrate.py`/`backends.py` calls a backend directly — so model
+traffic can never quietly bypass `redact()`. Recall (the corpus) only matters if
+100% of traffic flows through the chokepoint; now both are guaranteed.
+
 **Redaction is measured, and catches more.** A leak-corpus harness
 (`test_redact_corpus.py`) asserts a hard recall floor against ~30 real secret
 shapes in real contexts (env/JSON/YAML/bracketed, tool output, auth headers,
