@@ -62,6 +62,11 @@ class TestRedact(unittest.TestCase):
         self.assertNotIn("eyAbCdEf12345", out)
         self.assertIn("Authorization", out)
 
+    def test_authorization_header_preserves_trailing_citation(self):
+        out = self._scrubbed("Authorization: Bearer abc12345tok [L12]")
+        self.assertNotIn("abc12345tok", out)
+        self.assertIn("[L12]", out)
+
     def test_jwt_redacted(self):
         jwt = "eyJhbGciOi.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
         out = self._scrubbed("token " + jwt)

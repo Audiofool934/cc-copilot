@@ -287,9 +287,11 @@ def _claim_unverified(st: State):
     """
     if st.status != "idle":
         return None
-    closing = next((r for r in reversed(st.tr.records)
-                    if r.kind == "agent_text" and r.text.strip()), None)
-    if closing is None:
+    # The closing message must be the ACTUAL tail — a clean handoff — not a prior
+    # agent_text left dangling by an abnormal tail (e.g. edit → "Fixed it" →
+    # turn_aborted, where the real last record is the abort, not the message).
+    closing = st.last_record
+    if closing is None or closing.kind != "agent_text" or not closing.text.strip():
         return None
     text = closing.text
 

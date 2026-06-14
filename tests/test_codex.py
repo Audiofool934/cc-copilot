@@ -304,6 +304,20 @@ class TestCodexControlEvents(unittest.TestCase):
         self.assertIn("turn_aborted", kinds)
         self.assertNotIn("claim_unverified", kinds)
 
+    def test_fix_claim_then_abort_tail_is_not_a_closing_handoff(self):
+        # edit → "Fixed it" → turn_aborted: the message wasn't a clean handoff
+        # (the turn aborted after it), so no says-vs-does — only the abort.
+        tr, _ = _state([
+            U.umsg("fix login", ago=300),
+            U.patch_call([("Update", "login.py")], "p1", ago=200),
+            U.patch_out("p1", ago=190),
+            U.amsg("Fixed it.", ago=120),
+            U.envelope("event_msg", {"type": "turn_aborted", "reason": "interrupted"}, ago=20),
+        ])
+        kinds = {s.kind for s in A.assess(S.build(tr)).signals}
+        self.assertIn("turn_aborted", kinds)
+        self.assertNotIn("claim_unverified", kinds)
+
     def test_later_completed_turn_suppresses_abort_signal(self):
         tr, _ = _state([
             U.umsg("do it", ago=300),

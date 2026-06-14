@@ -41,9 +41,10 @@ _PATTERNS = [
         re.S), "[redacted:private-key]"),
 
     # Authorization / proxy-authorization headers: keep the header name, scrub
-    # the whole credential to end of line. A separator is required so prose that
-    # merely mentions "authorization" is not eaten.
-    (re.compile(r"(?i)\b((?:proxy-)?authorization)\s*[:=]\s*[^\n]+"),
+    # the credential. Stops before a `[` so a trailing `[L<n>]` citation on the
+    # same line survives; a separator is required so prose merely mentioning
+    # "authorization" is not eaten.
+    (re.compile(r"(?i)\b((?:proxy-)?authorization)\s*[:=]\s*[^\n\[]+"),
      r"\1: " + _REDACTED),
     # Bearer <token> (space-separated; common in curl / logged auth headers).
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}"), "Bearer " + _REDACTED),
