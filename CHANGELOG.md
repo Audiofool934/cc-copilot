@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**`/since` shows how long you were away.** The re-entry header now reads
+`since 14:31 (away 47m)` — the time-since-your-last-look, computed from the stored
+last-look marker. It's the resumption-lag cue: the bigger the gap, the more you
+need the recap. (First piece of the re-entry trio.)
+
 **Cross-session collision radar.** `/status` now flags when the same file has been
 mutated by 2+ sessions on **different branches** (`⚠ file collision(s) — same
 file, different branches: cccopilot/tui.py — claude … ⎇feature · codex … ⎇main`).

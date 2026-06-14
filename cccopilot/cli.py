@@ -849,7 +849,8 @@ def cmd_since(args) -> int:
                   f"position (L{cur_line}).\nRe-run `cc-copilot since` after the agent "
                   f"works to see what changed. (Or `since 30m` for a time window.)")
             return 0
-        view = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look")
+        view = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look",
+                        looked_at=mark.get("looked_at", ""))
     else:
         secs = SI.parse_duration(when)
         if secs is None:
@@ -929,7 +930,8 @@ def cmd_handoff(args) -> int:
     sv = None
     mark = LL.get(LL.key_for(getattr(st.tr, "session_id", "") or "", path))
     if mark is not None:
-        sv = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look")
+        sv = SI.build(tr, st, since_line=int(mark.get("line", 0) or 0), label="last look",
+                      looked_at=mark.get("looked_at", ""))
     md = HO.render(st, agent=agent, generated_at=time.strftime("%Y-%m-%d %H:%M"),
                    since_view=sv)
     out = getattr(args, "out", None)

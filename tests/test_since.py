@@ -88,6 +88,19 @@ class TestSinceByLine(unittest.TestCase):
         self.assertRegex(header, r"since \d{2}:\d{2}")    # clock-time anchor
         self.assertIn("new line", header)                 # how much changed
 
+    def test_header_shows_away_gap_when_looked_at_known(self):
+        import datetime
+        tr, st = _tr_st([user("go", 3000), asst("done", 60)])
+        looked = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(minutes=47)).astimezone().isoformat()
+        header = SI.build(tr, st, since_line=1, label="last look",
+                          looked_at=looked).text.splitlines()[1]
+        self.assertIn("away", header)               # resumption-lag cue present
+        self.assertRegex(header, r"away \d+m")
+        # no looked_at → no away annotation
+        plain = SI.build(tr, st, since_line=1, label="last look").text.splitlines()[1]
+        self.assertNotIn("away", plain)
+
     def test_header_since_start_for_whole_session(self):
         tr, st = _tr_st([user("go", 300), asst("done", 60)])
         header = SI.build(tr, st, since_line=0, label="all").text.splitlines()[1]

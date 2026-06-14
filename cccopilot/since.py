@@ -118,7 +118,8 @@ def _state_upto(tr: Transcript, cutoff_line: int) -> S.State:
 
 
 def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
-          seconds: Optional[float] = None, label: str = "last look") -> SinceView:
+          seconds: Optional[float] = None, label: str = "last look",
+          looked_at: str = "") -> SinceView:
     if since_line is not None:
         cutoff = max(0, int(since_line))
     elif seconds is not None:
@@ -147,7 +148,7 @@ def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
     transition = (d.status_from != d.status_to) or (d.verdict_from != d.verdict_to)
     nothing = (n == 0 and not transition)
     text = _render(label, cutoff, st, d, new_humans, new_agent,
-                   new_cmds, new_fail, new_chg)
+                   new_cmds, new_fail, new_chg, looked_at)
     return SinceView(cutoff_line=cutoff, label=label, new_events=n, text=text,
                      nothing_new=nothing)
 
@@ -170,7 +171,23 @@ def _cutoff_hhmm(tr: Transcript, cutoff: int) -> str:
     return seen
 
 
-def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg) -> str:
+def _away(looked_at: str) -> str:
+    """How long the human has been away (now − the stored last-look time), as a
+    short duration — the resumption-lag cue. ``""`` if unknown/unparseable."""
+    if not looked_at:
+        return ""
+    try:
+        then = datetime.fromisoformat(looked_at)
+    except ValueError:
+        return ""
+    now = datetime.now(timezone.utc).astimezone()
+    if then.tzinfo is None:
+        then = then.astimezone()
+    return _dur(max(0.0, (now - then).total_seconds()))
+
+
+def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg,
+            looked_at="") -> str:
     tr = st.tr
     L = []
     push = L.append
@@ -182,6 +199,9 @@ def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg) -> str:
     new_lines = max(0, last - cutoff)
     when = _cutoff_hhmm(tr, cutoff)
     since = f"since {when}" if when else ("since start" if cutoff == 0 else "")
+    away = _away(looked_at)            # "you were away ~47m" — the resumption cue
+    if since and away:
+        since += f" (away {away})"
     span = (f"{new_lines} new line{'' if new_lines == 1 else 's'}"
             if new_lines else "")
     tail = "  ·  ".join(p for p in (since, span) if p)

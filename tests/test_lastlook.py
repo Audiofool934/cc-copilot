@@ -21,6 +21,21 @@ class TestLastLook(unittest.TestCase):
             else:
                 os.environ[k] = v
 
+    def test_advance_same_line_refreshes_looked_at_without_rewinding(self):
+        LL.mark("s", 10, "ts1", "look1")
+        LL.advance("s", 10, "ts2", "look2")          # no-op /since at the tail
+        m = LL.get("s")
+        self.assertEqual(m["line"], 10)              # position unchanged
+        self.assertEqual(m["looked_at"], "look2")    # but the check-in is recorded
+        LL.advance("s", 5, "ts3", "look3")           # older captured line
+        m = LL.get("s")
+        self.assertEqual(m["line"], 10)              # never rewinds
+        self.assertEqual(m["looked_at"], "look3")    # still refreshes the look
+        LL.advance("s", 20, "ts4", "look4")          # real progress
+        m = LL.get("s")
+        self.assertEqual(m["line"], 20)
+        self.assertEqual(m["looked_at"], "look4")
+
     def test_mark_get_roundtrip(self):
         LL.mark("sess1", 42, "2026-06-08T10:00:00Z", "2026-06-08T11:00:00")
         m = LL.get("sess1")

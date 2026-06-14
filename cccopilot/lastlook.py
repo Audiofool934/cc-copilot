@@ -142,6 +142,12 @@ def advance(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
         cur = _sanitize(data.get(key)) or {"line": 0}
         if n > cur["line"]:
             data[key] = {"line": n, "ts": ts or "", "looked_at": looked_at or ""}
+        elif looked_at:
+            # same/older line doesn't move the position (never rewind), but the
+            # human DID look just now — refresh looked_at so the away-gap measures
+            # the real last check-in, not an older one.
+            data[key] = {"line": cur["line"], "ts": cur.get("ts", ""),
+                         "looked_at": looked_at}
     _update(_mut)
 
 

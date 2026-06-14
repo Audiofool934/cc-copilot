@@ -518,7 +518,7 @@ class ChatSession:
         if mark is None:
             return None
         return SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
-                        label="last look")
+                        label="last look", looked_at=mark.get("looked_at", ""))
 
     @staticmethod
     def _split_since_arg(arg: str):
@@ -576,7 +576,7 @@ class ChatSession:
                 return (f"No last-look mark yet — recorded your current position (L{line}). "
                         f"Run /since again after the agent works, or `/since 30m` for a window.")
             view = SI.build(self.st.tr, self.st, since_line=int(mark.get("line", 0) or 0),
-                            label="last look")
+                            label="last look", looked_at=mark.get("looked_at", ""))
 
             def commit():                          # consume only on render; never
                 LL.advance(key, line, ts, _now_iso())   # rewind past a concurrent mark
