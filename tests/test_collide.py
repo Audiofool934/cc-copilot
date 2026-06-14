@@ -1,7 +1,10 @@
 """Cross-session collision radar: same file mutated by 2+ sessions."""
 
+import time
+import types
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 from cccopilot import collide as CD
 from tests.util import result, state, tool, user
@@ -56,6 +59,41 @@ class TestCollide(unittest.TestCase):
         self.assertEqual(cols[0].path, "cross.py")     # cross-branch ranked first
         self.assertTrue(cols[0].cross_branch)
 
+
+    def test_party_ts_is_the_edit_time_not_the_session_tail(self):
+        # edit early, then unrelated work — party.last_ts must be the edit's time.
+        st = state([user("edit it", 300),
+                    tool("Edit", {"file_path": "a.py"}, "e1", 250),
+                    result("e1", "ok", ago=245),
+                    tool("Bash", {"command": "sleep"}, "t2", 5)])   # later, unrelated
+        other = _edit_session("a.py", "feature")
+        cols = CD.find_collisions([("s1", "claude", st), ("s2", "codex", other)],
+                                  "/test/proj")
+        party = next(p for c in cols for p in c.parties if p.session_id == "s1")
+        edit_ts = next(r.ts for r in st.tr.records if r.line == party.last_line)
+        self.assertEqual(party.last_ts, edit_ts)
+        self.assertNotEqual(party.last_ts, st.tr.last_ts)   # not the tail
+
+    def test_collisions_folds_claude_subagent_children(self):
+        parent = _edit_session("shared.py", "feature")
+        codex = _edit_session("shared.py", "main")
+        child = _edit_session("shared.py", "feature")
+        refs = [types.SimpleNamespace(session_id="p1", agent="claude",
+                                      path="/x/p1.jsonl", mtime=time.time()),
+                types.SimpleNamespace(session_id="c1", agent="codex",
+                                      path="/x/c1.jsonl", mtime=time.time())]
+        states = {"/x/p1.jsonl": parent, "/x/c1.jsonl": codex,
+                  "/x/p1/subagents/agent-k.jsonl": child}
+        with mock.patch.object(CD.SRC, "list_sessions", return_value=refs), \
+             mock.patch.object(CD.LOC, "subagent_paths",
+                               side_effect=lambda p: ["/x/p1/subagents/agent-k.jsonl"]
+                               if p == "/x/p1.jsonl" else []), \
+             mock.patch.object(CD.SRC, "parse", side_effect=lambda p: p), \
+             mock.patch.object(CD.S, "build", side_effect=lambda tr: states[tr]):
+            cols = CD.collisions("/x", now=time.time())
+        c = next(c for c in cols if c.path == "shared.py")
+        self.assertIn("agent-k", {p.session_id for p in c.parties})   # child surfaced
+        self.assertTrue(c.cross_branch)
 
     def test_party_ordering_uses_full_timestamp_across_midnight(self):
         # yesterday 23:50 must sort BEHIND today 00:10 — HH:MM alone gets it wrong.

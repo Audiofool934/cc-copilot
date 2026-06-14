@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import dataclass
 
-from . import sources as SRC, state as S
+from . import sources as SRC, state as S, locate as LOC
 
 # A session older than this isn't live divergence — it's history. 3 days catches
 # a branch you worked yesterday that conflicts with today's work (still unmerged,
@@ -68,11 +68,14 @@ def find_collisions(items, cwd: str):
         if st.status == "empty":
             continue
         branch = (st.tr.git_branch or "").strip()
+        # the actual edit time of each file (the record at fc.last_line), not the
+        # session tail — a session may edit a file then move on to other work.
+        line_ts = {r.line: r.ts for r in st.tr.records if r.ts is not None}
         for path, fc in st.files.items():
             np = _norm(path, cwd)
+            ts = line_ts.get(fc.last_line) or st.tr.last_ts
             by_path.setdefault(np, {})[sid] = Party(
-                sid, agent, branch, st.status, fc.last_line, fc.last_hhmm,
-                st.tr.last_ts)
+                sid, agent, branch, st.status, fc.last_line, fc.last_hhmm, ts)
     cols = []
     for path, parties in by_path.items():
         if len(parties) < 2:
@@ -99,4 +102,17 @@ def collisions(cwd: str, window_seconds: float = COLLISION_WINDOW_SECONDS,
         except OSError:
             continue
         items.append((r.session_id, r.agent, st))
+        # Fold this session's Claude subagent children — the parent may delegate
+        # the actual edits to them, and a child's file can collide with another
+        # branch just the same.
+        if r.agent == "claude":
+            for cp in LOC.subagent_paths(r.path):
+                try:
+                    cst = S.build(SRC.parse(cp))
+                except OSError:
+                    continue
+                csid = os.path.basename(cp)
+                if csid.endswith(".jsonl"):
+                    csid = csid[: -len(".jsonl")]
+                items.append((csid, "claude", cst))
     return find_collisions(items, cwd)
