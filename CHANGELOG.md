@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fleet board shows subagent fan-out.** A Claude session that spawned subagents
+(child transcripts under `<session-id>/subagents/`) now shows a `+Nsub` marker on
+the `/status` board — the fan-out is exactly where a human loses track of what's
+running. Counted on demand for the rendered rows only. (Full parent→child tree
+and idle-child flagging to follow.)
+
 ## 0.22.0 — 2026-06-14
 
 **Mid-session autonomy escalations are flagged (Codex).** State previously read

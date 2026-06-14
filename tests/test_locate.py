@@ -199,5 +199,26 @@ class TestSessionMetaRobustness(unittest.TestCase):
             L.sessions_root = orig
 
 
+class TestSubagentCount(unittest.TestCase):
+    def test_counts_children_in_subagents_dir(self):
+        d = tempfile.mkdtemp()
+        try:
+            sid = "46bc2aea-3dec-410a-962a-80e9c4d652b4"
+            path = os.path.join(d, sid + ".jsonl")
+            open(path, "w").close()
+            self.assertEqual(L.subagent_count(path), 0)        # none yet
+            sub = os.path.join(d, sid, "subagents")
+            os.makedirs(sub)
+            for name in ("agent-aaa.jsonl", "agent-bbb.jsonl", "notes.txt"):
+                open(os.path.join(sub, name), "w").close()
+            self.assertEqual(L.subagent_count(path), 2)        # only agent-*.jsonl
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_zero_for_non_session_paths(self):
+        self.assertEqual(L.subagent_count(""), 0)
+        self.assertEqual(L.subagent_count("/nope/x.txt"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

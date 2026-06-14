@@ -182,7 +182,11 @@ def render_fleet(cwd, limit=10, show_all=False):
         idle = _dur(st.idle_seconds)
         clip = " ".join((head or "").split())[:56]
         tag = f"{r.agent:<6} " if multi_agent else ""
-        out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev  "
+        # cross-agent fleet awareness: a session that spawned subagents (Claude
+        # child transcripts) is a fan-out where the human most easily loses track.
+        n_sub = LOC.subagent_count(r.path) if r.agent == "claude" else 0
+        sub = f" +{n_sub}sub" if n_sub else ""
+        out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev{sub}  "
                    f"{tag}{r.session_id[:8]}  {clip}")
     return "\n".join(out), len(rows)
 
