@@ -185,6 +185,46 @@ Effort S/M/L/XL · Confidence high/med/low.
 
 +18 tests (`test_redact.py`, `test_backends.py`, `test_assess.py`); suite 546 green.
 
+### Follow-on (branch `read-only-hardening`, same day)
+
+Built incrementally, each Codex-reviewed and committed:
+
+4. **Position-aware evidence packing** (`context.py`) — raw cited records lead the
+   pack (out of the lost-in-the-middle zone), never truncated for project/index.
+5. **Defensive-parse hardening** (`transcript.py`/`sources/codex.py`) — a shared
+   `read_capped_lines` bounds a pathological multi-GB single line in both parse
+   and Codex discovery; clipped lines count as parse errors, citations stay aligned.
+6. **Codex control events** (`sources/codex.py`/`state.py`/`assess.py`) — `turn_aborted`
+   / `error` captured from the `event_msg` stream as `system` records; a trailing
+   control event is terminal (status `idle`, never running/stalled); warn signal
+   fires only when it is the current tail turn.
+7. **Exact Codex context pressure & rate limits** (`token_count`) — context occupancy
+   from `last_token_usage` vs `model_context_window`; warn at rate-limit ≥95% /
+   context ≥90%, cited to the token_count line.
+8. **Mid-session autonomy escalation** (`turn_context` timeline) — flags sandbox →
+   `danger-full-access`, approval → `never` (from any supervised mode), or network
+   newly reachable; routine read-only→workspace-write stays quiet.
+
+Suite 586 green. The Codex-adapter "now/next" items above are now largely shipped.
+
+### Real-data schema findings (verified against 472 local Codex rollouts)
+
+These corrected the research-derived plan — record them so the next person doesn't
+re-trust the wrong field:
+
+- **No approval-request events are persisted.** `ExecApprovalRequest` /
+  `ApplyPatchApprovalRequest` (the basis for the original "blocked on approval" 1a)
+  do not appear in any rollout `event_msg` stream (this setup auto-approves). The
+  observable control events are `turn_aborted`, `error`, and rich `token_count`.
+  "Blocked on approval" is intentionally NOT claimed.
+- **`token_count.info.total_token_usage` is CUMULATIVE** across the session and
+  exceeds `model_context_window` (seen at 244%). Current context occupancy is
+  `last_token_usage` — using `total_token_usage` as a fullness ratio is wrong.
+- **`turn_context.sandbox_policy` is an object** (`{"type": read-only |
+  workspace-write | danger-full-access, network_access, …}`); `approval_policy` is
+  a string (`never` | `on-request` | `untrusted` | …). read-only turns omit
+  `network_access` (derive no-network from the type).
+
 ## 7. Do-NOT-do (scope-creep traps)
 
 - **Don't cross into acting.** No freeze/rollback/retry/resume/steer/approve. The
