@@ -290,6 +290,13 @@ def _claim_unverified(st: State):
         if r.kind == "human" and not r.housekeeping:
             turn_start = r.line
 
+    # The closing message must belong to the CURRENT turn. Otherwise (e.g. a new
+    # human ask, then a Codex turn_aborted before any reply) `closing` would be a
+    # prior turn's message, and we'd judge a stale "all tests pass" against this
+    # turn's (empty) evidence — a bogus warning beside the real abort signal.
+    if closing.line <= turn_start:
+        return None
+
     # Only SUCCESSFUL mutations count (a failed Edit/Write changed nothing, same
     # as State.build) — else a failed edit after a passing test would push
     # last_edit past the verification and falsely flag the claim.

@@ -290,6 +290,20 @@ class TestCodexControlEvents(unittest.TestCase):
         a = A.assess(st)
         self.assertNotEqual(a.verdict, "intervene")
 
+    def test_abort_after_new_ask_does_not_reuse_prior_claim(self):
+        # A prior turn claimed "all tests pass"; a new ask then aborts before any
+        # reply. Only the abort should surface — not a stale says-vs-does warning.
+        tr, _ = _state([
+            U.umsg("fix the parser", ago=400),
+            U.amsg("All tests pass.", ago=200),               # prior turn's claim
+            U.umsg("now do the next thing", ago=100),         # new turn starts
+            U.envelope("event_msg", {"type": "turn_aborted", "reason": "interrupted"}, ago=20),
+        ])
+        a = A.assess(S.build(tr))
+        kinds = {s.kind for s in a.signals}
+        self.assertIn("turn_aborted", kinds)
+        self.assertNotIn("claim_unverified", kinds)
+
     def test_later_completed_turn_suppresses_abort_signal(self):
         tr, _ = _state([
             U.umsg("do it", ago=300),
