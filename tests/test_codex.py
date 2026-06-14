@@ -451,6 +451,32 @@ class TestCodexAutonomyEscalation(unittest.TestCase):
         self.assertFalse(self._has(tr))
 
 
+class TestCodexForkLinks(unittest.TestCase):
+    def test_head_links_extracts_fork_and_nickname(self):
+        meta = U.envelope("session_meta", {
+            "id": "child0001", "cwd": "/test/proj", "model_provider": "openai",
+            "forked_from_id": "parent9999", "agent_nickname": "Mill"})
+        p = U.write_rollout([meta, U.umsg("hi", ago=5)])
+        ff, nick = CX._head_links(p)
+        self.assertEqual(ff, "parent9999")
+        self.assertEqual(nick, "Mill")
+
+    def test_head_links_empty_when_absent(self):
+        p = U.write_rollout([U.session_meta(), U.umsg("hi", ago=5)])
+        self.assertEqual(CX._head_links(p), ("", ""))
+
+    def test_head_links_reads_nested_subagent_thread_spawn(self):
+        # Codex subagent rollouts carry the parent only under the nested
+        # source.subagent.thread_spawn block (no top-level forked_from_id).
+        meta = U.envelope("session_meta", {
+            "id": "child0002", "cwd": "/test/proj", "model_provider": "openai",
+            "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": "parent7777", "agent_nickname": "Boyle",
+                "agent_role": "worker", "depth": 1}}}})
+        p = U.write_rollout([meta, U.umsg("hi", ago=5)])
+        self.assertEqual(CX._head_links(p), ("parent7777", "Boyle"))
+
+
 class TestCodexDiscoveryHardening(unittest.TestCase):
     def test_head_meta_bounds_giant_head_line_and_recovers(self):
         # A multi-MB line among the head lines must not be buffered whole during

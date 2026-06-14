@@ -2,13 +2,16 @@
 
 ## Unreleased
 
-**Fleet board shows subagent fan-out + child health.** A Claude session that
-spawned subagents (child transcripts under `<session-id>/subagents/`) now shows a
-`+Nsub` marker on the `/status` board, plus an indented rollup of the children by
-status (`↳ subagents: 1 running, 2 idle`) that flags any needing a look — the
-fan-out is exactly where a human loses track of what's running. Children are
-parsed on demand for the rendered rows only (the board is not in the poll path),
-capped per parent.
+**Cross-agent fan-out on one fleet board.** The `/status` board now surfaces both
+agents' fan-out — exactly where a human loses track of what's running:
+- A **Claude** session that spawned subagents (child transcripts under
+  `<session-id>/subagents/`) shows a `+Nsub` marker plus an indented rollup of the
+  children by status (`↳ subagents: 1 running, 2 idle`) flagging any that need a
+  look (stalled, or a review/intervene verdict). Children are parsed on demand for
+  rendered rows only (the board isn't in the poll path), capped per parent.
+- A **Codex** thread forked from another shows its parentage inline
+  (`↰<parent> <nickname>`, e.g. `↰019d9971 Mill`), so a whole worker fleet is
+  legible under its origin. No first-party view spans both agents' fan-outs.
 
 ## 0.22.0 — 2026-06-14
 

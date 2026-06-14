@@ -186,8 +186,15 @@ def render_fleet(cwd, limit=10, show_all=False):
         # child transcripts) is a fan-out where the human most easily loses track.
         subs = LOC.subagent_paths(r.path) if r.agent == "claude" else []
         sub = f" +{len(subs)}sub" if subs else ""
+        # the other half of the fan-out: a Codex thread forked from another
+        # (often with a nickname like "Mill") — show its parentage on one board.
+        fk = ""
+        if getattr(r, "forked_from", ""):
+            fk = f"  ↰{r.forked_from[:8]}" + (f" {r.nickname}" if r.nickname else "")
+        elif getattr(r, "nickname", ""):
+            fk = f"  ({r.nickname})"
         out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev{sub}  "
-                   f"{tag}{r.session_id[:8]}  {clip}")
+                   f"{tag}{r.session_id[:8]}  {clip}{fk}")
         if subs:                          # on-demand board only, so parsing is fine
             out.append("        " + _subagent_rollup(subs))
     return "\n".join(out), len(rows)

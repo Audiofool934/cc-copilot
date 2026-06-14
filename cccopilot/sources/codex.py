@@ -53,6 +53,7 @@ _MAX_SCAN = 800
 # session_meta.id never changes, and the project cwd of a session is immutable,
 # so head metadata can be cached by path with no invalidation.
 _HEAD_CACHE: Dict[str, Tuple[str, str, bool]] = {}   # path -> (cwd, model, own)
+_HEAD_LINKS: Dict[str, Tuple[str, str]] = {}         # path -> (forked_from, nickname)
 
 # The directory walk that enumerates rollouts is the dominant discovery cost.
 # A multi/project cockpit refresh calls list_sessions several times per poll, so
@@ -117,6 +118,7 @@ def _head_meta(path: str) -> Tuple[str, str, bool]:
     if cached is not None:
         return cached
     cwd, model, own = "", "", False
+    forked_from, nickname = "", ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             # Bound per-line memory during discovery too: a corrupt/compacted
@@ -142,13 +144,35 @@ def _head_meta(path: str) -> Tuple[str, str, bool]:
                 if obj.get("type") == "session_meta" and isinstance(p, dict):
                     cwd = cwd or (p.get("cwd") or "")
                     model = model or (p.get("model_provider") or p.get("model") or "")
+                    # cross-agent fan-out: a Codex thread forked from/parented by
+                    # another (with a human-friendly nickname like "Mill").
+                    forked_from = forked_from or (p.get("forked_from_id")
+                                                  or p.get("parent_thread_id") or "")
+                    nickname = nickname or (p.get("agent_nickname") or "")
+                    # Codex subagent rollouts carry the lineage only under a
+                    # nested source.subagent.thread_spawn block — fall back to it.
+                    src = p.get("source")
+                    sub = src.get("subagent") if isinstance(src, dict) else None
+                    ts = sub.get("thread_spawn") if isinstance(sub, dict) else None
+                    if isinstance(ts, dict):
+                        forked_from = forked_from or (ts.get("parent_thread_id") or "")
+                        nickname = nickname or (ts.get("agent_nickname") or "")
                 elif obj.get("type") == "turn_context" and isinstance(p, dict):
                     cwd = cwd or (p.get("cwd") or "")
                     model = model or (p.get("model") or "")
     except OSError:
         pass
     _HEAD_CACHE[path] = (cwd, model, own)
+    _HEAD_LINKS[path] = (str(forked_from or ""), str(nickname or ""))
     return cwd, model, own
+
+
+def _head_links(path: str) -> Tuple[str, str]:
+    """``(forked_from_id, nickname)`` for a rollout — the cross-agent fork link.
+    Populated by :func:`_head_meta`'s single head read; trigger it if needed."""
+    if path not in _HEAD_LINKS:
+        _head_meta(path)
+    return _HEAD_LINKS.get(path, ("", ""))
 
 
 def _head_session_id(path: str) -> str:
@@ -286,10 +310,12 @@ class CodexSource(AgentSource):
                 size = os.path.getsize(path)
             except OSError:
                 size = 0
+            forked_from, nickname = _head_links(path)
             refs.append(locate.SessionRef(
                 path=path, session_id=sid, mtime=mtime, size=size,
                 title=_thread_names().get(sid, ""), own=own,
                 agent=self.name, model=model,
+                nickname=nickname, forked_from=forked_from,
             ))
         return refs
 

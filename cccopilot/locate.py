@@ -52,6 +52,8 @@ class SessionRef:
     agent: str = "claude"    # which agent wrote this transcript (claude | codex | …)
     model: str = ""          # model/provider, when the transcript records it
     live: bool = False       # this is the human's *current* session (CLAUDE_CODE_SESSION_ID)
+    nickname: str = ""       # agent nickname for a forked/sub thread (e.g. Codex "Mill")
+    forked_from: str = ""    # parent/origin session id this thread was forked from
 
     @property
     def hhmm(self) -> str:
