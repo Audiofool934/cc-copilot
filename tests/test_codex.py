@@ -315,6 +315,47 @@ class TestCodexControlEvents(unittest.TestCase):
         self.assertFalse(any(s.kind == "turn_aborted" for s in a.signals))
 
 
+def _tc(last_total, window, pct, ago=5):
+    """A realistic token_count event_msg (last_token_usage = current occupancy)."""
+    return U.envelope("event_msg", {
+        "type": "token_count",
+        "info": {"last_token_usage": {"total_tokens": last_total},
+                 "total_token_usage": {"total_tokens": last_total * 5},   # cumulative
+                 "model_context_window": window},
+        "rate_limits": {"primary": {"used_percent": pct, "resets_at": 0}},
+    }, ago)
+
+
+class TestCodexTokenUsage(unittest.TestCase):
+    def test_token_count_captured_uses_last_not_cumulative(self):
+        tr, _ = _state([U.umsg("go", ago=20), _tc(40000, 258400, 12.0, ago=5),
+                        U.amsg("done", ago=1)])
+        self.assertEqual(tr.token_usage["context_tokens"], 40000)   # last, not 200000
+        self.assertEqual(tr.token_usage["context_window"], 258400)
+        # still not a record
+        self.assertNotIn("system", [r.kind for r in tr.records])
+
+    def test_rate_limited_signal_fires(self):
+        tr, _ = _state([U.umsg("go", ago=20), _tc(40000, 258400, 100.0, ago=5),
+                        U.amsg("waiting…", ago=1)])
+        a = A.assess(S.build(tr))
+        self.assertTrue(any(s.kind == "rate_limited" for s in a.signals))
+
+    def test_context_full_signal_fires(self):
+        tr, _ = _state([U.umsg("go", ago=20), _tc(240000, 258400, 5.0, ago=5),
+                        U.amsg("almost out of room", ago=1)])
+        a = A.assess(S.build(tr))
+        self.assertTrue(any(s.kind == "context_full" for s in a.signals))
+
+    def test_normal_usage_is_quiet(self):
+        tr, _ = _state([U.umsg("go", ago=20), _tc(40000, 258400, 10.0, ago=5),
+                        U.amsg("done", ago=1)])
+        a = A.assess(S.build(tr))
+        kinds = {s.kind for s in a.signals}
+        self.assertNotIn("rate_limited", kinds)
+        self.assertNotIn("context_full", kinds)
+
+
 class TestCodexDiscoveryHardening(unittest.TestCase):
     def test_head_meta_bounds_giant_head_line_and_recovers(self):
         # A multi-MB line among the head lines must not be buffered whole during

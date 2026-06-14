@@ -89,6 +89,9 @@ class Transcript:
     # min/max timestamp across *all* lines (incl. metadata) — for "span".
     first_seen_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
+    # Latest agent-reported token usage / rate-limit, if the source exposes it
+    # (Codex token_count). Exact, not estimated. None for sources that don't.
+    token_usage: Optional[dict] = None
 
     @property
     def first_ts(self) -> Optional[datetime]:

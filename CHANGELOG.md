@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Exact Codex context pressure & rate limits surface as cited stall-causes.** The
+adapter now reads Codex `token_count` events for the agent's real context
+occupancy (`last_token_usage` vs `model_context_window` — not the cumulative
+`total_token_usage`, which exceeds the window) and primary rate-limit usage.
+`/check`/`/observe` flag, with the token_count line cited, when the agent is at
+its rate limit ("silence may be the limit, not a stall") or its context is ~90%+
+full ("it may compact or degrade soon") — an exact answer to "why is it quiet?"
+no estimate can give. Codex-only; other sources are unaffected.
+
 **Codex turns that end abnormally now surface.** The Codex adapter previously
 discarded the entire `event_msg` stream; it now captures the two control signals
 that live only there — a turn that was aborted/interrupted, and a surfaced error

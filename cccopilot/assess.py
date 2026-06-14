@@ -226,6 +226,10 @@ def assess(st: State) -> Assessment:
     if ta is not None:
         signals.append(ta)
 
+    # 9) exact agent-side context pressure / rate-limit (Codex token_count) — a
+    #    cited cause for silence that no estimate can give.
+    signals.extend(_context_pressure(st))
+
     # ---- recency: friction near the tail is actionable now; friction the
     #      agent already recovered from (and then kept working / finished) is
     #      a heads-up, not an emergency. ------------------------------------
@@ -370,6 +374,33 @@ def _turn_ended_abnormally(st: State):
                       f"the agent's last turn ended early ({lr.text}) — it did "
                       f"not finish", [lr.line])
     return None
+
+
+def _context_pressure(st: State):
+    """Exact agent-side stall causes from Codex ``token_count`` (None for sources
+    that don't expose it). Two high-threshold, low-noise warns: the agent is at
+    its rate limit (silence may be the limit, not a stall), or its context is
+    nearly full (it may compact or degrade). Both cite the token_count line."""
+    u = getattr(st.tr, "token_usage", None)
+    if not u:
+        return []
+    out = []
+    ev = [u["line"]] if u.get("line") else []
+    pct = u.get("rate_primary_pct")
+    if isinstance(pct, (int, float)) and pct >= 95:
+        out.append(Signal(
+            "rate_limited", "warn",
+            f"the agent is at its rate limit ({pct:.0f}% of the primary window "
+            f"used) — silence may be the limit, not a stall", list(ev)))
+    tok, win = u.get("context_tokens"), u.get("context_window")
+    if isinstance(tok, (int, float)) and isinstance(win, (int, float)) and win > 0 \
+            and tok / win >= 0.9:
+        out.append(Signal(
+            "context_full", "warn",
+            f"the agent's context is ~{tok / win * 100:.0f}% full "
+            f"({tok // 1000}k/{win // 1000}k tokens) — it may compact or degrade soon",
+            list(ev)))
+    return out
 
 
 def _base(path: str) -> str:

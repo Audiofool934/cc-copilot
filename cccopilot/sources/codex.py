@@ -393,6 +393,20 @@ class CodexSource(AgentSource):
                 msg = _short(str(payload.get("message") or "error"), 200)
                 tr.records.append(Record(line, "system", ts, raw_ts,
                                          level="codex_error", text=msg))
+            elif ev == "token_count":
+                # Exact agent-side usage (latest wins). CONTEXT occupancy is
+                # last_token_usage — total_token_usage is cumulative across the
+                # session and exceeds the window, so it is NOT a fullness ratio.
+                info = payload.get("info") or {}
+                last = info.get("last_token_usage") or {}
+                rl = (payload.get("rate_limits") or {}).get("primary") or {}
+                if info or payload.get("rate_limits"):
+                    tr.token_usage = {
+                        "context_tokens": last.get("total_tokens"),
+                        "context_window": info.get("model_context_window"),
+                        "rate_primary_pct": rl.get("used_percent"),
+                        "line": line,
+                    }
             return
 
         if typ != "response_item":
