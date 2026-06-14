@@ -20,7 +20,7 @@ import threading
 from . import (sources as SRC, state as S, brief as B, assess as A,
                narrate as N, locate as LOC, store as ST, scope as SC,
                observe as O, context as EC, lastlook as LL, since as SI,
-               handoff as HO)
+               handoff as HO, collide as CD)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -176,6 +176,22 @@ def render_fleet(cwd, limit=10, show_all=False):
                              x[1].idle_seconds if x[1].idle_seconds is not None else 9e9))
     hnote = f", {hidden} helper hidden" if hidden else ""
     out = [f"cc-copilot status — {cwd}  ({len(rows)} of {len(refs)} sessions{hnote})"]
+    # Cross-session collision radar: the same file edited by 2+ sessions on
+    # DIFFERENT branches — divergence/merge-conflict risk only a cross-agent
+    # observer can see. High-signal (cross-branch) only, so the board stays calm.
+    try:
+        notable = [c for c in CD.collisions(cwd) if c.cross_branch]
+    except Exception:
+        notable = []
+    if notable:
+        out.append(f"⚠ {len(notable)} file collision(s) — same file, different branches:")
+        for c in notable[:5]:
+            who = " · ".join(f"{p.agent} {p.session_id[:8]} ⎇{p.branch or '?'}"
+                             for p in c.parties[:3])
+            out.append(f"    {c.path}  — {who}")
+        if len(notable) > 5:
+            out.append(f"    …and {len(notable) - 5} more")
+        out.append("")
     multi_agent = len({r.agent for r, *_ in rows}) > 1
     for r, st, a, head in rows:
         g = _GLYPH.get(st.status, "?")

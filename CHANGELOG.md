@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Cross-session collision radar.** `/status` now flags when the same file has been
+mutated by 2+ sessions on **different branches** (`⚠ file collision(s) — same
+file, different branches: cccopilot/tui.py — claude … ⎇feature · codex … ⎇main`).
+This is the capability only a read-only, cross-agent observer can produce — an
+in-process agent has no handle to a sibling session, and neither vendor can read
+the other's transcripts, so nothing but a tool that unions Claude Code + Codex by
+project cwd can catch two agents diverging on the same file. New
+`cccopilot/collide.py`; paths canonicalized so absolute/relative forms match;
+cross-branch divergence ranked first; bounded to recent fleet activity.
+
 **Cross-agent fan-out on one fleet board.** The `/status` board now surfaces both
 agents' fan-out — exactly where a human loses track of what's running:
 - A **Claude** session that spawned subagents (child transcripts under
