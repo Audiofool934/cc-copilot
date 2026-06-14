@@ -1,9 +1,12 @@
 """Codex adapter: rollout parsing → normalized records → deterministic state."""
 
+import json
 import os
+import tempfile
 import unittest
 
 from cccopilot import state as S
+from cccopilot import transcript as T
 from cccopilot.sources import codex as CX
 from tests import util_codex as U
 
@@ -237,6 +240,25 @@ class TestCodexStructuredOutput(unittest.TestCase):
         self.assertIn("[image]", bodies[0])
         self.assertIn("screenshot captured", bodies[0])
         self.assertNotIn(big_b64[:24], bodies[0])    # base64 never reaches the body
+
+
+class TestCodexDiscoveryHardening(unittest.TestCase):
+    def test_head_meta_bounds_giant_head_line_and_recovers(self):
+        # A multi-MB line among the head lines must not be buffered whole during
+        # discovery; a later session_meta line still yields the cwd.
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            with open(p, "w") as fh:
+                fh.write("z" * (T.MAX_LINE_CHARS + 50_000) + "\n")   # >1MB junk line 1
+                fh.write(json.dumps({"type": "session_meta", "payload": {
+                    "id": "019ea000-0000-7000-8000-0000000000ff",
+                    "cwd": "/found/here", "model_provider": "openai"}}) + "\n")
+            cwd, _model, _own = CX._head_meta(p)
+            self.assertEqual(cwd, "/found/here")
+        finally:
+            CX._HEAD_CACHE.pop(p, None)
+            os.unlink(p)
 
 
 if __name__ == "__main__":

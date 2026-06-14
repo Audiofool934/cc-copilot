@@ -389,7 +389,13 @@ cc-copilot status
 Interactive `/diff` is available inside the cockpit and `cc-copilot chat`.
 
 LLM-backed answers receive bounded cited evidence context, not tool access or
-ambient repo access.
+ambient repo access. Secret-shaped content (API keys, tokens, private keys, auth
+headers, secret-named `KEY=value` lines) is scrubbed from that context before it
+reaches the model — the redaction applies only to the model-bound copy, so the
+on-disk transcript, the `[L<n>]` citations, and what the cockpit shows you
+locally are untouched. Agent narrator CLIs (Claude/Codex) are launched
+read-only and **fail closed**: if the installed CLI can't be confined to
+read-only, cc-copilot refuses to launch it rather than run it unguarded.
 
 ## Cockpit Sessions
 

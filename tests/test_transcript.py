@@ -1,3 +1,7 @@
+import io
+import json
+import os
+import tempfile
 import unittest
 
 from cccopilot import transcript as T
@@ -51,6 +55,39 @@ class TestTranscriptRobustness(unittest.TestCase):
                                 asst("ok", 1)]))
             texts = [r.text for r in tr.records if r.kind == "agent_text"]
             self.assertIn("ok", texts)   # parse got past the slash-only line
+
+
+class TestCappedLines(unittest.TestCase):
+    def test_read_capped_lines_bounds_and_recovers(self):
+        data = "short1\n" + ("x" * 50) + "\n" + "short2\n"
+        out = list(T.read_capped_lines(io.StringIO(data), cap=10))
+        self.assertEqual(len(out), 3)                 # one yield per physical line
+        self.assertEqual([c for _t, c in out], [False, True, False])
+        self.assertLessEqual(len(out[1][0]), 10)      # giant line's tail discarded
+        self.assertEqual(out[2][0].strip(), "short2")  # recovers cleanly after a clip
+
+    def test_final_line_without_newline_is_not_clipped(self):
+        out = list(T.read_capped_lines(io.StringIO("abc"), cap=10))
+        self.assertEqual(out, [("abc", False)])
+
+    def test_parse_survives_pathological_giant_line(self):
+        # A multi-MB single line must not be buffered/parsed — it's counted as a
+        # parse error, and the valid records around it survive with correct lines.
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            with open(p, "w") as fh:
+                fh.write(json.dumps(user("hello", 60)) + "\n")
+                fh.write("z" * (T.MAX_LINE_CHARS + 50_000) + "\n")   # >1MB junk
+                fh.write(json.dumps(asst("done", 1)) + "\n")
+            tr = T.parse(p)
+            self.assertEqual(tr.parse_errors, 1)
+            human = [r for r in tr.records if r.kind == "human"]
+            agent = [r for r in tr.records if r.kind == "agent_text"]
+            self.assertEqual([r.line for r in human], [1])    # citations stay aligned
+            self.assertEqual([r.line for r in agent], [3])
+        finally:
+            os.unlink(p)
 
 
 if __name__ == "__main__":

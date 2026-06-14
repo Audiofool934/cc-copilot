@@ -93,26 +93,53 @@ class TestResolve(unittest.TestCase):
         with self.assertRaises(BK.BackendError):
             BK.resolve()
 
-    def test_safety_flags_omitted_when_cli_does_not_advertise_them(self):
-        # The whole point of gating on --help is that an older CLI build (no
-        # safety flags) still runs. Prove absent flags are NOT appended.
-        old_help = "usage: claude -p [--model M] [prompt]"
-        with mock.patch.object(BK, "_cli_help", return_value=old_help):
+    def test_optional_safety_flags_omitted_but_readonly_flag_still_applied(self):
+        # An older CLI that advertises the load-bearing read-only flag but lacks
+        # the defense-in-depth extras still runs — with the read-only flag, and
+        # without the absent extras (which the CLI would reject).
+        claude_help = "usage: claude -p [--tools T] [--model M] [prompt]"
+        with mock.patch.object(BK, "_cli_help", return_value=claude_help):
             argv = BK.registry()["claude"]._full_argv("prompt", "sonnet")
-        for flag in ("--tools", "--no-session-persistence", "--safe-mode",
-                     "--no-chrome", "--strict-mcp-config",
-                     "--disable-slash-commands"):
-            self.assertNotIn(flag, argv)
-        self.assertIn("--model", argv)   # model_args still apply
+        self.assertIn("--tools", argv)                    # load-bearing, applied
+        self.assertEqual(argv[argv.index("--tools") + 1], "")
+        for flag in ("--no-session-persistence", "--safe-mode", "--no-chrome",
+                     "--strict-mcp-config", "--disable-slash-commands"):
+            self.assertNotIn(flag, argv)                  # absent extras skipped
+        self.assertIn("--model", argv)
         self.assertEqual(argv[-1], "prompt")
 
-        codex_help = "usage: codex exec [--model M]"
+    def test_fail_closed_when_cli_lacks_readonly_flag(self):
+        # The security fix: a CLI whose help positively does NOT advertise the
+        # load-bearing read-only flag must be REFUSED, not launched unguarded.
+        claude_help = "usage: claude -p [--model M] [prompt]"   # no --tools
+        with mock.patch.object(BK, "_cli_help", return_value=claude_help):
+            with self.assertRaises(BK.BackendError):
+                BK.registry()["claude"]._full_argv("prompt", "sonnet")
+
+        codex_help = "usage: codex exec [--model M]"            # no --sandbox
         with mock.patch.object(BK, "_cli_help", return_value=codex_help):
+            with self.assertRaises(BK.BackendError):
+                BK.registry()["codex"]._full_argv("prompt", None)
+
+    def test_unprobeable_cli_still_gets_readonly_flag_best_effort(self):
+        # If --help can't be captured at all (empty), we can't confirm absence,
+        # so we don't hard-fail — but we DO still apply the read-only flag, so a
+        # CLI is never launched as a free agent. A CLI that truly lacks it will
+        # reject the flag loudly (still fail-closed) rather than run unconfined.
+        with mock.patch.object(BK, "_cli_help", return_value=""):
+            argv = BK.registry()["claude"]._full_argv("prompt", "sonnet")
+            self.assertIn("--tools", argv)
+            self.assertEqual(argv[argv.index("--tools") + 1], "")
             cargv = BK.registry()["codex"]._full_argv("prompt", None)
-        for flag in ("--sandbox", "--ephemeral", "--ignore-rules",
-                     "--ignore-user-config"):
-            self.assertNotIn(flag, cargv)
-        self.assertIn("--skip-git-repo-check", cargv)   # fixed argv, not gated
+            self.assertIn("--sandbox", cargv)
+            self.assertEqual(cargv[cargv.index("--sandbox") + 1], "read-only")
+
+    def test_narrator_backends_are_constructed_with_safety_args(self):
+        # No narrator agent CLI may exist in the registry without its safety gate.
+        reg = BK.registry()
+        for name in ("claude", "codex"):
+            self.assertIsNotNone(reg[name].safety_args,
+                                 f"{name} backend missing safety_args")
 
     def test_flag_supported_rejects_superstring_flags(self):
         # A help text that advertises only a longer flag must not enable the

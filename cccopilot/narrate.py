@@ -19,6 +19,7 @@ import os
 
 from .brief import render
 from .backends import resolve, Backend, BackendError
+from .redact import redact
 
 _HISTORY_CHARS = 16000
 
@@ -89,10 +90,18 @@ def _as_evidence_context(brief_text: str) -> str:
 
 
 def _prompt(brief_text: str, task: str) -> str:
-    return (_PREAMBLE
-            + "\n\n=== EVIDENCE CONTEXT (observed facts and citations) ===\n"
-            + _as_evidence_context(brief_text)
-            + "\n=== END EVIDENCE CONTEXT ===\n\n" + task)
+    # Invariant A: scrub secret-shaped content from the model-bound copy at the
+    # single narration chokepoint. Every model call (run_brief / *_stream / ask
+    # / chat / recap / next-step) funnels through here, so redacting the composed
+    # prompt covers all of them — evidence, embedded project excerpts, and chat
+    # history alike. The on-disk transcript, the [L<n>] line map, and what the
+    # cockpit shows the human locally are untouched (this copy only ever leaves
+    # for the backend).
+    return redact(
+        _PREAMBLE
+        + "\n\n=== EVIDENCE CONTEXT (observed facts and citations) ===\n"
+        + _as_evidence_context(brief_text)
+        + "\n=== END EVIDENCE CONTEXT ===\n\n" + task)
 
 
 def _with_instruction(task: str, instruction: str = "") -> str:

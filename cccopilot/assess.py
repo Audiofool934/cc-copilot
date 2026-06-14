@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from .state import State
+from .transcript import MUTATING_TOOLS
 
 
 # severity ordering for rollup
@@ -32,9 +33,74 @@ FAIL_STREAK_ALARM = 3
 # a single file with this many failed mutations == fighting the file
 EDIT_THRASH = 2
 
-_TEST_RE = re.compile(r"\b(pytest|jest|vitest|go test|cargo test|npm (run )?test|"
-                      r"xcodebuild test|tox|unittest|rspec|mocha|gradle test|mvn test)\b",
-                      re.I)
+_TEST_RE = re.compile(
+    r"\b(?:pytest|jest|vitest|go test|cargo test|"
+    r"(?:npm|yarn|pnpm|bun)(?: run)? test|make (?:test|check)|"
+    r"xcodebuild test|tox|unittest|rspec|mocha|gradle test|mvn test|ctest)\b",
+    re.I)
+
+# "says vs does": a closing message claims an outcome the turn's own evidence
+# doesn't back. Two high-precision patterns only (the cry-wolf risk is real, so
+# this stays warn/REVIEW — it never drives INTERVENE). A) it claims tests/build
+# pass; B) it claims a fix landed after editing code — in both cases with no
+# successful verification run this turn. Each fires a CITED PAIR (the claim line
+# + the evidence that should exist and doesn't); it is evidence to check, never
+# an accusation that the agent lied.
+# Tests-pass claim — require an explicit success QUANTIFIER (all / every / the
+# suite / everything / green), never a bare "tests pass". Bare forms also match
+# honest failures ("I couldn't make tests pass", "some tests passed, but one
+# failed"), which the backward negation window can't always catch.
+_CLAIM_TESTS_PASS = re.compile(
+    r"\ball(?: \d+| of)? tests?(?: (?:now|again))? (?:pass|passing|passed|green|succeed|succeeded)\b"
+    r"|\bevery test(?: now| again)? (?:passes|passed|is green)\b"
+    r"|\b(?:the )?(?:test )?suite (?:is |now )?(?:green|passes|passed|passing)\b"
+    r"|\btests? are (?:all )?(?:now )?(?:green|passing)\b"
+    r"|\ball tests? green\b"
+    r"|\beverything (?:passes|passed|is green)\b"
+    r"|\ball green\b", re.I)
+# Build-pass claim — checked against build commands, NOT test runners.
+_CLAIM_BUILD_PASS = re.compile(
+    r"\bbuild (?:passes|passed|succeeds|succeeded|is green|now (?:passes|builds|succeeds))\b"
+    r"|\b(?:compiles|builds) (?:clean|cleanly|fine|now)\b"
+    r"|\bcompilation (?:passes|succeeds|succeeded)\b", re.I)
+# A fix CLAIM, not the adjective "fixed". "fixed/resolved" only counts as a fix
+# claim when used as a verb (followed by an object — "fixed it", "fixed the login
+# bug") or in a fix-EVENT state ("now fixed", "it's resolved", "has been fixed").
+# The bare adjective uses ("fixed-width layout", "fixed position", "the width is
+# fixed") are NOT claims and must not trip the high-precision says-vs-does signal.
+_CLAIM_FIXED = re.compile(
+    r"\b(?:fixed|resolved)\b(?=\s+(?:it|this|that|the|a|an|all|my|our|your|its|"
+    r"these|those|everything)\b)"
+    r"|\b(?:now|is now|are now|has been|have been|should be|should now be|"
+    r"it'?s|that'?s)\s+(?:fixed|resolved)\b"
+    r"|\b(?:works|working) now\b|\bnow works\b"
+    r"|\bshould (?:now )?work\b"
+    r"|\bis now (?:working|passing|green)\b"
+    r"|\bthat (?:should (?:do it|fix it|work)|fixes it)\b", re.I)
+# A "build passes" claim is verified by a build command, not a test runner — so
+# the verification set is tests OR builds (else a green `npm run build` reads as
+# "nothing ran" and falsely escalates to REVIEW).
+_BUILD_RE = re.compile(
+    r"\b(?:npm|yarn|pnpm|bun)(?: run)? build\b|\bcmake --build\b|"
+    r"\b(?:cargo build|go build|gradle build|"
+    r"mvn (?:package|install|compile)|xcodebuild(?: build)?|tsc|webpack|"
+    r"vite build|docker build)\b"
+    # bare `make` (or make build/all/…) is a build, but NOT `make test/check`
+    # — those are tests, and conflating them breaks the tests-vs-build split.
+    r"|\bmake(?:\s+(?:build|all|release|compile|install))?\b(?!\s+(?:test|check)\b)", re.I)
+# A negation right before a positive claim flips its meaning — "not all tests
+# pass", "the bug is not fixed yet" must NOT read as a success claim.
+_NEG_BEFORE = re.compile(
+    r"(?i)\b(?:not|no|never|without|isn'?t|aren'?t|wasn'?t|weren'?t|don'?t|"
+    r"doesn'?t|didn'?t|can'?t|cannot|couldn'?t|won'?t|wouldn'?t|shouldn'?t|"
+    r"haven'?t|hasn'?t|hadn'?t|unable|un(?:fixed|resolved)|"
+    r"fail(?:ed|ing|s)?)\b[\s\w]{0,16}$")
+
+
+def _asserts(text: str, rx) -> bool:
+    """True iff ``text`` makes the claim ``rx`` matches *without* a negation
+    immediately before it ('all tests pass' → yes; 'not all tests pass' → no)."""
+    return any(not _NEG_BEFORE.search(text[:m.start()]) for m in rx.finditer(text))
 
 
 @dataclass
@@ -150,6 +216,11 @@ def assess(st: State) -> Assessment:
             ))
             break
 
+    # 7) says-vs-does — a closing claim the turn's own evidence doesn't back.
+    cu = _claim_unverified(st)
+    if cu is not None:
+        signals.append(cu)
+
     # ---- recency: friction near the tail is actionable now; friction the
     #      agent already recovered from (and then kept working / finished) is
     #      a heads-up, not an emergency. ------------------------------------
@@ -188,6 +259,84 @@ def assess(st: State) -> Assessment:
                      + ", not running)")
 
     return Assessment(verdict=verdict, headline=headline, signals=signals)
+
+
+def _claim_unverified(st: State):
+    """Detect a closing success/fix claim the turn's own evidence doesn't back.
+
+    High-precision and REVIEW-only: fires only at a *closing* message (the agent
+    handed the turn back, status ``idle``), bounded to the current turn (records
+    after the last real human ask), and only on two explicit claim shapes. Cross-
+    agent by construction — it reads the normalized :class:`State`, so a Claude
+    transcript and a Codex rollout that say the same thing trip it the same way.
+    Returns a cited :class:`Signal` or ``None``.
+    """
+    if st.status != "idle":
+        return None
+    closing = next((r for r in reversed(st.tr.records)
+                    if r.kind == "agent_text" and r.text.strip()), None)
+    if closing is None:
+        return None
+    text = closing.text
+
+    # Bound to the current turn: everything after the last genuine human ask.
+    turn_start = 0
+    for r in st.tr.records:
+        if r.kind == "human" and not r.housekeeping:
+            turn_start = r.line
+
+    # Only SUCCESSFUL mutations count (a failed Edit/Write changed nothing, same
+    # as State.build) — else a failed edit after a passing test would push
+    # last_edit past the verification and falsely flag the claim.
+    errs = {r.tool_id: r.is_error for r in st.tr.records
+            if r.kind == "tool_result" and r.tool_id}
+    mutated = [r for r in st.tr.records
+               if r.line > turn_start and r.kind == "tool_call"
+               and r.tool_name in MUTATING_TOOLS
+               and not errs.get(r.tool_id, False)]
+    # Verification only "covers" the claim if it ran AFTER the last edit — a test
+    # that passed and was then followed by another edit no longer exercises the
+    # final code, so it doesn't substantiate a closing "it passes / I fixed it".
+    last_edit = max((r.line for r in mutated), default=0)
+    turn_cmds = [c for c in st.commands if c.line > turn_start]
+    tests = [c for c in turn_cmds if _TEST_RE.search(c.cmd or "")]
+    builds = [c for c in turn_cmds if _BUILD_RE.search(c.cmd or "")]
+    ok_test = any(c.status == "ok" and c.line > last_edit for c in tests)
+    ok_build = any(c.status == "ok" and c.line > last_edit for c in builds)
+    covered = any(c.line > last_edit for c in tests + builds)
+
+    # A) tests-pass claim with no PASSING TEST covering the final code (a green
+    #    build is not evidence a test claim is true, and vice-versa).
+    if _asserts(text, _CLAIM_TESTS_PASS) and not ok_test:
+        return Signal(
+            "claim_unverified", "warn",
+            "closing message claims the tests pass, but no passing test run "
+            "covers the latest code this turn — verify before trusting it",
+            [closing.line] + [c.line for c in tests][-2:],
+        )
+
+    # A2) build-pass claim with no passing BUILD covering the final code.
+    if _asserts(text, _CLAIM_BUILD_PASS) and not ok_build:
+        return Signal(
+            "claim_unverified", "warn",
+            "closing message claims the build passes, but no passing build "
+            "covers the latest code this turn — verify before trusting it",
+            [closing.line] + [c.line for c in builds][-2:],
+        )
+
+    # B) a fix/correctness claim after editing code, with nothing run AFTER the
+    #    last edit to verify it (a test OR a build both count as verification).
+    if _asserts(text, _CLAIM_FIXED) and mutated and not covered:
+        paths = {r.tool_input.get("file_path") or r.tool_input.get("path")
+                 for r in mutated}
+        n = len(paths - {None}) or len(mutated)
+        return Signal(
+            "claim_unverified", "warn",
+            f"claims a fix after editing {n} file(s) but nothing was run to "
+            f"verify the latest code this turn — verify before trusting it",
+            [closing.line] + [r.line for r in mutated][-2:],
+        )
+    return None
 
 
 def _base(path: str) -> str:

@@ -168,11 +168,16 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
         raw_candidates=sum(len(src.records) for src in sources),
     )
 
+    # Order is BOTH attention priority and truncation priority (_pack_sections
+    # fills in order and drops the tail when the budget runs out). Raw cited
+    # records are primary, so they lead — out of the "lost in the middle" dead
+    # zone (arXiv:2307.03172) and never truncated for lower-priority project
+    # facts or the navigation-only summary index, which trail.
     sections = [
+        ("raw", raw_text),
         ("status", status_text),
         ("memory", memory),
         ("chat", chat_text),
-        ("raw", raw_text),
         ("project", project_text),
         ("index", index_text),
     ]

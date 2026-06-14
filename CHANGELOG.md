@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+**Secrets are scrubbed from model-bound evidence (read-only invariant A).**
+Before answering, cc-copilot now redacts secret-shaped content — API keys,
+tokens, private-key blocks, auth headers, and secret-named `KEY=value` lines —
+from the evidence copy sent to the LLM. Previously only secret-*named* files were
+withheld (by basename), so an inline key in a tracked source file, a `tool_result`
+echoing `cat .env`, or a token inside `AGENTS.md`/`CLAUDE.md` could reach the
+model. Redaction is applied at the single narration chokepoint and touches the
+model-bound copy only: the on-disk transcript, the `[L<n>]` citations, and the
+cockpit's local display keep their real values. New `cccopilot/redact.py`.
+
+**Agent narrator CLIs fail closed (read-only invariant B).** The `--tools ""`
+(Claude) / `--sandbox read-only` (Codex) read-only flag is now applied
+unconditionally, and cc-copilot refuses to launch an agent CLI as a narrator
+when the installed CLI positively can't be confined to read-only — with an
+actionable message to use an HTTP backend — instead of silently dropping the flag
+and running it unguarded. A regression test guards that narrator backends are
+never built without their safety gate.
+
+**`/check` and `/observe` flag "says vs does" (claim-vs-evidence divergence).** A
+new deterministic, REVIEW-only signal fires when a closing message claims an
+outcome the turn's own evidence doesn't back: (A) "tests/build pass" with no
+passing test or build result this turn, or (B) "fixed it" after editing code with
+nothing run to verify. It surfaces a cited pair (the claim line + the missing
+evidence) to check — never an accusation, never an INTERVENE driver, and it
+ignores negated statements ("not all tests pass"). Works across Claude Code and
+Codex sessions.
+
+**Raw cited evidence leads the model context pack.** Position-aware packing moves
+the primary raw transcript records to the head of the evidence pack (out of the
+"lost in the middle" zone) so they're attended to first and never truncated for
+lower-priority project facts or the navigation-only summary index under budget
+pressure.
+
+**Parsers are hardened against pathological session files.** A per-line read cap
+bounds memory so a multi-MB/GB single line — a giant `tool_result` or a Codex
+`Compacted.replacement_history` blob (issue #24948) — can't exhaust the cockpit;
+the line is counted as a parse error and the surrounding records survive with
+their `[L<n>]` citations intact. cc-copilot still never locks or rewrites the
+agent's files.
+
 ## 0.21.0 — 2026-06-13
 
 **Slash commands take an inline steer.** `/now` and `/since` now accept free

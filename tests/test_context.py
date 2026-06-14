@@ -22,6 +22,23 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("keeper yield: 73.2%", ctx.text)
         self.assertIn("[testsess:L2]", ctx.text)
 
+    def test_raw_evidence_leads_the_pack(self):
+        # Position-aware packing: raw cited records sit at the HEAD of the pack
+        # (out of the lost-in-the-middle zone) and before lower-priority status
+        # facts, so they're never truncated for them under budget pressure.
+        p = write([
+            user("run tests", 60),
+            tool("Bash", {"command": "pytest"}, "t1", 30),
+            result("t1", "ok", ago=20),
+            asst("done", 5),
+        ])
+        st = S.build(T.parse(p))
+        ctx = EC.build(p, st, "session", question="what happened?")
+        self.assertTrue(ctx.text.lstrip().startswith("## Primary Raw Transcript Evidence"))
+        raw_i = ctx.text.index("## Primary Raw Transcript Evidence")
+        status_i = ctx.text.index("## Current Status Facts")
+        self.assertLess(raw_i, status_i)
+
     def test_cited_line_expansion_keeps_tool_call_and_result_together(self):
         p = write([
             user("run tests", 60),

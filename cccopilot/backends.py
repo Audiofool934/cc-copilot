@@ -294,17 +294,44 @@ def _flag_supported(help_text: str, flag: str) -> bool:
                      help_text or "") is not None
 
 
+# The load-bearing read-only flag per narrator flavor. Every other safety flag
+# is defense-in-depth; THIS one is what actually confines the agent CLI to
+# read-only. Its absence on an installed CLI is treated as fail-closed.
+_READONLY_FLAG = {"claude": "--tools", "codex": "--sandbox"}
+
+
+def _require_readonly(help_text: str, flavor: str) -> None:
+    """Fail closed before launching an agent CLI as a narrator.
+
+    The read-only contract must not degrade silently: if the installed CLI's
+    help positively does NOT advertise the load-bearing read-only flag, refuse
+    to launch it rather than run it unconfined (the old behavior quietly dropped
+    the flag, leaving a tool-capable agent narrating). An *empty* help_text means
+    we could not probe the CLI at all — we don't hard-fail there; the caller
+    still applies the flag best-effort, and a CLI that truly lacks it rejects the
+    flag loudly (still fail-closed) instead of running as a free agent.
+    """
+    flag = _READONLY_FLAG[flavor]
+    if help_text and not _flag_supported(help_text, flag):
+        raise BackendError(
+            f"the `{flavor}` CLI on PATH does not advertise `{flag}`, so "
+            f"cc-copilot cannot confine it to read-only as a narrator. Refusing "
+            f"to launch it unguarded — use an HTTP backend instead (e.g. "
+            f"`--backend openai`) or upgrade the CLI.")
+
+
 def _claude_safety_args(argv) -> list:
     """Disable Claude Code's ambient agent surfaces when used as a narrator.
 
     The prompt already instructs the model not to use tools, but cc-copilot's
-    read-only contract should not rely on prompt obedience. Gate every flag on
-    the installed CLI's help so older Claude builds still run.
+    read-only contract must not rely on prompt obedience. The load-bearing
+    ``--tools ""`` is applied unconditionally (and fail-closed: a CLI that
+    positively lacks it is refused, see :func:`_require_readonly`); the rest are
+    defense-in-depth, gated on help so older builds still run.
     """
     help_text = _cli_help(argv)
-    extra = []
-    if _flag_supported(help_text, "--tools"):
-        extra += ["--tools", ""]
+    _require_readonly(help_text, "claude")
+    extra = ["--tools", ""]
     if _flag_supported(help_text, "--no-session-persistence"):
         extra.append("--no-session-persistence")
     if _flag_supported(help_text, "--safe-mode"):
@@ -319,11 +346,14 @@ def _claude_safety_args(argv) -> list:
 
 
 def _codex_safety_args(argv) -> list:
-    """Keep Codex exec in a read-only, non-persistent narrator mode."""
+    """Keep Codex exec in a read-only, non-persistent narrator mode.
+
+    ``--sandbox read-only`` is load-bearing and applied unconditionally
+    (fail-closed when the CLI positively lacks it); the rest are gated.
+    """
     help_text = _cli_help(argv)
-    extra = []
-    if _flag_supported(help_text, "--sandbox"):
-        extra += ["--sandbox", "read-only"]
+    _require_readonly(help_text, "codex")
+    extra = ["--sandbox", "read-only"]
     if _flag_supported(help_text, "--ephemeral"):
         extra.append("--ephemeral")
     if _flag_supported(help_text, "--ignore-rules"):

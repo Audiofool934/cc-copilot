@@ -41,6 +41,7 @@ from ..transcript import (
     _flatten_content,
     _looks_like_human_prompt,
     _parse_ts,
+    read_capped_lines,
 )
 from .base import AgentSource
 
@@ -118,10 +119,14 @@ def _head_meta(path: str) -> Tuple[str, str, bool]:
     cwd, model, own = "", "", False
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for _ in range(24):
-                line = fh.readline()
-                if not line:
+            # Bound per-line memory during discovery too: a corrupt/compacted
+            # rollout can carry a multi-GB line among its head lines, which a
+            # bare readline() would allocate whole before the capped parser runs.
+            for n, (line, clipped) in enumerate(read_capped_lines(fh)):
+                if n >= 24:
                     break
+                if clipped:
+                    continue
                 if not own and any(sig in line for sig in _OWN_SIG_STRS):
                     own = True
                 line = line.strip()
@@ -150,10 +155,11 @@ def _head_session_id(path: str) -> str:
     """Session id from the rollout head, for unusual filenames that don't carry it."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for _ in range(24):
-                line = fh.readline()
-                if not line:
+            for n, (line, clipped) in enumerate(read_capped_lines(fh)):
+                if n >= 24:
                     break
+                if clipped:
+                    continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
@@ -321,7 +327,13 @@ class CodexSource(AgentSource):
         except OSError:
             return tr
         with fh:
-            for i, raw in enumerate(fh, start=1):
+            # Bound per-line memory: a Codex Compacted.replacement_history blob
+            # or a corrupt rollout can be a single multi-GB line (issue #24948).
+            for i, (raw, clipped) in enumerate(read_capped_lines(fh), start=1):
+                if clipped:
+                    tr.raw_lines += 1
+                    tr.parse_errors += 1
+                    continue
                 raw = raw.strip()
                 if not raw:
                     continue

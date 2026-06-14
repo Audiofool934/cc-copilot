@@ -177,10 +177,45 @@ def _parse_slash_command(text: str) -> Optional[str]:
     return (name + (" " + cargs if cargs else "")).strip()
 
 
+# A single JSONL line longer than this is pathological — a multi-MB tool_result,
+# a Codex Compacted.replacement_history blob, or a corrupt rollout (Codex issue
+# #24948 produces multi-GB rollouts). We read up to the cap and DISCARD the rest
+# of that physical line in fixed chunks, so the cockpit's memory stays bounded
+# instead of buffering the whole line. Well above any legitimate line (Codex's
+# session_meta with embedded base_instructions is routinely >16 KB, never ~1 MB).
+MAX_LINE_CHARS = 1_000_000
+
+
+def read_capped_lines(fh, cap: int = MAX_LINE_CHARS):
+    """Yield ``(text, clipped)`` per physical line of ``fh`` (read-only) without
+    ever buffering more than ``cap`` chars of one line. ``clipped`` is True when
+    the line exceeded the cap — its tail is drained chunk-by-chunk and discarded,
+    so a pathological multi-GB line can't exhaust memory. Line numbering is
+    preserved (one yield per physical line), so ``[L<n>]`` citations stay valid.
+    """
+    while True:
+        chunk = fh.readline(cap)
+        if not chunk:
+            return
+        if chunk.endswith("\n") or len(chunk) < cap:
+            yield chunk, False
+            continue
+        # Hit the cap with no newline: drain the rest of this line and drop it.
+        while True:
+            rest = fh.readline(cap)
+            if not rest or rest.endswith("\n"):
+                break
+        yield chunk, True
+
+
 def parse(path: str) -> Transcript:
     tr = Transcript(path=path)
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for i, line in enumerate(fh, start=1):
+        for i, (line, clipped) in enumerate(read_capped_lines(fh), start=1):
+            if clipped:                       # over the per-line cap; can't parse
+                tr.raw_lines += 1
+                tr.parse_errors += 1
+                continue
             line = line.strip()
             if not line:
                 continue
