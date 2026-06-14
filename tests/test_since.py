@@ -159,6 +159,49 @@ class TestSinceByLine(unittest.TestCase):
         self.assertIn("a.py", v.text)
 
 
+class TestGitReconcile(unittest.TestCase):
+    def _chg(self, path, line):
+        from cccopilot.state import FileChange
+        return FileChange(path, edits=1, last_line=line, last_hhmm="10:00")
+
+    def test_marks_uncommitted_vs_committed(self):
+        chg = [self._chg("a.py", 5), self._chg("b.py", 6)]
+        dirty = {SI._abspath("a.py", "/proj")}            # a.py pending, b.py not
+        rows, extra = SI._reconcile_rows(chg, dirty, "/proj", is_repo=True)
+        tags = {fc.path: tag for fc, tag in rows}
+        self.assertIn("uncommitted", tags["a.py"])
+        self.assertIn("committed/reverted", tags["b.py"])
+        self.assertEqual(extra, [])
+
+    def test_flags_dirty_files_not_touched_this_session(self):
+        chg = [self._chg("a.py", 5)]
+        dirty = {SI._abspath("a.py", "/proj"), SI._abspath("other.py", "/proj")}
+        _rows, extra = SI._reconcile_rows(chg, dirty, "/proj", is_repo=True)
+        self.assertEqual(extra, [SI._abspath("other.py", "/proj")])
+
+    def test_earlier_session_edit_not_flagged_as_outside(self):
+        # delta (chg) has only the latest file, but an earlier session edit is
+        # still dirty — it must NOT be reported as changed outside the session.
+        chg = [self._chg("late.py", 9)]
+        early = SI._abspath("early.py", "/proj")
+        dirty = {SI._abspath("late.py", "/proj"), early}
+        all_touched = {SI._abspath("late.py", "/proj"), early}   # both edited this session
+        _rows, extra = SI._reconcile_rows(chg, dirty, "/proj", True, all_touched)
+        self.assertEqual(extra, [])                              # early.py is ours, not "outside"
+
+    def test_no_annotations_outside_a_repo(self):
+        chg = [self._chg("a.py", 5)]
+        rows, extra = SI._reconcile_rows(chg, set(), "/proj", is_repo=False)
+        self.assertEqual(rows[0][1], "")
+        self.assertEqual(extra, [])
+
+    def test_absolute_and_relative_paths_reconcile(self):
+        chg = [self._chg("/proj/a.py", 5)]                # transcript stored absolute
+        dirty = {SI._abspath("a.py", "/proj")}            # git relative → same abs
+        rows, _extra = SI._reconcile_rows(chg, dirty, "/proj", is_repo=True)
+        self.assertIn("uncommitted", rows[0][1])
+
+
 class TestStateUpto(unittest.TestCase):
     def test_last_seen_ts_is_last_real_ts_not_full_first(self):
         from datetime import datetime, timedelta, timezone

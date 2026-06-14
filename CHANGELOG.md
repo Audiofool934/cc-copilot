@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**`/since` reconciles edits against the real working tree.** The "Files changed"
+list now marks each transcript-recorded edit `● uncommitted` (still pending in
+`git status`) or `✓ committed/reverted since` (no longer in the tree), and flags
+files that are dirty but **weren't edited in this session** (you or another
+agent). So "the agent edited X" on a long run is no longer taken on faith — only
+a read-only observer cross-checking the transcript against git can tell you the
+edit is stale or that the tree diverged. Flows into `/handoff` too. Deterministic.
+
 **The redaction chokepoint is now enforced.** Two standing guards
 (`test_chokepoint.py`): every narrate entry point (`run_brief`/`ask`/`chat`/
 `recap_since`/`next_step` and their streaming siblings) is verified to scrub an

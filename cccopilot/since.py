@@ -11,7 +11,9 @@ agent the normalized model covers (Claude Code, Codex, …).
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -19,6 +21,65 @@ from typing import Optional
 from . import state as S
 from .brief import _cite, _dur
 from .transcript import Transcript
+
+
+def _abspath(path: str, cwd: str) -> str:
+    if not path:
+        return path
+    return os.path.normpath(path if os.path.isabs(path) else os.path.join(cwd or "", path))
+
+
+def _git_worktree(cwd: str):
+    """``(is_repo, dirty_abs)`` for ``cwd`` — read-only `git status` of the working
+    tree. ``dirty_abs`` is the set of absolute paths with uncommitted changes;
+    used to reconcile what the transcript says was edited against what's actually
+    still pending in the tree (committed/reverted edits, or out-of-session edits)."""
+    if not cwd:
+        return False, set()
+    try:
+        chk = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
+                             capture_output=True, text=True, timeout=2,
+                             encoding="utf-8", errors="replace")
+        if chk.returncode != 0 or chk.stdout.strip() != "true":
+            return False, set()
+        # --untracked-files=all so a new file isn't collapsed under a `?? dir/`
+        # entry; porcelain paths are relative to the cwd git ran in (-C cwd),
+        # which is the same base the transcript edits use — so both normalize
+        # against cwd, not the repo root (cwd may be a subdir of the repo).
+        st = subprocess.run(["git", "-C", cwd, "status", "--short",
+                             "--untracked-files=all"],
+                            capture_output=True, text=True, timeout=2,
+                            encoding="utf-8", errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return False, set()
+    dirty = set()
+    for line in st.stdout.splitlines():
+        s = line[3:].strip()                 # drop the "XY " status prefix
+        if " -> " in s:                      # rename: "old -> new"
+            s = s.split(" -> ", 1)[1]
+        s = s.strip().strip('"')
+        if s:
+            dirty.add(_abspath(s, cwd))
+    return True, dirty
+
+
+def _reconcile_rows(chg, dirty_abs, cwd, is_repo, all_touched_abs=None):
+    """Per-changed-file working-tree status + files dirty outside this session.
+    Pure (no IO) so it's directly testable; the git read happens in the caller.
+    ``all_touched_abs`` is the abs paths of EVERY file this session edited (not
+    just the delta ``chg``), so an earlier still-dirty session edit isn't
+    misreported as an out-of-session change."""
+    rows = []
+    for fc in chg[:10]:
+        tag = ""
+        if is_repo:
+            tag = ("  ● uncommitted" if _abspath(fc.path, cwd) in dirty_abs
+                   else "  ✓ committed/reverted since")
+        rows.append((fc, tag))
+    base = (all_touched_abs if all_touched_abs is not None
+            else {_abspath(fc.path, cwd) for fc in chg})
+    extra = sorted(dirty_abs - base) if is_repo else []
+    return rows, extra
 
 
 @dataclass
@@ -268,8 +329,19 @@ def _render(label, cutoff, st, d, humans, agent, cmds, fails, chg,
 
     if chg:
         push(f"## Files changed  ({len(chg)})")
-        for fc in chg[:10]:
-            push(f"- `{fc.path}` ({fc.edits}e/{fc.writes}w)  {_cite(fc.last_line, fc.last_hhmm)}")
+        # Reconcile against the REAL working tree: a transcript edit may already be
+        # committed/reverted (✓), or still pending (●). And the tree may be dirty
+        # from edits this session never made (you / another agent).
+        is_repo, dirty = _git_worktree(tr.cwd)
+        all_touched = {_abspath(p, tr.cwd) for p in st.files}
+        rows, extra = _reconcile_rows(chg, dirty, tr.cwd, is_repo, all_touched)
+        for fc, tag in rows:
+            push(f"- `{fc.path}` ({fc.edits}e/{fc.writes}w)  "
+                 f"{_cite(fc.last_line, fc.last_hhmm)}{tag}")
+        if extra:
+            names = ", ".join(os.path.basename(p) for p in extra[:6])
+            more = f" (+{len(extra) - 6} more)" if len(extra) > 6 else ""
+            push(f"- ⚠ also uncommitted, not edited in this session: {names}{more}")
         push("")
 
     if agent:
