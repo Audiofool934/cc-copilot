@@ -60,6 +60,23 @@ class TestCollide(unittest.TestCase):
         self.assertTrue(cols[0].cross_branch)
 
 
+    def test_stale_edit_in_resumed_session_filtered_by_since(self):
+        # session resumed TODAY (recent tail) but the colliding file was edited
+        # weeks ago — with the window cutoff it must NOT count as a live collision.
+        old = 30 * 24 * 3600
+        resumed = state([user("old work", old),
+                         tool("Edit", {"file_path": "x.py"}, "e1", old - 10),
+                         result("e1", "ok", ago=old - 15),
+                         tool("Bash", {"command": "ls"}, "t2", 5)])   # resumed today
+        resumed.tr.git_branch = "feature"
+        fresh = _edit_session("x.py", "main")                         # edited just now
+        items = [("a", "claude", resumed), ("b", "codex", fresh)]
+        # no cutoff → the stale edit collides (the bug)
+        self.assertEqual(len(CD.find_collisions(items, "/test/proj")), 1)
+        # with a 72h cutoff → the stale edit is dropped, no false collision
+        self.assertEqual(
+            CD.find_collisions(items, "/test/proj", since=time.time() - 72 * 3600), [])
+
     def test_party_ts_is_the_edit_time_not_the_session_tail(self):
         # edit early, then unrelated work — party.last_ts must be the edit's time.
         st = state([user("edit it", 300),

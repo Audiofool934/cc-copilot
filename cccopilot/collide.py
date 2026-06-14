@@ -60,9 +60,12 @@ def _norm(path: str, cwd: str) -> str:
     return rel if not rel.startswith("..") else ap
 
 
-def find_collisions(items, cwd: str):
+def find_collisions(items, cwd: str, since: float = None):
     """Core (pure) fold: ``items`` is an iterable of ``(session_id, agent, State)``.
-    Returns the files mutated by 2+ distinct sessions, cross-branch first."""
+    Returns the files mutated by 2+ distinct sessions, cross-branch first. When
+    ``since`` (an epoch cutoff) is given, only file edits AT OR AFTER it count —
+    so a stale edit in a session that's merely been resumed today isn't reported
+    as a current collision."""
     by_path: dict = {}
     for sid, agent, st in items:
         if st.status == "empty":
@@ -72,8 +75,10 @@ def find_collisions(items, cwd: str):
         # session tail — a session may edit a file then move on to other work.
         line_ts = {r.line: r.ts for r in st.tr.records if r.ts is not None}
         for path, fc in st.files.items():
-            np = _norm(path, cwd)
             ts = line_ts.get(fc.last_line) or st.tr.last_ts
+            if since is not None and (ts is None or ts.timestamp() < since):
+                continue                     # edit older than the window — not live
+            np = _norm(path, cwd)
             by_path.setdefault(np, {})[sid] = Party(
                 sid, agent, branch, st.status, fc.last_line, fc.last_hhmm, ts)
     cols = []
@@ -115,4 +120,4 @@ def collisions(cwd: str, window_seconds: float = COLLISION_WINDOW_SECONDS,
                 if csid.endswith(".jsonl"):
                     csid = csid[: -len(".jsonl")]
                 items.append((csid, "claude", cst))
-    return find_collisions(items, cwd)
+    return find_collisions(items, cwd, since=now - window_seconds)
