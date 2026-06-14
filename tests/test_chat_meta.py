@@ -6,7 +6,36 @@ import tempfile
 import unittest
 
 from cccopilot import chat as C
-from tests.util import asst, user, write
+from tests.util import asst, tool, user, write
+
+
+class TestSubagentRollup(unittest.TestCase):
+    def test_rollup_summarizes_children_by_status_and_flags_needy(self):
+        idle_child = write([user("sub task", 200), asst("subagent done", 60)])
+        running_child = write([user("sub task", 100),
+                               tool("Bash", {"command": "sleep"}, "t1", 1)])
+        line = C._subagent_rollup([running_child, idle_child])
+        self.assertIn("subagents:", line)
+        self.assertIn("1 running", line)
+        self.assertIn("1 idle", line)
+
+    def test_rollup_caps_and_notes_overflow(self):
+        kids = [write([user("k", 50), asst("ok", 5)]) for _ in range(C._SUB_CAP + 3)]
+        line = C._subagent_rollup(kids)
+        self.assertIn(f"(+{3} more)", line)
+
+    def test_rollup_flags_review_worthy_idle_child(self):
+        # idle child that had a failed test → verdict review → must be flagged,
+        # not rendered as a plain "idle".
+        from tests.util import result
+        needy = write([
+            user("run tests", 120),
+            tool("Bash", {"command": "pytest"}, "t1", 60),
+            result("t1", "1 failed", is_error=True, ago=55),
+            asst("a test is failing", 5),
+        ])
+        line = C._subagent_rollup([needy])
+        self.assertIn("need a look", line)
 
 
 class TestReplMetaCommands(unittest.TestCase):

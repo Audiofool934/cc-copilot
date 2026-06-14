@@ -218,6 +218,25 @@ class TestSubagentCount(unittest.TestCase):
     def test_zero_for_non_session_paths(self):
         self.assertEqual(L.subagent_count(""), 0)
         self.assertEqual(L.subagent_count("/nope/x.txt"), 0)
+        self.assertEqual(L.subagent_paths(""), [])
+
+    def test_subagent_paths_newest_first(self):
+        d = tempfile.mkdtemp()
+        try:
+            sid = "sess0001"
+            path = os.path.join(d, sid + ".jsonl")
+            open(path, "w").close()
+            sub = os.path.join(d, sid, "subagents")
+            os.makedirs(sub)
+            older = os.path.join(sub, "agent-old.jsonl")
+            newer = os.path.join(sub, "agent-new.jsonl")
+            open(older, "w").close()
+            open(newer, "w").close()
+            os.utime(older, (1000, 1000))
+            os.utime(newer, (2000, 2000))
+            self.assertEqual(L.subagent_paths(path), [newer, older])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

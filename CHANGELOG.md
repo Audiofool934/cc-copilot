@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-**Fleet board shows subagent fan-out.** A Claude session that spawned subagents
-(child transcripts under `<session-id>/subagents/`) now shows a `+Nsub` marker on
-the `/status` board — the fan-out is exactly where a human loses track of what's
-running. Counted on demand for the rendered rows only. (Full parent→child tree
-and idle-child flagging to follow.)
+**Fleet board shows subagent fan-out + child health.** A Claude session that
+spawned subagents (child transcripts under `<session-id>/subagents/`) now shows a
+`+Nsub` marker on the `/status` board, plus an indented rollup of the children by
+status (`↳ subagents: 1 running, 2 idle`) that flags any needing a look — the
+fan-out is exactly where a human loses track of what's running. Children are
+parsed on demand for the rendered rows only (the board is not in the poll path),
+capped per parent.
 
 ## 0.22.0 — 2026-06-14
 

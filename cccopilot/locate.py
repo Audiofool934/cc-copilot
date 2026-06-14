@@ -178,19 +178,41 @@ def list_sessions(cwd: str, include_own: bool = False) -> list:
     return _refs_in(d, include_own) if d else []
 
 
+def _subagents_dir(path: str) -> str:
+    """The ``<session-id>/subagents/`` directory beside a Claude session file."""
+    if not path or not path.endswith(".jsonl"):
+        return ""
+    return os.path.join(path[: -len(".jsonl")], "subagents")
+
+
 def subagent_count(path: str) -> int:
     """How many subagent child transcripts a Claude session spawned. They live in
     a ``<session-id>/subagents/`` directory beside the session file (the children
     survive parent compaction, so their citations stay valid). Read-only count;
     0 when there are none or the path isn't a Claude session file."""
-    if not path or not path.endswith(".jsonl"):
+    sub = _subagents_dir(path)
+    if not sub:
         return 0
-    sub = os.path.join(path[: -len(".jsonl")], "subagents")
     try:
         return sum(1 for e in os.scandir(sub)
                    if e.name.startswith("agent-") and e.name.endswith(".jsonl"))
     except OSError:
         return 0
+
+
+def subagent_paths(path: str) -> list:
+    """Child subagent transcript paths for a Claude session, newest first
+    (read-only). Empty when there are none or ``path`` isn't a Claude session."""
+    sub = _subagents_dir(path)
+    if not sub:
+        return []
+    try:
+        ents = [(e.path, e.stat().st_mtime) for e in os.scandir(sub)
+                if e.name.startswith("agent-") and e.name.endswith(".jsonl")]
+    except OSError:
+        return []
+    ents.sort(key=lambda x: x[1], reverse=True)
+    return [p for p, _ in ents]
 
 
 def read_cwd(path: str) -> Optional[str]:

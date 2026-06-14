@@ -184,11 +184,41 @@ def render_fleet(cwd, limit=10, show_all=False):
         tag = f"{r.agent:<6} " if multi_agent else ""
         # cross-agent fleet awareness: a session that spawned subagents (Claude
         # child transcripts) is a fan-out where the human most easily loses track.
-        n_sub = LOC.subagent_count(r.path) if r.agent == "claude" else 0
-        sub = f" +{n_sub}sub" if n_sub else ""
+        subs = LOC.subagent_paths(r.path) if r.agent == "claude" else []
+        sub = f" +{len(subs)}sub" if subs else ""
         out.append(f" {g} {st.status:<13} {a.verdict:<9} {idle:>6} ago  {st.tr.raw_lines:>5}ev{sub}  "
                    f"{tag}{r.session_id[:8]}  {clip}")
+        if subs:                          # on-demand board only, so parsing is fine
+            out.append("        " + _subagent_rollup(subs))
     return "\n".join(out), len(rows)
+
+
+_SUB_CAP = 8   # parse at most this many children per parent for the board rollup
+
+
+def _subagent_rollup(paths) -> str:
+    """One indented line summarizing a parent's subagents by status, flagging any
+    that need a look. Parses up to _SUB_CAP children (the board is on-demand)."""
+    shown = paths[:_SUB_CAP]
+    counts, needy = {}, 0
+    for p in shown:
+        try:
+            cst = S.build(SRC.parse(p))
+        except OSError:
+            continue
+        counts[cst.status] = counts.get(cst.status, 0) + 1
+        # "needs a look" = the same bar the fleet board uses for the parent:
+        # stalled, or a friction verdict (review/intervene) even when idle.
+        if cst.status == "stalled" or A.assess(cst).verdict in ("review", "intervene"):
+            needy += 1
+    order = ["running", "stalled", "awaiting-agent", "idle", "empty"]
+    parts = [f"{counts[s]} {s}" for s in order if counts.get(s)]
+    line = "↳ subagents: " + (", ".join(parts) if parts else "—")
+    if needy:
+        line += f"  ⚠ {needy} need a look"
+    if len(paths) > len(shown):
+        line += f"  (+{len(paths) - len(shown)} more)"
+    return line
 
 
 class ChatSession:
