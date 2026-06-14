@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Mid-session autonomy escalations are flagged (Codex).** State previously read
+the sandbox/approval policy only from a session's first turn, so a later widening
+went unseen. The adapter now records each turn's `turn_context`, and
+`/check`·`/observe` flag — cited to the turn it changed — the genuinely notable
+widenings: the sandbox jumping to full disk access (`danger-full-access`),
+approval dropping to `never`, or network access newly enabled. Routine
+read-only→workspace-write is intentionally not flagged.
+
 **Exact Codex context pressure & rate limits surface as cited stall-causes.** The
 adapter now reads Codex `token_count` events for the agent's real context
 occupancy (`last_token_usage` vs `model_context_window` — not the cumulative

@@ -230,6 +230,11 @@ def assess(st: State) -> Assessment:
     #    cited cause for silence that no estimate can give.
     signals.extend(_context_pressure(st))
 
+    # 10) autonomy widened mid-session (Codex sandbox/approval escalation).
+    esc = _autonomy_escalation(st)
+    if esc is not None:
+        signals.append(esc)
+
     # ---- recency: friction near the tail is actionable now; friction the
     #      agent already recovered from (and then kept working / finished) is
     #      a heads-up, not an emergency. ------------------------------------
@@ -401,6 +406,71 @@ def _context_pressure(st: State):
             f"({tok // 1000}k/{win // 1000}k tokens) — it may compact or degrade soon",
             list(ev)))
     return out
+
+
+_SANDBOX_RANK = {"read-only": 0, "workspace-write": 1, "danger-full-access": 2}
+
+
+def _autonomy_escalation(st: State):
+    """A mid-session WIDENING of the agent's autonomy (Codex turn_context), which
+    state otherwise only reads from the first turn. Low-noise by design: routine
+    read-only→workspace-write is NOT flagged; only the genuinely notable widenings
+    are — into full disk access, approval dropped to 'never', or network newly
+    enabled. Cited to the turn where it changed. Returns a warn Signal or None."""
+    tcs = getattr(st.tr, "turn_contexts", None)
+    if not tcs or len(tcs) < 2:
+        return None
+    # widened INTO danger-full-access after a more-restricted earlier turn
+    seen_lower = False
+    for tc in tcs:
+        r = _SANDBOX_RANK.get(tc.get("sandbox"))
+        if r is None:
+            continue
+        if r < 2:
+            seen_lower = True
+        elif seen_lower:
+            return Signal("autonomy_escalation", "warn",
+                          "the sandbox widened to full disk access "
+                          "(danger-full-access) mid-session — confirm this was "
+                          "intended", [tc["line"]])
+    # approval dropped to 'never' after ANY more-supervised mode (on-request,
+    # untrusted, on-failure, …) — not only on-request.
+    seen_supervised = False
+    for tc in tcs:
+        ap = tc.get("approval")
+        if ap is None:
+            continue
+        if ap != "never":
+            seen_supervised = True
+        elif seen_supervised:
+            return Signal("autonomy_escalation", "warn",
+                          "approval policy loosened to 'never' mid-session — the "
+                          "agent now acts without asking", [tc["line"]])
+    # network access newly reachable. read-only turns omit network_access (= no
+    # network), so derive it from the sandbox type rather than the field alone.
+    seen_no_net = False
+    for tc in tcs:
+        n = _has_network(tc)
+        if n is False:
+            seen_no_net = True
+        elif n is True and seen_no_net:
+            return Signal("autonomy_escalation", "warn",
+                          "network access was enabled mid-session — the agent can "
+                          "now reach the network", [tc["line"]])
+    return None
+
+
+def _has_network(tc) -> "bool | None":
+    """Whether a turn's sandbox can reach the network. read-only = no; workspace-
+    write = its network_access flag; danger-full-access = yes; unknown = None."""
+    sb = tc.get("sandbox")
+    if sb == "read-only":
+        return False
+    if sb == "danger-full-access":
+        return True
+    if sb == "workspace-write":
+        return bool(tc.get("network"))
+    return None
 
 
 def _base(path: str) -> str:

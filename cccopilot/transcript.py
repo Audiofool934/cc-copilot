@@ -92,6 +92,9 @@ class Transcript:
     # Latest agent-reported token usage / rate-limit, if the source exposes it
     # (Codex token_count). Exact, not estimated. None for sources that don't.
     token_usage: Optional[dict] = None
+    # Per-turn autonomy context (Codex turn_context): the sandbox/approval/model
+    # in effect for each turn, in order — so a mid-session escalation is visible.
+    turn_contexts: list = field(default_factory=list)
 
     @property
     def first_ts(self) -> Optional[datetime]:

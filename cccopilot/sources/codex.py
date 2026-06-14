@@ -375,6 +375,19 @@ class CodexSource(AgentSource):
                 tr.cwd = str(payload["cwd"])
             if not tr.permission_mode and payload.get("approval_policy"):
                 tr.permission_mode = str(payload["approval_policy"])
+            # Record the per-turn autonomy context so a mid-session escalation
+            # (sandbox widened, approval loosened) is detectable. sandbox_policy
+            # is an object whose `type` is the privilege level.
+            sp = payload.get("sandbox_policy")
+            sandbox = sp.get("type") if isinstance(sp, dict) else (sp or None)
+            net = sp.get("network_access") if isinstance(sp, dict) else None
+            tr.turn_contexts.append({
+                "line": line,
+                "sandbox": sandbox,
+                "network": net,
+                "approval": payload.get("approval_policy"),
+                "model": payload.get("model"),
+            })
             return
 
         if typ == "event_msg":

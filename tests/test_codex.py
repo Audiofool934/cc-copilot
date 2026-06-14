@@ -356,6 +356,87 @@ class TestCodexTokenUsage(unittest.TestCase):
         self.assertNotIn("context_full", kinds)
 
 
+def _tctx(sandbox, approval="on-request", net=None, model="gpt-5", ago=5):
+    sp = {"type": sandbox}
+    if net is not None:
+        sp["network_access"] = net
+    return U.envelope("turn_context",
+                      {"cwd": "/test/proj", "model": model,
+                       "approval_policy": approval, "sandbox_policy": sp}, ago)
+
+
+class TestCodexAutonomyEscalation(unittest.TestCase):
+    def _has(self, tr):
+        return any(s.kind == "autonomy_escalation" for s in A.assess(S.build(tr)).signals)
+
+    def test_widen_to_full_access_fires(self):
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("workspace-write", ago=200),
+            U.umsg("more", ago=120),
+            _tctx("danger-full-access", ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertTrue(self._has(tr))
+
+    def test_approval_loosened_to_never_fires(self):
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("workspace-write", approval="on-request", ago=200),
+            _tctx("workspace-write", approval="never", ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertTrue(self._has(tr))
+
+    def test_network_enabled_midsession_fires(self):
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("workspace-write", net=False, ago=200),
+            _tctx("workspace-write", net=True, ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertTrue(self._has(tr))
+
+    def test_approval_never_after_untrusted_fires(self):
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("workspace-write", approval="untrusted", ago=200),
+            _tctx("workspace-write", approval="never", ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertTrue(self._has(tr))
+
+    def test_network_enabled_from_readonly_fires(self):
+        # read-only (no network) -> workspace-write with network = escalation,
+        # even though the sandbox bump itself (read-only->workspace-write) is quiet.
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("read-only", ago=200),
+            _tctx("workspace-write", net=True, ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertTrue(self._has(tr))
+
+    def test_routine_readonly_to_workspace_is_quiet(self):
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("read-only", ago=200),
+            _tctx("workspace-write", ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertFalse(self._has(tr))
+
+    def test_session_starting_at_full_access_is_quiet(self):
+        # The initial setting (no widening) is the user's choice, not flagged.
+        tr, _ = _state([
+            U.umsg("go", ago=300),
+            _tctx("danger-full-access", ago=200),
+            _tctx("danger-full-access", ago=100),
+            U.amsg("done", ago=10),
+        ])
+        self.assertFalse(self._has(tr))
+
+
 class TestCodexDiscoveryHardening(unittest.TestCase):
     def test_head_meta_bounds_giant_head_line_and_recovers(self):
         # A multi-MB line among the head lines must not be buffered whole during
