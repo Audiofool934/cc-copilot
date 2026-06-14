@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.22.0 — 2026-06-14
 
 **Mid-session autonomy escalations are flagged (Codex).** State previously read
 the sandbox/approval policy only from a session's first turn, so a later widening
