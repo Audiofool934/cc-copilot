@@ -377,8 +377,26 @@ class CodexSource(AgentSource):
                 tr.permission_mode = str(payload["approval_policy"])
             return
 
+        if typ == "event_msg":
+            # event_msg DUPLICATES response_item message/reasoning content, so we
+            # don't take records from it — EXCEPT the control variants that exist
+            # only here: a turn that ended abnormally (aborted/interrupted) or a
+            # surfaced error. Captured as `system` records with Codex-specific
+            # levels so assess can cite them; everything else is still skipped.
+            ev = payload.get("type")
+            if ev == "turn_aborted":
+                reason = str(payload.get("reason") or "interrupted")
+                tr.records.append(Record(line, "system", ts, raw_ts,
+                                         level="codex_turn_aborted",
+                                         text=f"turn aborted: {reason}"))
+            elif ev == "error":
+                msg = _short(str(payload.get("message") or "error"), 200)
+                tr.records.append(Record(line, "system", ts, raw_ts,
+                                         level="codex_error", text=msg))
+            return
+
         if typ != "response_item":
-            return  # event_msg duplicates response_item content; skip for records
+            return  # other top-level types carry no record content
 
         pt = payload.get("type")
 

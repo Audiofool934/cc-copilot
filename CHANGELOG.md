@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Codex turns that end abnormally now surface.** The Codex adapter previously
+discarded the entire `event_msg` stream; it now captures the two control signals
+that live only there — a turn that was aborted/interrupted, and a surfaced error
+— as cited `system` records (message/reasoning content is still skipped, so
+nothing double-counts). `/check` and `/observe` flag a recent abort/error at the
+tail ("your last turn ended early — it didn't finish") so a returning human is
+oriented. (Approval-request events are not persisted in Codex rollouts, so
+"blocked on approval" is intentionally not claimed.)
+
 **Secrets are scrubbed from model-bound evidence (read-only invariant A).**
 Before answering, cc-copilot now redacts secret-shaped content — API keys,
 tokens, private-key blocks, auth headers, and secret-named `KEY=value` lines —

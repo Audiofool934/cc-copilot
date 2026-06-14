@@ -221,6 +221,11 @@ def assess(st: State) -> Assessment:
     if cu is not None:
         signals.append(cu)
 
+    # 8) a Codex turn that ended abnormally (aborted/interrupted/error) at the tail.
+    ta = _turn_ended_abnormally(st)
+    if ta is not None:
+        signals.append(ta)
+
     # ---- recency: friction near the tail is actionable now; friction the
     #      agent already recovered from (and then kept working / finished) is
     #      a heads-up, not an emergency. ------------------------------------
@@ -336,6 +341,27 @@ def _claim_unverified(st: State):
             f"verify the latest code this turn — verify before trusting it",
             [closing.line] + [r.line for r in mutated][-2:],
         )
+    return None
+
+
+def _turn_ended_abnormally(st: State):
+    """A Codex turn that ended abnormally — aborted/interrupted, or a surfaced
+    error — captured (only) from the ``event_msg`` control stream as ``system``
+    records. Fires (warn) only when such an event is the CURRENT tail record (the
+    last meaningful thing that happened), so a returning human is oriented ("your
+    last turn didn't finish") and a later completed turn naturally suppresses it.
+    Codex-specific by its level strings — Claude transcripts never carry them, so
+    this never affects the Claude path. Returns a cited :class:`Signal` or None."""
+    lr = st.last_record
+    if lr is None or lr.kind != "system":
+        return None
+    if lr.level == "codex_error":
+        return Signal("turn_error", "warn",
+                      f"the agent surfaced an error: {lr.text}", [lr.line])
+    if lr.level == "codex_turn_aborted":
+        return Signal("turn_aborted", "warn",
+                      f"the agent's last turn ended early ({lr.text}) — it did "
+                      f"not finish", [lr.line])
     return None
 
 

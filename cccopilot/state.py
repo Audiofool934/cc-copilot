@@ -91,6 +91,10 @@ class State:
             return "awaiting-agent"
         if lr.kind == "agent_text":
             return "idle"
+        if lr.kind == "system":
+            # a captured Codex control event (turn aborted/errored) is terminal:
+            # the turn ended, it's the human's move — never "running"/"stalled".
+            return "idle"
         idle = self.idle_seconds
         if idle is not None and idle > STUCK_SECONDS:
             return "stalled"
@@ -241,7 +245,9 @@ def build(tr: Transcript, intent_window: int = 3, agent_tail: int = 3) -> State:
     # nothing… or owes the agent a reply. Status reflects the real exchange.
     meaningful = [r for r in tr.records
                   if r.kind in ("agent_text", "tool_call", "tool_result")
-                  or (r.kind == "human" and not r.housekeeping)]
+                  or (r.kind == "human" and not r.housekeeping)
+                  or (r.kind == "system"
+                      and r.level in ("codex_turn_aborted", "codex_error"))]
     st.last_record = meaningful[-1] if meaningful else None
 
     # A tool_call whose id never got a result == agent was mid-execution
@@ -252,6 +258,8 @@ def build(tr: Transcript, intent_window: int = 3, agent_tail: int = 3) -> State:
             break
         if r.kind in ("tool_result", "human", "agent_text"):
             break
+        if r.kind == "system" and r.level in ("codex_turn_aborted", "codex_error"):
+            break  # the turn aborted — the prior tool_call is no longer pending
 
     return st
 

@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 
+from cccopilot import assess as A
 from cccopilot import state as S
 from cccopilot import transcript as T
 from cccopilot.sources import codex as CX
@@ -240,6 +241,64 @@ class TestCodexStructuredOutput(unittest.TestCase):
         self.assertIn("[image]", bodies[0])
         self.assertIn("screenshot captured", bodies[0])
         self.assertNotIn(big_b64[:24], bodies[0])    # base64 never reaches the body
+
+
+class TestCodexControlEvents(unittest.TestCase):
+    def test_turn_aborted_event_becomes_a_system_record(self):
+        tr, _ = _state([
+            U.umsg("do the thing", ago=30),
+            U.amsg("working on it", ago=20),
+            U.token_count(ago=11),     # event_msg content — still NOT a record
+            U.envelope("event_msg",
+                       {"type": "turn_aborted", "reason": "interrupted"}, ago=10),
+        ])
+        ctrl = [r for r in tr.records if r.level == "codex_turn_aborted"]
+        self.assertEqual(len(ctrl), 1)
+        self.assertIn("interrupted", ctrl[0].text)
+        # token_count / message content must not have leaked in as extra records
+        self.assertEqual([r.kind for r in tr.records],
+                         ["human", "agent_text", "system"])
+
+    def test_error_event_becomes_a_system_record(self):
+        tr, _ = _state([
+            U.umsg("go", ago=20),
+            U.envelope("event_msg", {"type": "error", "message": "stream reset"}, ago=10),
+        ])
+        errs = [r for r in tr.records if r.level == "codex_error"]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("stream reset", errs[0].text)
+
+    def test_recent_abort_surfaces_in_assessment(self):
+        tr, _ = _state([
+            U.umsg("do the thing", ago=30),
+            U.amsg("working on it", ago=20),
+            U.envelope("event_msg", {"type": "turn_aborted", "reason": "interrupted"}, ago=5),
+        ])
+        a = A.assess(S.build(tr))
+        self.assertTrue(any(s.kind == "turn_aborted" for s in a.signals))
+
+    def test_aborted_turn_is_terminal_not_running(self):
+        # An abort after a mid-flight tool call must read as terminal (idle), not
+        # running/stalled, so it can never be escalated to INTERVENE.
+        tr, _ = _state([
+            U.umsg("build it", ago=300),
+            U.exec_call("sleep 1", "c1", ago=200),
+            U.envelope("event_msg", {"type": "turn_aborted", "reason": "interrupted"}, ago=190),
+        ])
+        st = S.build(tr)
+        self.assertEqual(st.status, "idle")
+        a = A.assess(st)
+        self.assertNotEqual(a.verdict, "intervene")
+
+    def test_later_completed_turn_suppresses_abort_signal(self):
+        tr, _ = _state([
+            U.umsg("do it", ago=300),
+            U.envelope("event_msg", {"type": "turn_aborted", "reason": "interrupted"}, ago=200),
+            U.umsg("ok try again", ago=100),
+            U.amsg("done, all good", ago=20),
+        ])
+        a = A.assess(S.build(tr))
+        self.assertFalse(any(s.kind == "turn_aborted" for s in a.signals))
 
 
 class TestCodexDiscoveryHardening(unittest.TestCase):
