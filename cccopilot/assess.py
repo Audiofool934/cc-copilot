@@ -32,6 +32,10 @@ REPEAT_LOOP = 4
 FAIL_STREAK_ALARM = 3
 # a single file with this many failed mutations == fighting the file
 EDIT_THRASH = 2
+# a CLEAR verdict on an autonomous run longer than this (since your last input)
+# gets a directional "consider a checkpoint" hedge — reliability decays with
+# horizon, so an early human checkpoint is disproportionately valuable.
+LONG_RUN_SECONDS = 1800
 
 _TEST_RE = re.compile(
     r"\b(?:pytest|jest|vitest|go test|cargo test|"
@@ -280,6 +284,18 @@ def assess(st: State) -> Assessment:
         headline += (" (agent is "
                      + ("idle" if st.status == "idle" else "waiting on you")
                      + ", not running)")
+    elif verdict == "clear":
+        # Calibrated hedge: a CLEAR on a long autonomous run (long since your last
+        # input) deserves softer language than a CLEAR on a 5-minute one — agent
+        # reliability decays with horizon and they don't self-recover from early
+        # mistakes, so an early human checkpoint is disproportionately valuable.
+        # Directional only — real observed numbers (duration, events), never a
+        # made-up reliability stat.
+        run = _unbroken_run_seconds(st)
+        if run is not None and run >= LONG_RUN_SECONDS:
+            headline += (f"  ·  running ~{_dur(run)} unattended ({st.tr.raw_lines} ev) "
+                         f"— 'clear' is less certain the longer it runs without a "
+                         f"checkpoint; consider one")
 
     return Assessment(verdict=verdict, headline=headline, signals=signals)
 
@@ -541,6 +557,30 @@ def _intent_drift(st: State):
         f"recent work no longer references the original goal "
         f"(\"{_short(fi.text, 70)}\") — confirm it's still on track",
         [fi.line, recent[-1].line])
+
+
+def _dur(sec) -> str:
+    if sec is None:
+        return "?"
+    s = int(sec)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+    return f"{s // 86400}d{(s % 86400) // 3600}h"
+
+
+def _unbroken_run_seconds(st: State):
+    """Seconds from the last human turn to the latest activity — how long the
+    agent has run autonomously since you last steered it. ``None`` if unknown."""
+    last_human = next((r for r in reversed(st.tr.records)
+                       if r.kind == "human" and not r.housekeeping and r.ts), None)
+    last = st.last_record
+    if last is None or last.ts is None or last_human is None or last_human.ts is None:
+        return None
+    return max(0.0, (last.ts - last_human.ts).total_seconds())
 
 
 def _base(path: str) -> str:

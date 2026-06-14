@@ -54,6 +54,24 @@ class TestAssess(unittest.TestCase):
         self.assertEqual(A.assess(state(fail_streak())).verdict, "intervene")
 
 
+class TestCalibratedClear(unittest.TestCase):
+    def test_long_unattended_clean_run_gets_checkpoint_hedge(self):
+        # running clean, but ~50 min since the last human input.
+        st = state([user("build the thing", 3000),
+                    tool("Bash", {"command": "make"}, "t1", 10)])
+        a = A.assess(st)
+        self.assertEqual(a.verdict, "clear")          # verdict itself unchanged
+        self.assertIn("consider", a.headline.lower())
+        self.assertIn("checkpoint", a.headline.lower())
+
+    def test_short_clean_run_has_no_hedge(self):
+        st = state([user("build the thing", 60),
+                    tool("Bash", {"command": "make"}, "t1", 10)])
+        a = A.assess(st)
+        self.assertEqual(a.verdict, "clear")
+        self.assertNotIn("checkpoint", a.headline.lower())
+
+
 class TestIntentDrift(unittest.TestCase):
     def _drift(self, a):
         return next((s for s in a.signals if s.kind == "intent_drift"), None)

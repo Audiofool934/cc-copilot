@@ -17,6 +17,15 @@ agents' fan-out — exactly where a human loses track of what's running:
 (both agents — Codex reads it from `session_meta.git.branch`) makes it obvious
 who's off `main` and which sessions share a branch (a conflict risk).
 
+**`/check` calibrates a CLEAR on long autonomous runs.** A CLEAR verdict on an
+agent that's been running a long time since your last input now appends a
+directional nudge — `running ~2h unattended (480 ev) — 'clear' is less certain
+the longer it runs without a checkpoint; consider one`. Reliability decays with
+horizon and agents don't self-recover from early mistakes, so an early human
+checkpoint is disproportionately valuable. The verdict stays CLEAR; the hedge
+uses only real observed numbers (duration, events), never a made-up reliability
+statistic.
+
 **Goal-drift heads-up (INFO).** `/observe` and `/check` now surface an info-level
 note when recent work stops referencing the session's *originating* goal
 ("recent work no longer references the original goal … — confirm it's still on
