@@ -43,13 +43,16 @@ def _git_worktree(cwd: str):
         if chk.returncode != 0 or chk.stdout.strip() != "true":
             return False, set()
         # --untracked-files=all so a new file isn't collapsed under a `?? dir/`
-        # entry; porcelain paths are relative to the cwd git ran in (-C cwd),
-        # which is the same base the transcript edits use — so both normalize
-        # against cwd, not the repo root (cwd may be a subdir of the repo).
-        st = subprocess.run(["git", "-C", cwd, "status", "--short",
-                             "--untracked-files=all"],
+        # entry; --no-optional-locks keeps this read-only path from touching the
+        # index lock. Porcelain paths are relative to the cwd git ran in (-C cwd),
+        # the same base the transcript edits use — so both normalize against cwd,
+        # not the repo root (cwd may be a subdir of the repo).
+        st = subprocess.run(["git", "--no-optional-locks", "-C", cwd, "status",
+                             "--short", "--untracked-files=all"],
                             capture_output=True, text=True, timeout=2,
                             encoding="utf-8", errors="replace")
+        if st.returncode != 0:               # status failed (locked index, etc.):
+            return False, set()              # don't pretend the tree is clean
     except (OSError, subprocess.TimeoutExpired):
         return False, set()
     dirty = set()

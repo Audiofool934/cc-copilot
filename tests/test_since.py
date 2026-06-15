@@ -189,6 +189,19 @@ class TestGitReconcile(unittest.TestCase):
         _rows, extra = SI._reconcile_rows(chg, dirty, "/proj", True, all_touched)
         self.assertEqual(extra, [])                              # early.py is ours, not "outside"
 
+    def test_failed_git_status_is_not_reported_as_clean(self):
+        import types
+        from unittest import mock
+
+        def fake_run(cmd, **kw):
+            is_revparse = "rev-parse" in cmd
+            return types.SimpleNamespace(returncode=0 if is_revparse else 1,
+                                         stdout="true" if is_revparse else "")
+        with mock.patch("cccopilot.since.subprocess.run", side_effect=fake_run):
+            is_repo, dirty = SI._git_worktree("/proj")
+        self.assertFalse(is_repo)            # failed status ≠ clean tree
+        self.assertEqual(dirty, set())
+
     def test_no_annotations_outside_a_repo(self):
         chg = [self._chg("a.py", 5)]
         rows, extra = SI._reconcile_rows(chg, set(), "/proj", is_repo=False)
