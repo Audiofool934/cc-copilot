@@ -589,6 +589,33 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.next_step_brief, N.available = real_next, real_avail
 
+    async def test_cockpit_goal_renders_grounded_goal_async(self):
+        """/goal drafts a paste-ready agent goal on a worker thread and keeps the
+        deterministic fallback under it as a grounded anchor."""
+        from cccopilot import narrate as N
+        from textual.widgets import Markdown
+        real_goal, real_avail = N.goal_brief, N.available
+        N.available = lambda be=None: True
+        N.goal_brief = lambda text, model=None, backend=None, instruction="": (
+            "```text\n/goal MODEL_GOAL\n```\n\nWhy this goal\n- observed [L1]"
+        )
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/goal prefer tests")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                srcs = "\n".join(getattr(m, "source", "")
+                                 for m in app.query_one("#chat").query(Markdown))
+                self.assertIn("# 🎯 agent goal", srcs)
+                self.assertIn("MODEL_GOAL", srcs)
+                self.assertIn("deterministic fallback", srcs)
+                self.assertFalse(app._busy)
+        finally:
+            N.goal_brief, N.available = real_goal, real_avail
+
     async def test_meta_results_render_as_inline_markdown_not_a_box(self):
         """/now (and its /since, /brief siblings) render through the Markdown
         widget — rendered headings, no collapsible box, no literal '#'/'**' left
@@ -1271,22 +1298,58 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         """The clipboard write is belt-and-suspenders: OSC 52 (for SSH/tmux) AND a
         local command (pbcopy/…), since OSC 52 no-ops on e.g. macOS Terminal.app."""
         import shutil as _shutil
+        old_tmux = os.environ.pop("TMUX", None)
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            osc, ran = [], []
-            app.copy_to_clipboard = lambda t: osc.append(t)
-            real_which, real_run = _shutil.which, tui.subprocess.run
-            _shutil.which = lambda name: "/bin/pbcopy" if name == "pbcopy" else None
-            tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
-            try:
-                app._put_on_clipboard("grab me")
-            finally:
-                _shutil.which, tui.subprocess.run = real_which, real_run
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                osc, ran = [], []
+                app.copy_to_clipboard = lambda t: osc.append(t)
+                real_which, real_run = _shutil.which, tui.subprocess.run
+                _shutil.which = lambda name: "/bin/pbcopy" if name == "pbcopy" else None
+                tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
+                try:
+                    app._put_on_clipboard("grab me")
+                finally:
+                    _shutil.which, tui.subprocess.run = real_which, real_run
+        finally:
+            if old_tmux is not None:
+                os.environ["TMUX"] = old_tmux
         self.assertEqual(osc, ["grab me"])             # OSC 52 attempted (remote/tmux)
         self.assertEqual(ran[0][0], ["pbcopy"])        # local command attempted…
         self.assertEqual(ran[0][1], b"grab me")        # …with the text piped to stdin
+
+    async def test_put_on_clipboard_uses_tmux_clipboard_paths_inside_tmux(self):
+        import shutil as _shutil
+        old_tmux = os.environ.get("TMUX")
+        os.environ["TMUX"] = "/tmp/tmux-501/default,123,0"
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                osc, ran, writes = [], [], []
+                app.copy_to_clipboard = lambda t: osc.append(t)
+                app._write_terminal_sequence = lambda seq: writes.append(seq)
+                real_which, real_run = _shutil.which, tui.subprocess.run
+                _shutil.which = lambda name: "/bin/tmux" if name == "tmux" else None
+                tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
+                try:
+                    app._put_on_clipboard("remote tmux")
+                finally:
+                    _shutil.which, tui.subprocess.run = real_which, real_run
+        finally:
+            if old_tmux is None:
+                os.environ.pop("TMUX", None)
+            else:
+                os.environ["TMUX"] = old_tmux
+        self.assertEqual(osc, ["remote tmux"])          # plain OSC 52 still attempted
+        self.assertEqual(ran[0][0], ["tmux", "load-buffer", "-w", "-"])
+        self.assertEqual(ran[0][1], b"remote tmux")
+        self.assertEqual(len(writes), 1)
+        self.assertTrue(writes[0].startswith("\x1bPtmux;\x1b\x1b]52;c;"))
+        self.assertTrue(writes[0].endswith("\x1b\\"))
 
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa

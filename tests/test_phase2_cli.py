@@ -105,6 +105,14 @@ class TestSinceHandoffCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("recorded your current position", out)
 
+    def test_goal_raw_drafts_paste_ready_agent_goal(self):
+        p = self._session()
+        rc, out = self._run(["goal", "--raw", "--session", p, "prefer", "tests"])
+        self.assertEqual(rc, 0)
+        self.assertIn("/goal ", out)
+        self.assertIn("prefer tests", out)
+        self.assertIn("cc-copilot does not inject", out)
+
     def test_since_shows_diff_against_marker_and_advances(self):
         p = self._session()
         tr = SRC.parse(p)

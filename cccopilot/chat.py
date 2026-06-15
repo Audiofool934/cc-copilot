@@ -46,6 +46,7 @@ _HELP = """commands (LLM-free except questions and the /since recap — /since -
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
   /now [steer]      recommend the next step (LLM; e.g. /now in spanish; deterministic fallback)
+  /goal [steer]     draft a paste-ready agent /goal from agent + project context
   /since [when] [steer]  recap since you last looked (30m / 2h / 1d; --raw = cited delta)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
@@ -126,6 +127,112 @@ def _fmt_conv_list(headers, scope="") -> str:
         out.append(f"  {h.conv_id[:8]}  {LOC.ago(h.updated):>5} ago  {h.turns:>3}t  "
                    f"{(h.title or '(untitled)')[:40]:<40}  {proj}{gone}")
     return "\n".join(out)
+
+
+def _clip_words(text: str, n: int = 220) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _goal_context_question(instruction: str = "") -> str:
+    base = ("Draft a paste-ready /goal command for the observed coding agent "
+            "using the current agent evidence and read-only project context.")
+    instruction = (instruction or "").strip()
+    if instruction:
+        base += f" Human steering for the goal draft: {instruction}"
+    return base
+
+
+def _extract_goal_command(text: str) -> str:
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if line.startswith("/goal"):
+            return line
+    return ""
+
+
+def _verification_command(st) -> str:
+    checks = []
+    needles = ("test", "pytest", "lint", "build", "typecheck", "check", "cargo test",
+               "go test", "make")
+    for cmd in reversed(getattr(st, "commands", []) or []):
+        c = (cmd.cmd or "").strip()
+        low = c.lower()
+        if c and any(n in low for n in needles):
+            checks.append(c)
+        if len(checks) >= 2:
+            break
+    if not checks:
+        return ("running the relevant test, build, lint, or reproduction command "
+                "for the changed area, or explicitly reporting why local "
+                "verification is unavailable")
+    if len(checks) == 1:
+        return f"rerunning `{checks[0]}`"
+    return f"rerunning `{checks[0]}` and `{checks[1]}`"
+
+
+def _deterministic_goal(st, instruction: str = "") -> str:
+    """Small no-model /goal draft from the folded state model."""
+    first = getattr(st, "first_intent", None)
+    latest = (getattr(st, "intents", []) or [None])[-1]
+    first_text = _clip_words(getattr(first, "text", ""), 260)
+    latest_text = _clip_words(getattr(latest, "text", ""), 260)
+    if first_text and latest_text and first_text.lower() != latest_text.lower():
+        outcome = f"finish the original task ({first_text}) while honoring the latest steer ({latest_text})"
+    else:
+        outcome = latest_text or first_text or "finish the current coding task"
+
+    if instruction:
+        outcome += f"; prioritize this steering: {_clip_words(instruction, 220)}"
+
+    constraints = []
+    changed = [fc.path for fc in getattr(st, "changed_files", [])[:5]]
+    if changed:
+        constraints.append("keep changes focused on " + ", ".join(f"`{p}`" for p in changed))
+    pending = [t.get("content", "") for t in getattr(st, "todos", [])
+               if str(t.get("status", "")).lower() not in ("completed", "done")]
+    if pending:
+        constraints.append("complete or explicitly close the pending todos: "
+                           + "; ".join(_clip_words(t, 90) for t in pending[:4]))
+    failures = getattr(st, "failures", []) or []
+    if failures:
+        f = failures[-1]
+        target = f.target or f.summary
+        constraints.append("do not declare complete while the latest known failure remains unresolved: "
+                           + _clip_words(target, 140))
+    if not constraints:
+        constraints.append("avoid unrelated refactors and keep the diff scoped to the task")
+
+    objective = (
+        f"{outcome}. Verify success by {_verification_command(st)} and by checking "
+        "the final diff/artifact against the requested behavior. "
+        + " ".join(c[0].upper() + c[1:] + "." for c in constraints if c)
+        + " Do not mark complete until verification evidence is visible in the transcript. "
+        "If blocked, stop with attempted paths, concrete evidence, the blocker, and the exact user input needed."
+    )
+    objective = _clip_words(objective, 3600)
+
+    why = []
+    if latest is not None and getattr(latest, "line", 0):
+        why.append(f"- latest agent-facing intent is at [L{latest.line}]")
+    elif first is not None and getattr(first, "line", 0):
+        why.append(f"- original agent-facing intent is at [L{first.line}]")
+    if getattr(st, "commands", None):
+        c = st.commands[-1]
+        why.append(f"- recent command evidence includes `{_clip_words(c.cmd, 90)}` [L{c.line}]")
+    if changed:
+        why.append(f"- current session changed {', '.join('`' + p + '`' for p in changed[:3])}")
+    if failures:
+        why.append(f"- latest failure evidence is at [L{failures[-1].line}]")
+    if not why:
+        why.append("- based on the currently selected live session evidence")
+
+    return ("# 🎯 agent goal\n\n"
+            "Paste this into the observed agent; cc-copilot does not inject it.\n\n"
+            "```text\n"
+            f"/goal {objective}\n"
+            "```\n\n"
+            "## Why this goal\n" + "\n".join(why))
 
 
 def _fleet_rank(status, verdict):
@@ -386,6 +493,8 @@ class ChatSession:
             return O.render(self.path, self.st, self.scope, sessions=self.scope_sessions)
         if c == "/now" or c.startswith("/now "):
             return self._now(cmd.strip()[4:].strip())
+        if c == "/goal" or c.startswith("/goal "):
+            return self._goal(cmd.strip()[5:].strip())
         if c == "/since" or c.startswith("/since "):
             return self._since(cmd.strip()[6:].strip())
         if c == "/handoff" or c.startswith("/handoff "):
@@ -638,6 +747,34 @@ class ChatSession:
         foot = det.splitlines()[0].strip() if det else ""
         if foot:
             body += f"\n\n---\n_deterministic next-step:_ {foot}"
+        return body
+
+    # ---- /goal: draft a persistent objective for the observed agent ---------
+    def _goal(self, instruction: str = "", raw: bool = False) -> str:
+        """Draft a paste-ready agent ``/goal`` command from observable session
+        evidence plus read-only project context. The cockpit remains read-only:
+        this never writes into the observed agent session."""
+        if self.st is None:
+            return "(no live session — transcript gone; nothing to turn into a goal)"
+        det = _deterministic_goal(self.st, instruction)
+        if raw or not N.available(self.backend):
+            return det
+        question = _goal_context_question(instruction)
+        try:
+            ctx = self.answer_context(question, history=self.history)
+            self.last_context_stats = ctx.stats
+            rec = N.goal_brief(ctx.text, model=self.model, backend=self.backend,
+                               instruction=instruction)
+        except Exception as e:
+            return det + f"\n\n> _goal draft unavailable ({e}); deterministic draft above._"
+        return self._compose_goal(rec, det)
+
+    @staticmethod
+    def _compose_goal(rec: str, det: str) -> str:
+        body = f"# 🎯 agent goal\n\n{rec.strip()}"
+        fallback = _extract_goal_command(det)
+        if fallback:
+            body += f"\n\n---\n_deterministic fallback:_\n\n```text\n{fallback}\n```"
         return body
 
     def _handoff(self, arg: str):

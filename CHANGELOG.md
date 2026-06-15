@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.25.0 — 2026-06-15
+
+**`/goal` drafts paste-ready agent goals from evidence.** The cockpit, REPL,
+and `cc-copilot goal` can now generate a concrete `/goal ...` command for the
+observed Claude Code/Codex agent using both agent transcript evidence and
+read-only project context. The command includes verification criteria,
+constraints, and blocked-stop language, with a deterministic `--raw` fallback
+when no model is available. cc-copilot remains read-only: it shows the goal for
+you to paste into the agent, it does not inject it.
+
+**Ctrl+Y clipboard copy works through remote tmux.** Copy now uses tmux-native
+clipboard forwarding (`tmux load-buffer -w -`) and an explicit tmux-wrapped OSC 52
+passthrough sequence in addition to Textual's plain OSC 52 and local clipboard
+commands. This fixes the common SSH-to-Linux-inside-tmux case where the app said
+"copied" but the outer Mac clipboard never received the selection.
+
 ## 0.24.1 — 2026-06-15
 
 **Ctrl+Z rolls the in-flight turn back into the composer.** Stopping a cockpit

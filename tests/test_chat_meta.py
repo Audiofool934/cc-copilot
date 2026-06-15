@@ -96,6 +96,35 @@ class TestReplMetaCommands(unittest.TestCase):
         s = self._sess()
         self.assertIn("agent sessions", s.meta("/sessions"))
 
+    def test_goal_without_backend_returns_paste_ready_deterministic_goal(self):
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        try:
+            s = self._sess()
+            out = s.meta("/goal focus verification")
+        finally:
+            N.available = real_avail
+        self.assertIn("/goal ", out)
+        self.assertIn("focus verification", out)
+        self.assertIn("cc-copilot does not inject", out)
+
+    def test_goal_with_backend_uses_goal_narration_and_fallback_anchor(self):
+        from cccopilot import narrate as N
+        real_avail, real_goal = N.available, N.goal_brief
+        N.available = lambda be=None: True
+        N.goal_brief = lambda text, model=None, backend=None, instruction="": (
+            "```text\n/goal MODEL_GOAL\n```\n\nWhy this goal\n- cited [L1]"
+        )
+        try:
+            s = self._sess()
+            out = s.meta("/goal tests first")
+        finally:
+            N.available, N.goal_brief = real_avail, real_goal
+        self.assertIn("MODEL_GOAL", out)
+        self.assertIn("deterministic fallback", out)
+        self.assertIn("/goal ", out)
+
 
 if __name__ == "__main__":
     unittest.main()

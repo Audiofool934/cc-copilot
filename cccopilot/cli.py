@@ -5,6 +5,7 @@
     cc-copilot init                   first-run setup: pick the model, save config
     cc-copilot sessions               list this project's sessions (newest first)
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
+    cc-copilot goal [...]             draft a paste-ready agent /goal
     cc-copilot chat [...]             live read-only chat pinned to a session
     cc-copilot backends               list LLM backends (claude/codex/deepseek/…)
     cc-copilot config [--init]        default backend/model/keys (~/.cc-copilot.toml)
@@ -920,6 +921,37 @@ def cmd_now(args) -> int:
     return 0
 
 
+def cmd_goal(args) -> int:
+    """Draft a paste-ready `/goal` command for the observed coding agent."""
+    from . import chat as C, narrate as N
+    if not getattr(args, "raw", False):
+        _maybe_first_run_nudge()
+    path = _resolve_or_die(args)
+    if getattr(args, "path", False):
+        sys.stderr.write(f"# transcript: {path}\n")
+    instruction = " ".join(getattr(args, "instruction", []) or []).strip()
+    try:
+        session = C.ChatSession(
+            path,
+            model=getattr(args, "model", None),
+            backend=getattr(args, "backend", None),
+            alerts=False,
+            persist=False,
+            scope=getattr(args, "scope", SC.SESSION),
+            scope_sessions=getattr(args, "scope_sessions", ""),
+        )
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    be = getattr(args, "backend", None)
+    if getattr(args, "raw", False) or not N.available(be):
+        print(session._goal(instruction, raw=True))
+        return 0
+    sys.stderr.write(f"# drafting goal via {N.backend_name(be)} …\n")
+    print(session._goal(instruction))
+    return 0
+
+
 def cmd_handoff(args) -> int:
     from . import handoff as HO, lastlook as LL, since as SI
     path = _resolve_or_die(args)
@@ -1055,6 +1087,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--backend",
                     help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
     sp.set_defaults(func=cmd_now)
+
+    sp = sub.add_parser("goal",
+                        help="draft a paste-ready agent /goal from agent + project context "
+                             "(LLM; --raw = deterministic draft)")
+    common(sp)
+    sp.add_argument("instruction", nargs="*",
+                    help="optional steering for the goal draft")
+    sp.add_argument("--session", help="session id, id-prefix, or transcript path "
+                                      "(default: most recent, excluding the current)")
+    sp.add_argument("--latest", action="store_true",
+                    help="explicitly target the most recent session")
+    sp.add_argument("--path", action="store_true",
+                    help="also print the resolved transcript path to stderr")
+    scope_arg(sp)
+    sp.add_argument("--raw", action="store_true",
+                    help="deterministic goal draft only — no LLM refinement")
+    sp.add_argument("--model", help="model for the goal draft (passed to the backend)")
+    sp.add_argument("--backend",
+                    help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
+    sp.set_defaults(func=cmd_goal)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
     common(sp)

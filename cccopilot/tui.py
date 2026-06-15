@@ -14,6 +14,7 @@ the I/O surface changes. Textual is imported lazily so the core stays zero-dep.
 from __future__ import annotations
 
 import os
+import base64
 import random
 import re
 import subprocess
@@ -55,7 +56,8 @@ from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
                models as MODELS)
-from .chat import _fmt_alert, _fmt_diff, _GLYPH, _dur
+from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
+                   _deterministic_goal, _goal_context_question)
 
 
 # ── themes (small curated set; everything references semantic tokens) ──
@@ -181,6 +183,7 @@ _HELP_TEXT = (
     "type `/` for command suggestions (Enter accepts, Tab completes; palette: Ctrl+P):\n"
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /now [steer]            recommend the next step (e.g. /now in spanish; LLM)\n"
+    "  /goal [steer]           draft a paste-ready agent /goal from context\n"
     "  /since [30m|1d] [--raw] [steer]  recap since you last looked (--raw = cited delta)\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
@@ -210,6 +213,7 @@ _HELP_TEXT = (
 _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
     ("/now", "recommend the next step — add a steer like 'in spanish' (LLM; deterministic fallback)", False),
+    ("/goal", "draft a paste-ready agent /goal from agent + project context", False),
     ("/since", "recap since you last looked (30m / 2h / 1d; --raw = cited delta; trailing text steers it)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
@@ -233,6 +237,16 @@ _SLASH_CMDS = [
     ("/help", "show help", False),
     ("/quit", "exit the cockpit", False),
 ]
+
+
+def _osc52_sequence(text: str) -> str:
+    payload = base64.b64encode(str(text or "").encode("utf-8")).decode("ascii")
+    return f"\x1b]52;c;{payload}\a"
+
+
+def _tmux_passthrough(seq: str) -> str:
+    # tmux DCS passthrough: ESC P tmux; <inner escapes doubled> ESC \
+    return "\x1bPtmux;" + str(seq or "").replace("\x1b", "\x1b\x1b") + "\x1b\\"
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 
 # Rotating feature tips shown subtly above the composer (see _rotate_tip). They
@@ -2798,6 +2812,8 @@ class Cockpit(App):
             self.action_observe(); return
         if low == "/now" or low.startswith("/now "):
             self.action_now(cmd.strip()[4:].strip()); return
+        if low == "/goal" or low.startswith("/goal "):
+            self.action_goal(cmd.strip()[5:].strip()); return
         if low == "/brief":
             self.action_brief(); return
         if low == "/check":
@@ -3049,6 +3065,58 @@ class Cockpit(App):
                         severity="warning")
         self._update_status()
         self._drain_msg_queue()         # a message queued during /now sends now
+
+    # ---- /goal: draft a paste-ready goal for the observed agent -------------
+    def action_goal(self, instruction=""):
+        self.session.refresh()
+        if self._no_live():
+            return
+        det = _deterministic_goal(self.session.st, instruction)
+        title = f"/goal — {self.session.scope_label()}"
+        if instruction:
+            title += f' · "{instruction}"'
+        if not N.available(self.backend) or self._busy:
+            self._result(det)
+            self._update_status()
+            return
+        question = _goal_context_question(instruction)
+        ctx = self.session.answer_context(question, history=list(self.session.history))
+        self._ctx_stats = ctx.stats
+        self._out_tokens = 0
+        self._out_exact = False
+        self._last_cost = None
+        self.session.last_context_stats = ctx.stats
+        self.session.last_output_tokens = 0
+        self._busy = True
+        self._busy_frame = 0
+        self._chat(self._role(
+            Text("🎯 drafting an agent /goal — grounded in agent + project context…",
+                 style=_PAL["muted"]), "role-event"))
+        self._update_status()
+        self._goal_recap(title, ctx.text, det, instruction,
+                         (self._evidence_sig(), self.session.store))
+
+    @work(thread=True)
+    def _goal_recap(self, title, ctx_text, det, instruction, origin):
+        try:
+            rec = N.goal_brief(ctx_text, model=self.model, backend=self.backend,
+                               instruction=instruction)
+            out = self.session._compose_goal(rec, det)
+        except Exception as e:
+            out = det + f"\n\n> _goal draft unavailable ({e}); deterministic draft above._"
+        self.call_from_thread(self._goal_done, title, out, origin)
+
+    def _goal_done(self, title, out, origin):
+        self._busy = False
+        self._busy_frame = 0
+        sig, store = origin
+        if self._evidence_sig() == sig and self.session.store is store:
+            self._result(out)
+        else:
+            self.notify(f"dropped {title} — you switched while it ran",
+                        severity="warning")
+        self._update_status()
+        self._drain_msg_queue()         # a message queued during /goal sends now
 
     def action_check(self):
         self.session.refresh()
@@ -3399,6 +3467,20 @@ class Cockpit(App):
         except Exception:
             pass
         import shutil
+        if os.environ.get("TMUX"):
+            if shutil.which("tmux"):
+                try:
+                    subprocess.run(["tmux", "load-buffer", "-w", "-"],
+                                   input=text.encode("utf-8"), timeout=2,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            try:
+                self._write_terminal_sequence(
+                    _tmux_passthrough(_osc52_sequence(text)))
+            except Exception:
+                pass
         for argv in (["pbcopy"], ["wl-copy"],
                      ["xclip", "-selection", "clipboard"],
                      ["xsel", "--clipboard", "--input"], ["clip"]):
@@ -3409,6 +3491,11 @@ class Cockpit(App):
                 except Exception:
                     pass
                 break                                    # first available tool wins
+
+    def _write_terminal_sequence(self, seq: str) -> None:
+        driver = getattr(self, "_driver", None)
+        if driver is not None:
+            driver.write(seq)
 
     def action_refresh_now(self):
         self.session.refresh()

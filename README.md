@@ -186,6 +186,7 @@ cc-copilot since 30m               # …or within a time window (30m / 2h / 1d)
 cc-copilot since --raw             # the deterministic cited delta, no model call
 cc-copilot handoff --out h.md      # shareable Markdown handoff (brief + what changed)
 cc-copilot watch --notify          # desktop alert when the agent needs you
+cc-copilot goal --raw              # paste-ready agent /goal from current evidence
 cc-copilot ask "what changed?"     # one-shot grounded Q&A
 cc-copilot chat                    # plain terminal chat mode
 cc-copilot resume                  # resumable Cockpit Sessions
@@ -229,6 +230,9 @@ It gives you:
 - Status header for project, evidence range, Cockpit Session, backend, and risk.
 - Live activity strip from the observed session(s).
 - Attention queue and next human decision via `/observe`.
+- Paste-ready agent goals via `/goal`, generated from observed agent evidence
+  plus read-only project context; cc-copilot shows the command, it does not
+  inject it into the agent.
 - Grounded chat over one session, selected sessions, or project evidence.
 - Context HUD showing estimated input context, output estimate, and evidence
   split across raw transcript, project facts, chat, memory, and summary index.
@@ -396,6 +400,16 @@ on-disk transcript, the `[L<n>]` citations, and what the cockpit shows you
 locally are untouched. Agent narrator CLIs (Claude/Codex) are launched
 read-only and **fail closed**: if the installed CLI can't be confined to
 read-only, cc-copilot refuses to launch it rather than run it unguarded.
+
+`/goal` follows the same read-only contract. It drafts a paste-ready agent
+command from the selected evidence and project facts:
+
+```text
+/goal <verifiable outcome, checks, constraints, and blocked stop condition>
+```
+
+Use the generated command in Claude Code or Codex when you want the agent to
+keep working toward a concrete finish line.
 
 ## Cockpit Sessions
 

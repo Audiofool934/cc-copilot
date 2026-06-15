@@ -261,6 +261,36 @@ def next_step_brief_stream(brief_text: str, model: str = None, backend=None,
                             model=model, backend=backend)
 
 
+_GOAL_DRAFT_TASK = (
+    "The evidence below combines the observed coding-agent session, cockpit "
+    "conversation context, and bounded read-only project facts. Draft ONE "
+    "paste-ready `/goal ...` command for the observed coding agent. The command "
+    "must be suitable for Claude Code or Codex and should help the agent keep "
+    "working until a verifiable end state is true. Include: the desired outcome, "
+    "the verification surface (tests/build/benchmark/artifact/source audit), "
+    "constraints or boundaries, and an explicit blocked stop condition. Do not "
+    "invent files, commands, failures, or project facts. The slash command itself "
+    "should not include citations, but after the command add a short 'Why this "
+    "goal' section with cited evidence. Also state that cc-copilot generated the "
+    "command but did not inject it into the agent. Keep the `/goal` command under "
+    "4,000 characters."
+)
+
+
+def goal_brief(brief_text: str, model: str = None, backend=None,
+               instruction: str = "") -> str:
+    """Draft a paste-ready agent ``/goal`` command from evidence context."""
+    return run_brief(brief_text, _with_instruction(_GOAL_DRAFT_TASK, instruction),
+                     model=model, backend=backend)
+
+
+def goal_brief_stream(brief_text: str, model: str = None, backend=None,
+                      instruction: str = "") -> StreamHandle:
+    """Streaming sibling of :func:`goal_brief` — identical grounding."""
+    return run_brief_stream(brief_text, _with_instruction(_GOAL_DRAFT_TASK, instruction),
+                            model=model, backend=backend)
+
+
 def ask(state, question: str, model: str = None, backend=None) -> str:
     return ask_brief(render(state), question, model=model, backend=backend)
 
