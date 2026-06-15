@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.23.0 — 2026-06-15
 
 **`/since` reconciles edits against the real working tree.** The "Files changed"
 list now marks each transcript-recorded edit `● uncommitted` (still pending in
