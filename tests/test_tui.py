@@ -2671,11 +2671,47 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app._answer_stopped)      # consumed, no leak
             self.assertFalse(app._busy)
             self.assertNotIn(("user", "the q"), sess.history)   # not persisted
+            self.assertEqual(app.query_one("#composer", tui.Composer).text, "the q")
             texts = []
             for s in app.query("#chat Static"):
                 c = getattr(s, "content", None)
                 texts.append(getattr(c, "plain", str(c)))
-            self.assertTrue(any("stopped" in t for t in texts))  # neutral note, not error
+            self.assertFalse(any("stopped" in t for t in texts))  # no history row
+
+    async def test_ctrl_z_removes_live_turn_and_restores_prompt(self):
+        class _FakeHandle:
+            def __init__(s): s.cancelled = False
+            def cancel(s): s.cancelled = True
+
+        from textual.widgets import Markdown
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompt = app._prompt_widget("edit this question")
+            app._chat(prompt)
+            app._answer_prompt_widget = prompt
+            app._answer_prompt_text = "edit this question"
+            app._answer_prompt_history_added = True
+            app._prompt_history.append("edit this question")
+            app._busy = True
+            app._chat_answer_inflight = True
+            app._answer_store = sess.store
+            app._answer_handle = _FakeHandle()
+            app._answer_chunk(sess.store, "partial answer")
+            await pilot.pause()
+            self.assertEqual(len(app.query("#chat .role-user")), 1)
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), 1)
+
+            app.action_stop_answer()
+            await pilot.pause()
+
+            self.assertTrue(app._answer_handle.cancelled)
+            self.assertEqual(app.query_one("#composer", tui.Composer).text,
+                             "edit this question")
+            self.assertEqual(len(app.query("#chat .role-user")), 0)
+            self.assertEqual(len(app.query_one("#chat").query(Markdown)), 0)
+            self.assertEqual(app._prompt_history, [])
 
     async def test_stop_meta_command_routes_to_action(self):
         from unittest import mock

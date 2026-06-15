@@ -193,7 +193,7 @@ _HELP_TEXT = (
     "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
-    "  /stop                   interrupt the in-flight answer, keep the cockpit  (Ctrl+Z)\n"
+    "  /stop                   interrupt answer; restore prompt for editing     (Ctrl+Z)\n"
     "  /use <n|id>  /refresh   /clear   /forget   /quit\n"
     "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+Y copy · Ctrl+Z stop · Shift+↑/↓ resize · Ctrl+C quit\n"
     "      Empty input: ←/→ jumps between prior prompts in chat.\n"
@@ -227,7 +227,7 @@ _SLASH_CMDS = [
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
     ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
-    ("/stop", "interrupt the in-flight answer (Ctrl+Z) — keeps the cockpit running", False),
+    ("/stop", "interrupt answer and restore its prompt for editing (Ctrl+Z)", False),
     ("/forget", "delete THIS cockpit session's saved resume state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
     ("/help", "show help", False),
@@ -1380,6 +1380,10 @@ class Cockpit(App):
         self._answer_store = None        # the conversation the answer belongs to
         self._answer_abandoned = False   # /forget mid-stream: drop, don't persist
         self._answer_stopped = False     # ctrl+z /stop: end this turn, keep app
+        self._answer_stop_reverted = False  # stopped turn already rolled back in UI
+        self._answer_prompt_widget = None   # live prompt bubble for in-flight answer
+        self._answer_prompt_text = ""
+        self._answer_prompt_history_added = False
         self._chat_answer_inflight = False  # a streaming chat answer is running (vs /now,/since)
         self._msg_queue = []             # chat messages typed while busy (FIFO)
         self._prompt_history = self._prompt_history_from_session()
@@ -1405,12 +1409,22 @@ class Cockpit(App):
         self._prompt_history = self._prompt_history_from_session()
         self._reset_prompt_history_nav()
 
-    def _remember_prompt(self, text: str) -> None:
+    def _remember_prompt(self, text: str) -> bool:
         text = str(text or "").strip()
+        added = False
         if text and (not self._prompt_history or self._prompt_history[-1] != text):
             self._prompt_history.append(text)
+            added = True
         self._reset_prompt_history_nav()
         self._cancel_rewind_esc()
+        return added
+
+    def _rollback_prompt_history(self, text: str, added: bool) -> None:
+        """Undo a prompt-history append for a turn that never actually landed."""
+        text = str(text or "").strip()
+        if added and self._prompt_history and self._prompt_history[-1] == text:
+            self._prompt_history.pop()
+        self._reset_prompt_history_nav()
 
     def _reset_prompt_history_nav(self) -> None:
         self._prompt_history_index = None
@@ -2262,7 +2276,7 @@ class Cockpit(App):
     def _on_submit(self, event: Composer.Submitted):
         self._slash_hide()
         text = event.text
-        self._remember_prompt(text)
+        remembered = self._remember_prompt(text)
         if text.startswith("/"):
             self._meta(text)
             return
@@ -2280,17 +2294,18 @@ class Cockpit(App):
             # bind the message to the evidence context it was typed in, so a switch
             # (/use, /here, /scope, /sessions) before it drains never answers it
             # against the wrong session/scope — it's dropped instead (see _drain).
-            self._msg_queue.append((text, self._evidence_sig(), self.session.store))
+            self._msg_queue.append((text, self._evidence_sig(), self.session.store,
+                                    remembered))
             self.notify(f"queued #{len(self._msg_queue)} — sends after the current "
                         "answer", severity="information")
             self._update_status()
             return
-        self._begin_chat_turn(text)
+        self._begin_chat_turn(text, prompt_history_added=remembered)
 
     def _queue_item_live(self, item) -> bool:
         """True if a queued (text, sig, store) still belongs to the current
         evidence context — same scope/session and the same conversation."""
-        _text, sig, store = item
+        _text, sig, store = item[:3]
         return sig == self._evidence_sig() and self._same_conv(store, self.session.store)
 
     def _prune_stale_queue(self) -> int:
@@ -2300,7 +2315,7 @@ class Cockpit(App):
         self._msg_queue[:] = [m for m in self._msg_queue if self._queue_item_live(m)]
         return before - len(self._msg_queue)
 
-    def _begin_chat_turn(self, text: str) -> bool:
+    def _begin_chat_turn(self, text: str, prompt_history_added: bool = False) -> bool:
         """Render the prompt bubble and launch one chat turn. Returns False if a
         guard blocked it (no live session / no backend) so the queue drainer can
         stop cleanly. The bubble mounts here — right before its own answer — so
@@ -2312,7 +2327,8 @@ class Cockpit(App):
         if not N.available(self.backend):
             self.notify("no backend — /model to switch", severity="error")
             return False
-        self._chat(self._prompt_widget(text))
+        prompt = self._prompt_widget(text)
+        self._chat(prompt)
         self.session.refresh()
         ctx = self.session.answer_context(text, history=list(self.session.history))
         self._ctx_stats = ctx.stats
@@ -2322,7 +2338,11 @@ class Cockpit(App):
         self._stream_md = None
         self._stream_buf = ""
         self._answer_abandoned = False
+        self._answer_stop_reverted = False
         self._answer_store = self.session.store
+        self._answer_prompt_widget = prompt
+        self._answer_prompt_text = text
+        self._answer_prompt_history_added = bool(prompt_history_added)
         self.session.last_context_stats = ctx.stats
         self.session.last_output_tokens = 0
         origin = self._answer_origin(self.session.st, self.session.store)
@@ -2351,12 +2371,77 @@ class Cockpit(App):
                         severity="warning")
         if not self._msg_queue:
             return
-        text, _sig, _store = self._msg_queue.pop(0)
-        if not self._begin_chat_turn(text) and self._msg_queue:
+        item = self._msg_queue.pop(0)
+        text = item[0]
+        remembered = bool(item[3]) if len(item) > 3 else False
+        if (not self._begin_chat_turn(text, prompt_history_added=remembered)
+                and self._msg_queue):
             # a guard blocked it (backend vanished) — drop the rest, don't spin.
             self.notify(f"dropped {len(self._msg_queue)} queued message(s)",
                         severity="warning")
             self._msg_queue.clear()
+
+    def _rollback_queued_prompt_history(self) -> None:
+        for item in reversed(self._msg_queue):
+            text = item[0]
+            remembered = bool(item[3]) if len(item) > 3 else False
+            self._rollback_prompt_history(text, remembered)
+
+    def _restore_stopped_prompt(self, text: str) -> None:
+        if not str(text or "").strip():
+            return
+        try:
+            comp = self.query_one("#composer", Composer)
+        except Exception:
+            return
+        comp._replace_text(text)
+        self._slash_hide()
+        comp.focus()
+
+    def _remove_stopped_turn_widgets(self, prompt_widget=None, answer_widget=None) -> None:
+        widgets = []
+        for widget in (prompt_widget, answer_widget):
+            if widget is None:
+                continue
+            if not getattr(widget, "is_attached", False):
+                continue
+            if getattr(widget, "_pruning", False):
+                continue
+            widgets.append(widget)
+        if not widgets:
+            return
+        try:
+            self.query_one("#chat", VerticalScroll).remove_children(widgets)
+        except Exception:
+            for widget in widgets:
+                try:
+                    widget.remove()
+                except Exception:
+                    pass
+        self._chat_prompt_nav_index = None
+        self._update_chat_pin()
+
+    def _rollback_stopped_turn_ui(self, text, prompt_widget=None,
+                                  answer_widget=None,
+                                  prompt_history_added=False) -> None:
+        self._remove_stopped_turn_widgets(prompt_widget, answer_widget)
+        self._rollback_prompt_history(text, bool(prompt_history_added))
+        self._restore_stopped_prompt(text)
+
+    def _revert_stopped_turn_ui(self, text=None, prompt_widget=None,
+                                answer_widget=None, prompt_history_added=None) -> None:
+        """Remove the in-flight turn from the chat and put its prompt back for edit."""
+        if self._answer_stop_reverted:
+            return
+        self._answer_stop_reverted = True
+        text = self._answer_prompt_text if text is None else text
+        prompt_widget = (self._answer_prompt_widget if prompt_widget is None
+                         else prompt_widget)
+        answer_widget = self._stream_md if answer_widget is None else answer_widget
+        if prompt_history_added is None:
+            prompt_history_added = self._answer_prompt_history_added
+        self._rollback_stopped_turn_ui(text, prompt_widget, answer_widget,
+                                       prompt_history_added)
 
     def action_stop_answer(self) -> None:
         """Ctrl+Z / `/stop`: interrupt the in-flight answer without quitting the
@@ -2365,6 +2450,7 @@ class Cockpit(App):
             self.notify("nothing to stop", severity="information")
             return
         cleared = len(self._msg_queue)
+        self._rollback_queued_prompt_history()
         self._msg_queue.clear()
         if not self._chat_answer_inflight:
             # a non-streaming /now or /since is running — no transport to cancel;
@@ -2377,7 +2463,9 @@ class Cockpit(App):
         # A chat answer is running (or just starting). Set the stop flag FIRST so
         # the worker honors it even if it hasn't published the handle yet (the
         # handle-race), then cancel the transport if it's already live.
-        self._answer_stopped = True     # _answer_done renders a neutral stop, no save
+        self._answer_stopped = True     # _answer_done consumes this; no save
+        if self._same_conv(self._answer_store, self.session.store):
+            self._revert_stopped_turn_ui()
         h = self._answer_handle
         if h is not None:
             h.cancel()                  # unblock the streaming read NOW; worker unwinds
@@ -2451,6 +2539,8 @@ class Cockpit(App):
         re-mounted with the accumulated text."""
         if self._answer_abandoned:
             return
+        if self._answer_stopped:
+            return
         self._stream_buf += chunk
         self._out_tokens = EC.estimate_tokens(self._stream_buf)
         self.session.last_output_tokens = self._out_tokens
@@ -2507,8 +2597,16 @@ class Cockpit(App):
         stopped = self._answer_stopped
         self._answer_stopped = False
         md, buf = self._stream_md, self._stream_buf
+        prompt_widget = self._answer_prompt_widget
+        prompt_text = self._answer_prompt_text or text
+        prompt_history_added = self._answer_prompt_history_added
+        stop_reverted = self._answer_stop_reverted
         self._stream_md = None
         self._stream_buf = ""
+        self._answer_prompt_widget = None
+        self._answer_prompt_text = ""
+        self._answer_prompt_history_added = False
+        self._answer_stop_reverted = False
         origin = origin or {}
         if self._answer_abandoned:
             # /forget mid-stream: the user deleted this conversation while the
@@ -2573,11 +2671,12 @@ class Cockpit(App):
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
         elif same and stopped:
-            # user-initiated stop (ctrl+z): neutral note, keep the partial on
-            # screen, persist nothing. Not an error.
-            note = "⏹ stopped" + (" — partial answer above kept (not saved)"
-                                   if (live and buf) else "")
-            self._chat(self._role(Text(note, style=_PAL["muted"]), "role-event"))
+            # user-initiated stop (ctrl+z): roll the whole in-flight turn out of
+            # chat history and put the prompt back in the composer. Persistence
+            # was already skipped above; this is a UI rollback, not an error row.
+            if not stop_reverted:
+                self._rollback_stopped_turn_ui(prompt_text, prompt_widget, md,
+                                               prompt_history_added)
         elif same:
             # keep any partial text the user already saw; the error goes beneath
             # it. The partial is NOT recorded — only completed answers persist.

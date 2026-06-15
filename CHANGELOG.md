@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.1 — 2026-06-15
+
+**Ctrl+Z rolls the in-flight turn back into the composer.** Stopping a cockpit
+answer no longer leaves a `⏹ stopped` row or partial assistant text in chat
+history. The live prompt bubble and partial answer are removed, the stopped turn
+is still not persisted, and the original submitted text is restored to the
+composer for editing.
+
 ## 0.24.0 — 2026-06-15
 
 **Project facts respect git, and the scan can't stall.** Building the read-only
