@@ -2466,6 +2466,281 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app._stream_md.source, "seen hidden back")
 
+    async def test_message_typed_while_busy_is_queued_not_dropped(self):
+        from textual.widgets import Static
+        self._stub_stream(["ok [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            prompts_before = len(app._chat_prompt_widgets())
+            app._busy = True                              # simulate a live answer
+            app._on_submit(tui.Composer.Submitted("second q"))
+            self.assertEqual([m[0] for m in app._msg_queue], ["second q"])  # queued
+            # the bubble is DEFERRED until the turn runs, so a queued prompt can
+            # never render above the answer it is waiting on (ordering guard)
+            self.assertEqual(len(app._chat_prompt_widgets()), prompts_before)
+            app._update_status()
+            self.assertIn("queued",
+                          app.query_one("#status", Static).content.plain)
+
+    async def test_queued_prompt_renders_in_order_when_it_runs(self):
+        # deferral means the queued bubble appears only at drain time — i.e. after
+        # the current answer, never before it.
+        self._stub_stream(["A2 [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            before = len(app._chat_prompt_widgets())
+            app._busy = True
+            app._on_submit(tui.Composer.Submitted("Q2"))
+            self.assertEqual(len(app._chat_prompt_widgets()), before)   # not yet
+            app._busy = False
+            app._drain_msg_queue()                        # now it runs → bubble mounts
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(len(app._chat_prompt_widgets()), before + 1)
+
+    async def test_queued_message_sends_after_the_current_answer(self):
+        self._stub_stream(["answer-two [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._on_submit(tui.Composer.Submitted("queued-q"))
+            self.assertEqual([m[0] for m in app._msg_queue], ["queued-q"])
+            app._busy = False                             # current answer finished
+            app._drain_msg_queue()                        # → the queued one runs
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._msg_queue, [])          # drained
+            self.assertFalse(app._busy)
+            self.assertIn(("user", "queued-q"), sess.history)
+            self.assertEqual(sess.history[-1], ("assistant", "answer-two [L1]"))
+
+    async def test_queue_is_capped(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            for i in range(tui._MSG_QUEUE_MAX + 3):
+                app._on_submit(tui.Composer.Submitted(f"m{i}"))
+            self.assertEqual(len(app._msg_queue), tui._MSG_QUEUE_MAX)
+
+    async def test_forget_clears_the_queue(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._on_submit(tui.Composer.Submitted("doomed"))
+            self.assertEqual(len(app._msg_queue), 1)
+            app.action_forget()
+            self.assertEqual(app._msg_queue, [])
+
+    async def test_forget_clears_queue_even_with_history_off(self):
+        # --no-persist: action_forget returns early (nothing saved), but it must
+        # still discard pending prompts so /forget is consistent.
+        from cccopilot.chat import ChatSession
+        p = write([user("task", 100, sessionId="sess-np"), asst("done", 5)],
+                  dir=self.home)
+        sess = ChatSession(p, backend="codex", alerts=False, persist=False)
+        sess.refresh()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._msg_queue.append(("doomed", app._evidence_sig(), app.session.store))
+            app.action_forget()
+            self.assertEqual(app._msg_queue, [])
+
+    async def test_switch_rebuild_clears_the_queue(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._on_submit(tui.Composer.Submitted("for-old-context"))
+            self.assertEqual(len(app._msg_queue), 1)
+            app._rebuild_chat()                           # a switch/new/rewind
+            self.assertEqual(app._msg_queue, [])
+
+    async def test_queued_message_dropped_when_context_changed(self):
+        # a switch that does NOT rebuild (e.g. /scope) must not let a queued
+        # message be answered against the new evidence — it's dropped.
+        from cccopilot import scope as SC
+        self._stub_stream(["should-not-run [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._on_submit(tui.Composer.Submitted("for-old-scope"))
+            self.assertEqual(len(app._msg_queue), 1)
+            sess.scope = SC.MULTI                          # context change, no rebuild
+            app._busy = False
+            app._drain_msg_queue()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._msg_queue, [])           # dropped, not run
+            self.assertNotIn(("user", "for-old-scope"), sess.history)
+
+    async def test_ctrl_z_stops_inflight_answer_and_clears_queue(self):
+        class _FakeHandle:
+            def __init__(s): s.cancelled = False; s.usage = None; s.text = ""
+            def cancel(s): s.cancelled = True
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            fake = _FakeHandle()
+            app._busy = True
+            app._chat_answer_inflight = True
+            app._answer_handle = fake
+            app._msg_queue.append(("queued", app._evidence_sig(), app.session.store))
+            app.action_stop_answer()
+            self.assertTrue(fake.cancelled)            # transport killed
+            self.assertTrue(app._answer_stopped)       # done-handler will go neutral
+            self.assertEqual(app._msg_queue, [])       # decisive stop clears queue
+
+    async def test_stop_before_handle_installed_is_recorded(self):
+        # ctrl+z right after submit: the worker may not have published the handle
+        # yet, but the turn is still a chat answer and must be honored (P3).
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._chat_answer_inflight = True           # started; handle not set yet
+            app._answer_handle = None
+            app.action_stop_answer()
+            self.assertTrue(app._answer_stopped)        # recorded; worker cancels on install
+
+    async def test_stop_flag_cleared_when_answer_abandoned(self):
+        # ctrl+z then /forget (or /rewind) before the cancelled stream lands: the
+        # abandoned early-return must still consume the stop flag (P2), or the next
+        # normal answer would be wrongly forced through the stopped path.
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._chat_answer_inflight = True
+            app._answer_stopped = True
+            app._answer_abandoned = True
+            app._answer_done("q", "# error: cancelled", False, sess.st, sess.store)
+            await pilot.pause()
+            self.assertFalse(app._answer_stopped)       # not leaked to the next turn
+            self.assertFalse(app._chat_answer_inflight)
+
+    async def test_stop_when_idle_is_a_noop(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_stop_answer()                   # not busy
+            self.assertFalse(app._answer_stopped)
+
+    async def test_stop_during_now_since_clears_queue_without_marking_stopped(self):
+        # /now and /since are blocking (no _answer_handle) — stop can't cancel the
+        # transport, but must NOT set _answer_stopped (it would leak to next turn).
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._chat_answer_inflight = False          # /now·/since, not a chat answer
+            app._answer_handle = None
+            app._msg_queue.append(("q", app._evidence_sig(), app.session.store))
+            app.action_stop_answer()
+            self.assertFalse(app._answer_stopped)
+            self.assertEqual(app._msg_queue, [])
+
+    async def test_stopped_answer_is_not_persisted(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._answer_stopped = True
+            app._busy = True
+            app._answer_done("the q", "# error: cancelled", False, sess.st, sess.store)
+            await pilot.pause()
+            self.assertFalse(app._answer_stopped)      # consumed, no leak
+            self.assertFalse(app._busy)
+            self.assertNotIn(("user", "the q"), sess.history)   # not persisted
+            texts = []
+            for s in app.query("#chat Static"):
+                c = getattr(s, "content", None)
+                texts.append(getattr(c, "plain", str(c)))
+            self.assertTrue(any("stopped" in t for t in texts))  # neutral note, not error
+
+    async def test_stop_meta_command_routes_to_action(self):
+        from unittest import mock
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            with mock.patch.object(app, "action_stop_answer") as spy:
+                app._meta("/stop")
+                app._meta("/cancel")
+            self.assertEqual(spy.call_count, 2)         # both aliases route to stop
+
+    async def test_prompt_queued_during_abandon_window_drains(self):
+        # /forget cancels the answer but _busy stays true until the worker lands;
+        # a prompt queued in that window must still drain (not sit idle forever).
+        self._stub_stream(["A [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True
+            app._chat_answer_inflight = True
+            app._answer_abandoned = True
+            app._msg_queue.append(("after-forget", app._evidence_sig(),
+                                   app.session.store))
+            app._answer_done("orig", "# error: cancelled", False, sess.st, sess.store)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._msg_queue, [])               # drained, not stuck
+            self.assertIn(("user", "after-forget"), sess.history)
+
+    async def test_message_queued_during_now_drains_when_now_finishes(self):
+        # /now sets _busy but finishes in _now_done (not _answer_done); a message
+        # queued meanwhile must still drain there, in FIFO order.
+        self._stub_stream(["after-now [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True                              # simulate /now in flight
+            app._on_submit(tui.Composer.Submitted("ask-during-now"))
+            self.assertEqual([m[0] for m in app._msg_queue], ["ask-during-now"])
+            app._now_done("/now", "next step [L1]",
+                          (app._evidence_sig(), app.session.store))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._msg_queue, [])
+            self.assertIn(("user", "ask-during-now"), sess.history)
+
+    async def test_message_queued_during_since_drains_when_since_finishes(self):
+        self._stub_stream(["after-since [L1]"])
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = True                              # simulate /since in flight
+            app._on_submit(tui.Composer.Submitted("ask-during-since"))
+            self.assertEqual([m[0] for m in app._msg_queue], ["ask-during-since"])
+            app._since_done("/since", "recap [L1]",
+                            (app._evidence_sig(), app.session.store), lambda: None)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(app._msg_queue, [])
+            self.assertIn(("user", "ask-during-since"), sess.history)
+
 
 if __name__ == "__main__":
     unittest.main()

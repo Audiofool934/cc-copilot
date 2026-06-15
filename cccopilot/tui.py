@@ -157,6 +157,7 @@ def _theme_name(name: str = "") -> str:
 _PAL = _rich_palette("cockpit")
 _VERDICT_HEX = _verdict_palette("cockpit")
 _BUSY_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_MSG_QUEUE_MAX = 8                # chat messages that can wait behind a live answer
 _TIMELINE_TITLE = "session activity"
 
 # Per-agent identity hues — the *watched* agent's brand color (Claude's
@@ -192,8 +193,9 @@ _HELP_TEXT = (
     "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
+    "  /stop                   interrupt the in-flight answer, keep the cockpit  (Ctrl+Z)\n"
     "  /use <n|id>  /refresh   /clear   /forget   /quit\n"
-    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+Y copy · Shift+↑/↓ resize · Ctrl+C quit\n"
+    "keys: Ctrl+R refresh · Ctrl+L clear · Ctrl+Y copy · Ctrl+Z stop · Shift+↑/↓ resize · Ctrl+C quit\n"
     "      Empty input: ←/→ jumps between prior prompts in chat.\n"
     "      Esc clears input; Esc twice on empty opens rewind.\n"
     "copy: drag to select, then Ctrl+Y — clean text to your clipboard (works over tmux/SSH).\n"
@@ -225,6 +227,7 @@ _SLASH_CMDS = [
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
     ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
     ("/refresh", "re-read the observed session now", False),
+    ("/stop", "interrupt the in-flight answer (Ctrl+Z) — keeps the cockpit running", False),
     ("/forget", "delete THIS cockpit session's saved resume state", False),
     ("/clear", "clear the chat view (keeps saved history)", False),
     ("/help", "show help", False),
@@ -1333,6 +1336,11 @@ class Cockpit(App):
         # bindings are checked before the focused widget. (ctrl+n still moves down
         # in an open Picker — handled in the picker's own key handler.)
         Binding("ctrl+y", "copy_selection", "copy", priority=True),
+        # Ctrl+Z interrupts the in-flight answer (keeps the cockpit running) —
+        # "queue by default, interrupt on demand". priority=True so it fires even
+        # while the composer (a focused TextArea) has focus; this overrides the
+        # TextArea's ctrl+z undo, a deliberate trade for a reliable stop key.
+        Binding("ctrl+z", "stop_answer", "stop", priority=True),
         Binding("ctrl+t", "model", "model"),
         Binding("ctrl+r", "refresh_now", "refresh", show=False),
         Binding("ctrl+l", "clear_chat", "clear view", show=False),
@@ -1371,6 +1379,9 @@ class Cockpit(App):
         self._answer_handle = None       # in-flight StreamHandle (cancel target)
         self._answer_store = None        # the conversation the answer belongs to
         self._answer_abandoned = False   # /forget mid-stream: drop, don't persist
+        self._answer_stopped = False     # ctrl+z /stop: end this turn, keep app
+        self._chat_answer_inflight = False  # a streaming chat answer is running (vs /now,/since)
+        self._msg_queue = []             # chat messages typed while busy (FIFO)
         self._prompt_history = self._prompt_history_from_session()
         self._prompt_history_index = None
         self._prompt_draft = ""
@@ -1987,6 +1998,7 @@ class Cockpit(App):
         chat = self.query_one("#chat", VerticalScroll)
         if clear:
             chat.remove_children()
+        self._msg_queue.clear()         # queued messages belong to the old context
         self._chat_prompt_nav_index = None
         hist = self.session.history
         if hist:
@@ -2153,8 +2165,12 @@ class Cockpit(App):
         if self._busy:
             ans = (EC.format_answering(self._ctx_stats, self._out_tokens)
                    if self._ctx_stats is not None else "")
-            hud_str = _busy_indicator(self._busy_frame) + ((" · " + ans) if ans else "")
-            hud_parts, hud_sty = (ans.split(" · ") if ans else []), _PAL["accent"]
+            hud_parts = ans.split(" · ") if ans else []
+            if self._msg_queue:
+                hud_parts = hud_parts + [f"+{len(self._msg_queue)} queued"]
+            hud_str = _busy_indicator(self._busy_frame) + (
+                (" · " + " · ".join(hud_parts)) if hud_parts else "")
+            hud_sty = _PAL["accent"]
         elif self._ctx_stats is not None:
             hud_str = EC.format_hud(self._ctx_stats, self._out_tokens,
                                     out_exact=self._out_exact,
@@ -2250,17 +2266,53 @@ class Cockpit(App):
         if text.startswith("/"):
             self._meta(text)
             return
-        self._chat(self._prompt_widget(text))
         if self._busy:
-            self.notify("still answering the previous question", severity="warning")
+            # don't drop it — queue it behind the live answer and send it when the
+            # current turn finishes (drained in _answer_done / _now_done /
+            # _since_done). FIFO, sequential. The bubble is NOT rendered now: it's
+            # mounted when the turn actually runs (_begin_chat_turn), so a queued
+            # prompt can never appear above the answer it is waiting on.
+            self._prune_stale_queue()           # so the cap counts only live-context
+            if len(self._msg_queue) >= _MSG_QUEUE_MAX:
+                self.notify(f"queue full ({_MSG_QUEUE_MAX}) — wait for the current "
+                            "answer", severity="warning")
+                return
+            # bind the message to the evidence context it was typed in, so a switch
+            # (/use, /here, /scope, /sessions) before it drains never answers it
+            # against the wrong session/scope — it's dropped instead (see _drain).
+            self._msg_queue.append((text, self._evidence_sig(), self.session.store))
+            self.notify(f"queued #{len(self._msg_queue)} — sends after the current "
+                        "answer", severity="information")
+            self._update_status()
             return
+        self._begin_chat_turn(text)
+
+    def _queue_item_live(self, item) -> bool:
+        """True if a queued (text, sig, store) still belongs to the current
+        evidence context — same scope/session and the same conversation."""
+        _text, sig, store = item
+        return sig == self._evidence_sig() and self._same_conv(store, self.session.store)
+
+    def _prune_stale_queue(self) -> int:
+        """Drop queued messages whose evidence context no longer matches. Returns
+        how many were dropped (silent — the caller decides whether to announce)."""
+        before = len(self._msg_queue)
+        self._msg_queue[:] = [m for m in self._msg_queue if self._queue_item_live(m)]
+        return before - len(self._msg_queue)
+
+    def _begin_chat_turn(self, text: str) -> bool:
+        """Render the prompt bubble and launch one chat turn. Returns False if a
+        guard blocked it (no live session / no backend) so the queue drainer can
+        stop cleanly. The bubble mounts here — right before its own answer — so
+        immediate and queued turns both render in correct Q/A order."""
         if self.session.st is None:
             self.notify("history-only view (transcript gone) — /sessions to attach a "
                         "live session", severity="warning")
-            return
+            return False
         if not N.available(self.backend):
             self.notify("no backend — /model to switch", severity="error")
-            return
+            return False
+        self._chat(self._prompt_widget(text))
         self.session.refresh()
         ctx = self.session.answer_context(text, history=list(self.session.history))
         self._ctx_stats = ctx.stats
@@ -2276,12 +2328,63 @@ class Cockpit(App):
         origin = self._answer_origin(self.session.st, self.session.store)
         self._busy = True
         self._busy_frame = 0
+        self._chat_answer_inflight = True   # interruptible by /stop even pre-handle
         self._update_status()
         # Capture the originating conversation (store + state). If the user
         # switches sessions before the backend returns, the answer is recorded
         # against the session it was ASKED in — not whatever is current now.
         self._answer(text, ctx.text, self.session.st, list(self.session.history),
                      self.session.store, origin)
+        return True
+
+    def _drain_msg_queue(self) -> None:
+        """Start the next queued chat message, if any (called when a turn ends).
+
+        A message only runs if the evidence context (scope/session/store) still
+        matches the one it was queued in; messages stranded by a switch are
+        dropped, never answered against the wrong session."""
+        if self._busy or not self._msg_queue:
+            return
+        stale = self._prune_stale_queue()
+        if stale:
+            self.notify(f"dropped {stale} queued message(s) from a previous context",
+                        severity="warning")
+        if not self._msg_queue:
+            return
+        text, _sig, _store = self._msg_queue.pop(0)
+        if not self._begin_chat_turn(text) and self._msg_queue:
+            # a guard blocked it (backend vanished) — drop the rest, don't spin.
+            self.notify(f"dropped {len(self._msg_queue)} queued message(s)",
+                        severity="warning")
+            self._msg_queue.clear()
+
+    def action_stop_answer(self) -> None:
+        """Ctrl+Z / `/stop`: interrupt the in-flight answer without quitting the
+        app. A decisive stop — the pending queue is cleared so you can steer."""
+        if not self._busy:
+            self.notify("nothing to stop", severity="information")
+            return
+        cleared = len(self._msg_queue)
+        self._msg_queue.clear()
+        if not self._chat_answer_inflight:
+            # a non-streaming /now or /since is running — no transport to cancel;
+            # it finishes on its own. We can still clear the queue.
+            msg = "can't interrupt /now·/since mid-run — it'll finish shortly"
+            self.notify(msg + (f" · cleared {cleared} queued" if cleared else ""),
+                        severity="warning")
+            self._update_status()
+            return
+        # A chat answer is running (or just starting). Set the stop flag FIRST so
+        # the worker honors it even if it hasn't published the handle yet (the
+        # handle-race), then cancel the transport if it's already live.
+        self._answer_stopped = True     # _answer_done renders a neutral stop, no save
+        h = self._answer_handle
+        if h is not None:
+            h.cancel()                  # unblock the streaming read NOW; worker unwinds
+        self.notify("⏹ stopping the current answer"
+                    + (f" · cleared {cleared} queued" if cleared else ""),
+                    severity="warning")
+        self._update_status()
 
     @work(thread=True)
     def _answer(self, text, brief_text, st, history, store, origin=None):
@@ -2294,6 +2397,8 @@ class Cockpit(App):
             h = N.chat_brief_stream(brief_text, [], text, model=model,
                                     backend=backend)
             self._answer_handle = h     # on_unmount/_abandon cancel() this
+            if self._answer_stopped:    # ctrl+z landed before the handle existed
+                h.cancel()              # honor it now (the handle-race window)
             # coalesce: claude emits token-level deltas (can be > 20/s); batch
             # anything that arrives within 50ms into one UI update so the loop
             # paints words, not keystrokes. Chunks slower than that flush as-is.
@@ -2395,7 +2500,12 @@ class Cockpit(App):
     def _answer_done(self, text, ans, ok, st, store, usage=None, origin=None):
         self._busy = False
         self._busy_frame = 0
+        self._chat_answer_inflight = False
         self._answer_store = None
+        # consume the stop flag HERE — before any early return — so a ctrl+z that
+        # raced an abandon (/forget, /rewind) can't leak into the next turn.
+        stopped = self._answer_stopped
+        self._answer_stopped = False
         md, buf = self._stream_md, self._stream_buf
         self._stream_md = None
         self._stream_buf = ""
@@ -2407,7 +2517,10 @@ class Cockpit(App):
             self._answer_abandoned = False
             self._update_header()
             self._update_status()
+            self._drain_msg_queue()     # a prompt queued during the abandon window
             return
+        if stopped:
+            ok = False                  # a user stop is never a persisted success
         same = self._same_conv(store, self.session.store)
         exact = bool(ok and usage and getattr(usage, "exact", False)
                      and getattr(usage, "output_tokens", 0))
@@ -2459,6 +2572,12 @@ class Cockpit(App):
                 self._restore_current_store_meta()
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
+        elif same and stopped:
+            # user-initiated stop (ctrl+z): neutral note, keep the partial on
+            # screen, persist nothing. Not an error.
+            note = "⏹ stopped" + (" — partial answer above kept (not saved)"
+                                   if (live and buf) else "")
+            self._chat(self._role(Text(note, style=_PAL["muted"]), "role-event"))
         elif same:
             # keep any partial text the user already saw; the error goes beneath
             # it. The partial is NOT recorded — only completed answers persist.
@@ -2466,6 +2585,7 @@ class Cockpit(App):
             self._chat(self._role(Text(ans + note, style=_PAL["error"]), "role-alert"))
         self._update_header()
         self._update_status()
+        self._drain_msg_queue()         # send the next queued message, if any
 
     # ---- /since: deterministic delta, narrated into a grounded recap ----
     def _since_cmd(self, arg: str):
@@ -2518,6 +2638,7 @@ class Cockpit(App):
             self.notify(f"dropped {title} recap — you switched while it ran",
                         severity="warning")      # not committed → delta survives
         self._update_status()
+        self._drain_msg_queue()         # a message queued during /since sends now
 
     # ---- background watcher ----
     def _reset_watch_baseline(self):
@@ -2656,6 +2777,8 @@ class Cockpit(App):
             self.action_refresh_now(); return
         if low in ("/clear", "/cls"):
             self.action_clear_chat(); return
+        if low in ("/stop", "/cancel"):
+            self.action_stop_answer(); return
         if low == "/forget":
             self.action_forget(); return
         if low == "/rewind":
@@ -2826,6 +2949,7 @@ class Cockpit(App):
             self.notify(f"dropped {title} — you switched while it ran",
                         severity="warning")
         self._update_status()
+        self._drain_msg_queue()         # a message queued during /now sends now
 
     def action_check(self):
         self.session.refresh()
@@ -3206,6 +3330,9 @@ class Cockpit(App):
     def action_forget(self):
         # Delete THIS conversation's saved history from disk + clear the view.
         store = self.session.store
+        # discard pending prompts FIRST — /forget means "drop this", and it must
+        # do so even with history off (--no-persist), which returns early below.
+        self._msg_queue.clear()
         if not store.enabled:
             self.notify("history is off — nothing saved to forget", severity="warning")
             return

@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.24.0 — 2026-06-15
+
+**Project facts respect git, and the scan can't stall.** Building the read-only
+project evidence for a chat turn used to walk the anchor session's whole cwd,
+bounded only by how many text files it had *collected* — so launching from a
+broad parent dir (an ML workspace whose subtrees hold large data/checkpoint dirs)
+meant scandir-ing a huge tree on **every message**, a multi-second stall before
+each send, while the same cockpit run from a code subdir was instant. Now the
+discovery (1) **respects git** — in a work tree it enumerates files via
+`git ls-files`, satisfying the file budget from **tracked** files first (an index
+read, no worktree walk) and only falling to the untracked-but-unignored listing
+if needed, so the data your `.gitignore` already excludes is never touched and a
+big un-gitignored dir can't stall the per-turn build — and (2) falls back to a
+**bounded** `os.scandir` walk for non-git roots, capped by entries visited and
+wall-clock and streamed so the budget bails *before* a single giant directory is
+even fully listed. Tunable via `CC_COPILOT_PROJECT_SCAN_MAX_ENTRIES` /
+`CC_COPILOT_PROJECT_SCAN_TIME_BUDGET`. Secrets, binaries, and tracked-but-deleted
+phantoms are filtered out of whatever git lists.
+
+This matches how the field selects context files (`git ls-files` is the
+.gitignore-respecting enumeration used by Cursor, Continue, Copilot, Windsurf,
+Cody; Aider walks git's object tree to the same end), with a more defensive
+non-git fallback than most tools document.
+
+**The cockpit queues messages instead of dropping them.** Typing and sending a
+second message while the current answer is still streaming used to be discarded
+with "still answering the previous question". Now it's **queued** (FIFO, up to 8)
+and sent automatically when the current turn finishes — fire off a few follow-ups
+and walk away. The busy HUD shows `+N queued`; the queue clears on `/forget`,
+`/rewind`, and session switches (those queued messages belonged to the old
+context). Each queued turn builds its evidence at send time, so it reflects the
+freshest state, and a queued message is dropped — never answered against the
+wrong session — if you switch scope/session before it runs.
+
+**Interrupt an answer with Ctrl+Z (or `/stop`).** "Queue by default, interrupt on
+demand" — the pattern the field is converging on. Ctrl+Z (or `/stop` / `/cancel`)
+now stops the in-flight answer without quitting the cockpit: the partial stays on
+screen (marked `⏹ stopped`, not saved) and the pending queue is cleared so you can
+steer. Previously the only way to halt was Ctrl+C, which quit the whole app.
+
 ## 0.23.0 — 2026-06-15
 
 **`/since` reconciles edits against the real working tree.** The "Files changed"

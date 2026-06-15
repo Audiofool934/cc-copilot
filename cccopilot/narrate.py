@@ -147,11 +147,18 @@ class StreamHandle:
         self.text = ""
         self.usage = None
         self.done = False
+        self.cancelled = False
 
     def __iter__(self):
         parts = []
         try:
+            if self.cancelled:
+                return              # cancelled before iteration → never start the
+                                    # backend (the pre-start /stop window)
             for chunk in self._gen:
+                if self.cancelled:
+                    break           # mid-stream stop, or a non-streaming fallback
+                                    # whose one blocking chunk we now suppress
                 parts.append(chunk)
                 yield chunk
         finally:
@@ -160,9 +167,11 @@ class StreamHandle:
             self.done = True
 
     def cancel(self):
-        """Best-effort, thread-safe abort. The consuming thread is usually
-        blocked INSIDE the backend read — this kills the transport so that
-        read returns and the stream unwinds immediately (see Backend.cancel)."""
+        """Best-effort, thread-safe abort. Sets ``cancelled`` (so a cancel that
+        races BEFORE iteration starts, or a non-streaming fallback, still stops
+        cleanly) AND kills the transport — the consuming thread is usually blocked
+        INSIDE the backend read, so killing it makes that read return at once."""
+        self.cancelled = True
         try:
             getattr(self._be, "cancel", lambda: None)()
         except Exception:

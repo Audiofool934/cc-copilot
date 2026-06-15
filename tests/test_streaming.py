@@ -534,6 +534,28 @@ class TestStreamHandle(unittest.TestCase):
         self.assertIn("the question?", be.prompts[0])
         self.assertIn("EVIDENCE CONTEXT", be.prompts[0])
 
+    def test_cancel_before_iteration_never_starts_backend(self):
+        # /stop in the pre-start window: the handle exists but iteration hasn't
+        # begun. Cancelling must stop it WITHOUT ever running the backend.
+        be = _StubBackend(chunks=("a", "b"))
+        h = N.chat_brief_stream("brief", [], "q?", backend=be)
+        h.cancel()
+        self.assertEqual(list(h), [])                   # yields nothing
+        self.assertEqual(be.prompts, [])               # backend never started
+        self.assertEqual(h.text, "")
+        self.assertTrue(h.done)
+        self.assertTrue(h.cancelled)
+
+    def test_cancel_midstream_suppresses_remaining_chunks(self):
+        be = _StubBackend(chunks=("a", "b", "c"))
+        h = N.run_brief_stream("brief", "task", backend=be)
+        out = []
+        for c in h:
+            out.append(c)
+            h.cancel()                                 # stop after the first chunk
+        self.assertEqual(out, ["a"])                   # no further chunks delivered
+        self.assertTrue(h.cancelled)
+
     def test_unavailable_backend_raises_at_call(self):
         class Off(BK.Backend):
             name = "off"

@@ -1,7 +1,11 @@
 import json
 import os
+import shutil
+import subprocess
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 import re
 
@@ -283,6 +287,225 @@ class TestCandidateRefsCrossBucket(unittest.TestCase):
         names = [os.path.basename(r.path) for r in SC._candidate_refs(a)]
         self.assertEqual(sorted(names), ["a2.jsonl", "b2.jsonl"])
         self.assertEqual(len(names), len(set(names)))
+
+
+class TestProjectScanBudget(unittest.TestCase):
+    """`_text_files` must bound its walk by work done, not just files collected.
+
+    The cockpit builds project facts on every chat message by walking the anchor
+    session's cwd. From a broad parent dir whose siblings hold large non-code
+    subtrees (ML data/checkpoints), reaching `max_files` text files means
+    scandir-ing a huge tree — a multi-second per-message stall. The walk is capped
+    by entries visited and wall-clock so that can't happen.
+    """
+
+    def _tree(self):
+        root = tempfile.mkdtemp(prefix="ccscan-")
+        # A data-heavy subdir that SORTS FIRST, full of binary blobs (null bytes →
+        # not text), and the real code in a subdir that sorts later.
+        data = os.path.join(root, "aaa_data")
+        os.makedirs(data)
+        for i in range(800):
+            with open(os.path.join(data, f"blob{i:04d}.bin"), "wb") as f:
+                f.write(b"\0\0\0")
+        code = os.path.join(root, "zzz_code")
+        os.makedirs(code)
+        for i in range(5):
+            with open(os.path.join(code, f"mod{i}.py"), "w") as f:
+                f.write("print('hi')\n")
+        return root, code
+
+    def test_entry_cap_stops_before_traversing_a_huge_subtree(self):
+        root, _code = self._tree()
+        # cap below the data dir's file count → the walk returns before it ever
+        # reaches the (later-sorting) code files. Bounded, doesn't hang.
+        # use_git=False forces the filesystem-walk fallback (the temp dir is not
+        # a git repo anyway, but be explicit so the test exercises the walk).
+        files = SC._text_files(root, max_files=120, max_entries=200,
+                               time_budget=0, use_git=False)
+        self.assertEqual(files, [])
+
+    def test_finds_text_files_when_the_budget_is_generous(self):
+        root, _code = self._tree()
+        files = SC._text_files(root, max_files=120, max_entries=100000,
+                               time_budget=0, use_git=False)
+        rels = {rel for rel, _p in files}
+        self.assertTrue(any(r.endswith("mod0.py") for r in rels))
+
+    def test_scandir_walk_bails_inside_one_giant_flat_directory(self):
+        # Codex P2: a single directory holding most files must not be fully
+        # listed/sorted before the budget applies. 2000 blobs in ONE dir, cap 300.
+        root = tempfile.mkdtemp(prefix="ccscan-flat-")
+        for i in range(2000):
+            with open(os.path.join(root, f"blob{i:04d}.bin"), "wb") as f:
+                f.write(b"\0\0\0")
+        with open(os.path.join(root, "zzz_keep.py"), "w") as f:
+            f.write("x = 1\n")
+        start = time.monotonic()
+        files = SC._text_files(root, max_files=120, max_entries=300,
+                               time_budget=0, use_git=False)
+        # bailed at the entry cap before reaching the (last-sorting) .py file
+        self.assertEqual(files, [])
+        self.assertLess(time.monotonic() - start, 1.0)
+
+    def test_max_files_still_caps_collected_text_files(self):
+        root = tempfile.mkdtemp(prefix="ccscan-cap-")
+        for i in range(10):
+            with open(os.path.join(root, f"f{i}.py"), "w") as f:
+                f.write("x = 1\n")
+        files = SC._text_files(root, max_files=3, max_entries=100000,
+                               time_budget=0, use_git=False)
+        self.assertEqual(len(files), 3)
+
+    def test_time_budget_bounds_a_pathological_walk(self):
+        root, _code = self._tree()
+        start = time.monotonic()
+        # tiny clock budget → returns near-immediately regardless of tree size
+        SC._text_files(root, max_files=120, max_entries=10**9,
+                       time_budget=0.001, use_git=False)
+        self.assertLess(time.monotonic() - start, 1.0)
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_respects_gitignore_via_git_listing(self):
+        # The primary path: in a git work tree, .gitignore'd data is never walked.
+        root = tempfile.mkdtemp(prefix="ccscan-git-")
+        subprocess.run(["git", "-C", root, "init", "-q"],
+                       check=True, stdin=subprocess.DEVNULL)
+        with open(os.path.join(root, ".gitignore"), "w") as f:
+            f.write("data/\n")
+        os.makedirs(os.path.join(root, "data"))
+        for i in range(50):
+            with open(os.path.join(root, "data", f"blob{i}.bin"), "wb") as f:
+                f.write(b"\0\0\0")
+        with open(os.path.join(root, "keep.py"), "w") as f:
+            f.write("x = 1\n")
+        rels = {rel for rel, _p in SC._text_files(root, max_files=120)}
+        self.assertIn("keep.py", rels)                       # tracked-able source
+        self.assertNotIn(os.path.join("data", "blob.bin"), rels)  # ignored, unseen
+        self.assertFalse(any(r.startswith("data" + os.sep) for r in rels))
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_git_listed_but_deleted_files_are_skipped(self):
+        # `git ls-files --cached` lists tracked files even after they're deleted
+        # from the work tree — those must not enter the index as phantom evidence.
+        root = tempfile.mkdtemp(prefix="ccscan-del-")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def g(*a):
+            subprocess.run(["git", "-C", root, *a], check=True, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True)
+
+        g("init", "-q")
+        for name in ("kept.py", "gone.py"):
+            with open(os.path.join(root, name), "w") as f:
+                f.write("x = 1\n")
+        g("add", "-A")
+        g("commit", "-qm", "init")
+        os.remove(os.path.join(root, "gone.py"))          # tracked but now deleted
+        rels = {rel for rel, _ in SC._text_files(root, max_files=120)}
+        self.assertIn("kept.py", rels)
+        self.assertNotIn("gone.py", rels)
+
+    def test_git_listing_returns_none_outside_a_repo(self):
+        # a non-repo temp dir → None, so _text_files falls back to the fs walk
+        outside = tempfile.mkdtemp(prefix="ccscan-norepo-")
+        self.assertIsNone(SC._git_ls(outside, 100, 1.5, "--cached"))
+        self.assertIsNone(SC._git_text_files(outside, 120, 100, 1.5))
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_git_path_prefers_tracked_and_skips_others_walk_when_satisfied(self):
+        # tracked files alone satisfy max_files → the slow `--others` worktree walk
+        # is never run (P2: the per-chat-turn git path must be bounded).
+        root = tempfile.mkdtemp(prefix="ccscan-tracked-")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def g(*a):
+            subprocess.run(["git", "-C", root, *a], check=True, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True)
+
+        g("init", "-q")
+        for i in range(4):
+            with open(os.path.join(root, f"mod{i}.py"), "w") as f:
+                f.write("x = 1\n")
+        g("add", "-A")
+        g("commit", "-qm", "init")
+        with open(os.path.join(root, "untracked.py"), "w") as f:
+            f.write("y = 2\n")
+        calls = []
+        real = SC._git_ls
+
+        def spy(r, limit, time_budget, *flags):
+            calls.append(flags)
+            return real(r, limit, time_budget, *flags)
+
+        with mock.patch.object(SC, "_git_ls", side_effect=spy):
+            rels = {rel for rel, _ in SC._text_files(root, max_files=2)}
+        self.assertEqual(len(rels), 2)                        # satisfied from tracked
+        self.assertNotIn(("--others", "--exclude-standard"), calls)  # walk skipped
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_git_ls_is_bounded_by_limit(self):
+        # streamed: `_git_ls` stops at `limit` and kills git, so the git path is
+        # count-bounded (not buffer-the-whole-monorepo).
+        root = tempfile.mkdtemp(prefix="ccscan-gitlimit-")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def g(*a):
+            subprocess.run(["git", "-C", root, *a], check=True, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True)
+
+        g("init", "-q")
+        for i in range(20):
+            with open(os.path.join(root, f"f{i:02d}.py"), "w") as f:
+                f.write("x = 1\n")
+        g("add", "-A")
+        g("commit", "-qm", "init")
+        self.assertEqual(len(SC._git_ls(root, 5, 1.5, "--cached")), 5)   # capped
+        self.assertEqual(len(SC._git_ls(root, 100, 1.5, "--cached")), 20)  # all
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_git_path_falls_to_others_when_tracked_insufficient(self):
+        root = tempfile.mkdtemp(prefix="ccscan-others-")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def g(*a):
+            subprocess.run(["git", "-C", root, *a], check=True, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True)
+
+        g("init", "-q")                                       # nothing committed yet
+        with open(os.path.join(root, "fresh.py"), "w") as f:
+            f.write("z = 3\n")
+        rels = {rel for rel, _ in SC._text_files(root, max_files=120)}
+        self.assertIn("fresh.py", rels)                      # untracked-unignored found
+
+    def test_filter_text_files_respects_deadline(self):
+        # a past deadline → bail before stat/sniffing any candidate (so a repo of
+        # many tracked binary blobs can't stall the per-turn build).
+        names = [f"f{i}.bin" for i in range(1000)]
+        out = SC._filter_text_files(names, "/nonexistent-root-xyz", 120,
+                                    deadline=time.monotonic() - 1)
+        self.assertEqual(out, [])
+
+    def test_collect_dir_text_respects_deadline(self):
+        files = [(f"f{i}.bin", f"/x/f{i}.bin") for i in range(100)]
+        out = []
+        hit = SC._collect_dir_text(files, "/x", out, 120,
+                                   deadline=time.monotonic() - 1)
+        self.assertTrue(hit)        # signals the walk to stop
+        self.assertEqual(out, [])   # opened/sniffed nothing
+
+    def test_env_overrides_are_read(self):
+        with mock.patch.dict(os.environ,
+                             {"CC_COPILOT_PROJECT_SCAN_MAX_ENTRIES": "777"}):
+            self.assertEqual(SC._scan_int_env("CC_COPILOT_PROJECT_SCAN_MAX_ENTRIES", 1), 777)
+        with mock.patch.dict(os.environ,
+                             {"CC_COPILOT_PROJECT_SCAN_TIME_BUDGET": "0.25"}):
+            self.assertEqual(
+                SC._scan_float_env("CC_COPILOT_PROJECT_SCAN_TIME_BUDGET", 9.0), 0.25)
 
 
 class TestSameFile(unittest.TestCase):

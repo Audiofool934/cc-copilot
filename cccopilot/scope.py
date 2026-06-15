@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 
 from . import assess as A, brief as B, locate as LOC, state as S, sources as SRC
@@ -504,21 +506,227 @@ def _git(root: str, *args: str) -> str:
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
-def _text_files(root: str, max_files: int) -> list:
+# Project-facts discovery walks the anchor session's recorded cwd, which can be a
+# broad dir whose subtrees hold large data/checkpoint dirs that aren't in
+# _SKIP_DIRS (e.g. an ML workspace). Two defenses, in order:
+#   1. Respect git. When the root is a git work tree, enumerate files via
+#      `git ls-files` (tracked + untracked-but-unignored) — instant, and it skips
+#      exactly the data/checkpoint dirs .gitignore already excludes.
+#   2. Bounded filesystem walk for non-git roots. Bound by *work done* — entries
+#      visited and wall-clock — not only by how many text files it has collected:
+#      otherwise reaching `max_files` text files in a data-heavy tree means
+#      scandir-ing (and null-byte-sniffing) a huge subtree, stalling every chat
+#      message sent from that dir. Streamed via os.scandir so the budget bails
+#      BEFORE a single giant directory is fully listed/sorted (os.walk would
+#      materialize it first). Best-effort orientation evidence, not the cited
+#      deterministic core, so a git/time/entry cutoff that drops the tail is fine.
+def _scan_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw.isdigit() else default
+
+
+def _scan_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+_WALK_MAX_ENTRIES = _scan_int_env("CC_COPILOT_PROJECT_SCAN_MAX_ENTRIES", 12000)
+_WALK_TIME_BUDGET_S = _scan_float_env("CC_COPILOT_PROJECT_SCAN_TIME_BUDGET", 1.5)
+
+
+def _git_ls(root: str, limit: int, time_budget: float, *flags: str):
+    """STREAM ``git -C root ls-files <flags> -z``, returning up to ``limit`` paths
+    relative to ``root``. None when ``root`` isn't a git work tree / git is
+    unavailable; ``[]`` for a repo that genuinely lists nothing.
+
+    Streamed (not buffered) so BOTH bounds actually apply to the git path: we stop
+    reading and KILL git once ``limit`` names are collected or ``time_budget``
+    seconds elapse — a monorepo with hundreds of thousands of tracked or
+    untracked-but-unignored files therefore can't make a per-chat-turn project
+    build buffer or walk the whole list. Plumbing only — ``ls-files`` never mutates.
+    """
+    try:
+        p = subprocess.Popen(
+            ["git", "-C", root, "ls-files", *flags, "-z"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # A watchdog kills git at the deadline even if a read() is blocked WAITING for
+    # the first path (e.g. `--others` walking a huge untracked tree before emitting
+    # anything) — a between-reads deadline check alone can't interrupt that. The
+    # kill EOFs the blocked read so the loop unwinds. Same pattern as backends.py.
+    killed = {"v": False}
+
+    def _kill():
+        killed["v"] = True
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+    timer = threading.Timer(max(0.5, time_budget), _kill)
+    timer.daemon = True
+    timer.start()
+    names, buf, hit_limit = [], "", False
+    try:
+        while len(names) < limit:
+            chunk = p.stdout.read(8192)        # watchdog kill → returns "" (EOF)
+            if not chunk:
+                break
+            buf += chunk
+            parts = buf.split("\0")
+            buf = parts.pop()                  # trailing partial (or "" after a NUL)
+            for n in parts:
+                if n:
+                    names.append(n)
+            if len(names) >= limit:
+                names = names[:limit]
+                hit_limit = True
+                break
+    finally:
+        timer.cancel()
+        if p.poll() is None:                   # cut short by limit → stop git now
+            try:
+                p.kill()
+            except Exception:
+                pass
+        try:
+            rc = p.wait(timeout=1)
+        except Exception:
+            rc = None
+        try:
+            p.stdout.close()
+        except OSError:
+            pass
+    if names or hit_limit:
+        return names                           # produced output → root IS a repo
+    if killed["v"]:
+        return []                              # repo, but listing bailed on budget
+    if rc is not None and rc != 0:
+        return None                            # not a git repo / git unavailable
+    return []                                  # empty repo (rc 0, nothing listed)
+
+
+def _filter_text_files(names, root: str, max_files: int, seen=None,
+                       deadline=None) -> list:
     out = []
-    for base, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs
-                         if d not in _SKIP_DIRS and not d.startswith(".cache"))
-        for name in sorted(files):
-            p = os.path.join(base, name)
-            rel = os.path.relpath(p, root)
-            if _skip_file(name, rel):
-                continue
-            if _looks_text(p):
-                out.append((rel, p))
-                if len(out) >= max_files:
-                    return out
+    for rel in sorted(names):
+        # the stat + null-byte sniff below opens files; for a repo of many tracked
+        # binary/extensionless blobs that work isn't bounded by _git_ls, so honor
+        # the wall-clock deadline here too (else project-facts can still stall).
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        if seen is not None and rel in seen:
+            continue
+        if _skip_file(os.path.basename(rel), rel):   # still drop secrets/blobs
+            continue
+        p = os.path.join(root, rel)
+        # `git ls-files --cached` still lists tracked files deleted from the work
+        # tree; _looks_text short-circuits True on a text extension without
+        # stat'ing, so skip phantoms before they eat the evidence budget.
+        if not os.path.isfile(p):
+            continue
+        if _looks_text(p):
+            out.append((rel, p))
+            if seen is not None:
+                seen.add(rel)
+            if len(out) >= max_files:
+                break
     return out
+
+
+def _git_text_files(root: str, max_files: int, limit: int, time_budget: float,
+                    deadline=None):
+    """Git-aware project files, or None when ``root`` isn't a git work tree.
+
+    Satisfy ``max_files`` from TRACKED files first (``ls-files --cached`` is an
+    index read — no worktree walk), and only fall to the untracked-but-unignored
+    listing (``--others``, which DOES walk the tree and can be slow on a large
+    un-gitignored data dir) when tracked files didn't yield enough. The listings
+    (``_git_ls``) AND the candidate sniff (``_filter_text_files``) are both bounded
+    by ``deadline``, so neither enumeration nor opening blobs can stall the build.
+    """
+    tracked = _git_ls(root, limit, time_budget, "--cached")
+    if tracked is None:
+        return None                            # not a git repo → caller walks fs
+    seen = set()
+    out = _filter_text_files(tracked, root, max_files, seen=seen, deadline=deadline)
+    if len(out) < max_files and (deadline is None or time.monotonic() < deadline):
+        others = _git_ls(root, limit, time_budget, "--others", "--exclude-standard") or []
+        out += _filter_text_files(others, root, max_files - len(out),
+                                  seen=seen, deadline=deadline)
+    return out
+
+
+def _text_files(root: str, max_files: int, max_entries: int = _WALK_MAX_ENTRIES,
+                time_budget: float = _WALK_TIME_BUDGET_S,
+                use_git: bool = True) -> list:
+    root = os.path.abspath(root or os.getcwd())
+    deadline = (time.monotonic() + time_budget) if time_budget > 0 else None
+    if use_git:
+        listed = _git_text_files(root, max_files, max_entries, time_budget, deadline)
+        if listed is not None:
+            return listed
+    return _walk_text_files(root, max_files, max_entries, deadline)
+
+
+def _walk_text_files(root: str, max_files: int, max_entries: int,
+                     deadline=None) -> list:
+    out = []
+    scanned = 0
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        if deadline is not None and time.monotonic() > deadline:
+            break                              # deep/empty-dir trees: bound by clock
+        dir_files = []
+        subdirs = []
+        try:
+            scanner = os.scandir(current)
+        except OSError:
+            continue
+        with scanner:
+            for entry in scanner:
+                scanned += 1
+                if scanned > max_entries or (deadline is not None
+                                             and time.monotonic() > deadline):
+                    _collect_dir_text(dir_files, root, out, max_files, deadline)
+                    return out                 # bail mid-stream, never list it all
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    if entry.name not in _SKIP_DIRS and not entry.name.startswith(".cache"):
+                        subdirs.append(entry.path)
+                    continue
+                dir_files.append((entry.name, entry.path))
+        if _collect_dir_text(dir_files, root, out, max_files, deadline):
+            return out
+        stack.extend(sorted(subdirs, reverse=True))   # DFS in stable, sorted order
+    return out
+
+
+def _collect_dir_text(dir_files, root: str, out: list, max_files: int,
+                      deadline=None) -> bool:
+    """Fold one directory's files (sorted) into ``out``; True when max_files hit OR
+    the deadline trips (stop the walk). Sniffing opens files, so it's deadline-
+    bounded too — a single flat dir of binary/unknown-ext files can't stall it."""
+    for name, path in sorted(dir_files):
+        if deadline is not None and time.monotonic() > deadline:
+            return True
+        rel = os.path.relpath(path, root)
+        if _skip_file(name, rel):
+            continue
+        if _looks_text(path):
+            out.append((rel, path))
+            if len(out) >= max_files:
+                return True
+    return False
 
 
 def _skip_file(name: str, rel: str) -> bool:
