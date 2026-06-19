@@ -134,6 +134,7 @@ class TestCockpitFocus(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app.query_one("#status-header").can_focus)
             self.assertFalse(app.query_one("#chat").can_focus)
             self.assertFalse(app.query_one("#timeline").can_focus)
+            self.assertFalse(app.query_one("#session-hud").can_focus)
 
     async def test_click_pane_keeps_focus_on_composer(self):
         app = tui.Cockpit(self._session(), poll=999, alerts=False)
@@ -778,11 +779,17 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.pause()
             header = str(app.query_one("#status-header", Static).content)
+            hud = app.query_one("#session-hud", Static)
+            composer = app.query_one("#composer", tui.Composer)
+            self.assertLess(hud.region.y, composer.region.y)
         self.assertIn("project", header)
         # single-session header now names the agent it's watching
         self.assertIn("evidence claude session", header)
         self.assertIn("sess-A", header)
         self.assertIn("activity current session", header)
+        hud_text = str(hud.content)
+        self.assertIn("attached session", hud_text)
+        self.assertIn("claude:sess-A", hud_text)
 
     async def test_timeline_resize_keys_persist_and_clamp(self):
         import tempfile
@@ -1377,6 +1384,10 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.session.scope, "project")
             self.assertIn("watching project", str(app.query_one("#status", Static).content))
             self.assertIn("evidence project", str(app.query_one("#status-header", Static).content))
+            hud = str(app.query_one("#session-hud", Static).content)
+            self.assertIn("attached sessions", hud)
+            self.assertIn("project", hud)
+            self.assertIn("all 1", hud)
             joined = _timeline_text(app)
             self.assertIn("project activity", joined)
 
@@ -1395,6 +1406,10 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                           str(app.query_one("#status", Static).content))
             self.assertIn("evidence multi-session:1",
                           str(app.query_one("#status-header", Static).content))
+            hud = str(app.query_one("#session-hud", Static).content)
+            self.assertIn("attached sessions", hud)
+            self.assertIn("multi-session", hud)
+            self.assertIn("1 selected of 1", hud)
             joined = _timeline_text(app)
             self.assertIn("multi-session activity", joined)
 
@@ -1417,6 +1432,30 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.scope_sessions, [])
         self.assertEqual(os.path.basename(sess.path)[:-6], other)
         self.assertIn(other[:8], msg)
+
+    async def test_session_hud_summarizes_multi_selection(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        write([user("task b", 100, sessionId="sess-B"), asst("ok", 5)], dir=self.home)
+        write([user("task c", 100, sessionId="sess-C"), asst("ok", 5)], dir=self.home)
+        refs = sess.sibling_refs()
+        ids = [r.session_id for r in refs]
+        current = os.path.basename(sess.path)[:-6]
+        other = next(sid for sid in ids if sid != current)
+
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tui._apply_session_selection(app.session, refs, [current, other])
+            app._refresh_scope_view()
+            await pilot.pause()
+            hud = str(app.query_one("#session-hud", Static).content)
+
+        self.assertIn("attached sessions", hud)
+        self.assertIn("multi-session", hud)
+        self.assertIn("2 selected of 3", hud)
+        self.assertIn("sess-A", hud)
+        self.assertTrue("sess-B" in hud or "sess-C" in hud)
 
     async def test_forget_deletes_saved_history(self):
         sess = self._session("sess-A")

@@ -249,10 +249,11 @@ def _tmux_passthrough(seq: str) -> str:
     return "\x1bPtmux;" + str(seq or "").replace("\x1b", "\x1b\x1b") + "\x1b\\"
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 
-# Rotating feature tips shown subtly above the composer (see _rotate_tip). They
-# carry the discoverability the slimmed-down footer no longer shows — ordered
-# from "most useful when you just got back" down to niche keys. Each is one line,
-# <=64 chars so it survives a narrow sidebar. Curated from the core feature set.
+# Rotating feature tips shown subtly in the composer chrome (see _rotate_tip).
+# They carry the discoverability the slimmed-down footer no longer shows —
+# ordered from "most useful when you just got back" down to niche keys. Each is
+# one line, <=64 chars so it survives a narrow sidebar. Curated from the core
+# feature set.
 _TIPS = [
     "/since recaps what the agent did while you were away",
     "Re-entry greets you: N new since you last looked",
@@ -639,6 +640,15 @@ def _scope_timeline_summary(session, snap: dict) -> Text:
     t.append(f"{_selection_label(session, snap)} sessions", style=_PAL["muted"])
     t.append(" · " + " · ".join(_health_bits(items)), style=_PAL["text"])
     return t
+
+
+def _append_attached_chip(t: Text, agent: str, sid: str, title: str = "") -> None:
+    """Append one compact agent/session chip for the prompt-area attached HUD."""
+    ag = (agent or "claude").strip().lower()
+    t.append(f"{ag}:{sid}", style=_agent_hex(ag))
+    title = _short_activity(title, 24)
+    if title and title != "(untitled)":
+        t.append(" " + title, style=_PAL["text"])
 
 
 def _timeline_status_line(st):
@@ -1246,10 +1256,14 @@ class Cockpit(App):
         height: auto; min-height: 1; max-height: 12;
         background: $boost; color: $text; padding: 0 1; text-wrap: wrap;
     }
-    /* rotating feature tip — one subtle muted line on the flat ground, just
-       above the composer. height:1 + no wrap so a long tip clips instead of
-       growing the row and stealing space from the chat. */
+    /* rotating feature tip — one subtle muted line on the flat ground, above the
+       prompt-area attached-session HUD. height:1 + no wrap so a long tip clips
+       instead of growing the row and stealing space from the chat. */
     #tip { height: 1; padding: 0 1; color: $text-muted; text-wrap: nowrap; }
+    #session-hud {
+        height: auto; min-height: 1; max-height: 3;
+        background: $boost; color: $text; padding: 0 1; text-wrap: wrap;
+    }
     #composer {
         height: auto; min-height: 3; max-height: 8;
         border: round $accent; padding: 0 1; margin: 0 1;
@@ -1338,7 +1352,8 @@ class Cockpit(App):
     # Footer shows only the few highest-value keys; the rest are still bound but
     # `show=False` (they'd crowd a narrow cockpit). The hidden ones — resize,
     # refresh, clear — surface instead in the rotating tip line above the
-    # composer (see _TIPS / _rotate_tip), which is where discovery now lives.
+    # prompt controls (see _TIPS / _rotate_tip), which is where discovery now
+    # lives.
     BINDINGS = [
         Binding("ctrl+c", "quit", "quit"),
         # Ctrl+Y copies the current text selection (Textual's native drag-select →
@@ -1494,17 +1509,23 @@ class Cockpit(App):
             Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
         chat_pin = Static("", id="chat-pin")
         chat = VerticalScroll(id="chat")
+        session_hud = Static("", id="session-hud")
         # The timeline and chat are display-only. Keep them out of the focus
         # chain so a click (or Tab) can never strand focus on a scroll pane —
         # that used to leave typed / IME (e.g. Chinese) input with no target.
         # Mouse-wheel scrolling still works without focus.
-        header.can_focus = timeline.can_focus = chat_pin.can_focus = chat.can_focus = False
+        header.can_focus = False
+        timeline.can_focus = False
+        chat_pin.can_focus = False
+        chat.can_focus = False
+        session_hud.can_focus = False
         yield header
         yield timeline
         yield chat_pin
         yield chat
         yield Static("", id="status")
         yield Static("", id="tip")              # rotating feature tip (subtle)
+        yield session_hud
         slash = OptionList(id="slash")          # `/` command autocomplete
         slash.can_focus = False
         slash.display = False
@@ -1609,7 +1630,7 @@ class Cockpit(App):
         # status, composer, footer, and a minimal chat (matters on short terminals
         # and keeps a persisted height sane after moving to a smaller window).
         try:
-            room = self.size.height - 11   # header+status+tip+composer+footer+min chat
+            room = self.size.height - 12   # header+status+tip+attached+composer+footer+min chat
         except Exception:
             room = self.TIMELINE_MAX
         hi = max(self.TIMELINE_MIN, min(self.TIMELINE_MAX, room))
@@ -2064,11 +2085,17 @@ class Cockpit(App):
         except Exception:
             return None
 
-    def _header_text(self) -> Text:
+    def _session_hud(self):
+        try:
+            return self.query_one("#session-hud", Static)
+        except Exception:
+            return None
+
+    def _header_text(self, snap=None) -> Text:
         root = _project_cwd(self.session)
         project = os.path.basename(root.rstrip(os.sep)) or root
         branch, changed = _git_summary(root)
-        snap = _scope_snapshot(self.session)
+        snap = _scope_snapshot(self.session) if snap is None else snap
         st = self.session.st
         a = A.assess(st) if st is not None else None
         t = Text()
@@ -2115,10 +2142,60 @@ class Cockpit(App):
                  style=_PAL["muted"])
         return t
 
+    def _session_hud_text(self, snap=None) -> Text:
+        """Compact attached-session summary directly above the prompt box."""
+        snap = _scope_snapshot(self.session) if snap is None else snap
+        st = self.session.st
+        t = Text()
+        if self.session.scope == SC.SESSION:
+            ag = _agent_of(self.session)
+            sid = _sid(st=st, path=self.session.path)
+            t.append("attached session", style=_PAL["muted"])
+            t.append(" · ", style=_PAL["muted"])
+            _append_attached_chip(t, ag, sid, _session_title(st) if st is not None else "")
+            if st is None:
+                t.append(" · history-only · transcript gone", style=_PAL["warning"])
+                return t
+            a = A.assess(st)
+            t.append(f" · {st.status}", style="bold")
+            t.append(f" · {a.verdict}", style=_VERDICT_HEX.get(a.verdict, _PAL["muted"]))
+            t.append(f" · idle {_dur(st.idle_seconds)}", style=_PAL["muted"])
+            return t
+
+        items = snap.get("items", [])
+        t.append("attached sessions", style=_PAL["muted"])
+        t.append(" · ", style=_PAL["muted"])
+        t.append(self.session.scope, style=_PAL["accent"])
+        t.append(f" · {_selection_label(self.session, snap)}", style=_PAL["text"])
+        if snap.get("error"):
+            t.append(f" · {snap['error']}", style=_PAL["warning"])
+            return t
+        if not items:
+            t.append(" · no live evidence sessions", style=_PAL["warning"])
+            return t
+        for ref, rst, _a in items[:3]:
+            t.append(" · ", style=_PAL["muted"])
+            _append_attached_chip(t, getattr(ref, "agent", "claude"),
+                                  _sid(ref=ref, st=rst), _session_title(rst, ref))
+        extra = len(items) - 3
+        if extra > 0:
+            t.append(f" · +{extra} more", style=_PAL["muted"])
+        bits = _health_bits(items)[:3]
+        if bits:
+            t.append(" · " + " · ".join(bits), style=_PAL["muted"])
+        return t
+
+    def _update_session_hud(self, snap=None) -> None:
+        hud = self._session_hud()
+        if hud is not None:
+            hud.update(self._session_hud_text(snap))
+
     def _update_header(self):
+        snap = _scope_snapshot(self.session)
         header = self._header()
         if header is not None:
-            header.update(self._header_text())
+            header.update(self._header_text(snap))
+        self._update_session_hud(snap)
 
     def _refresh_scope_view(self):
         self._rebuild_timeline()

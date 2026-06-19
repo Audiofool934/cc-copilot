@@ -236,6 +236,8 @@ It gives you:
 - Grounded chat over one session, selected sessions, or project evidence.
 - Context HUD showing estimated input context, output estimate, and evidence
   split across raw transcript, project facts, chat, memory, and summary index.
+- Attached-sessions HUD immediately above the composer, so you can see whether
+  the next prompt is grounded in one session, selected sessions, or the project.
 - Background alerts when the agent stalls, errors, or goes off track.
 - Checkbox session picker with `[ ]` / `[x]` multi-select.
 - Resumable Cockpit Sessions via `/resume`.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**Attached sessions are visible above the prompt box.** The cockpit now shows a
+compact `attached session(s)` HUD line directly above the composer, summarizing
+the active single session, selected multi-session set, or project scope before
+you send a prompt. The full picker stays under `/sessions`.
+
 ## 0.25.0 — 2026-06-15
 
 **`/goal` drafts paste-ready agent goals from evidence.** The cockpit, REPL,
