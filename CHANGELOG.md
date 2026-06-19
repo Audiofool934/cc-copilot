@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.28.1 — 2026-06-19
+
+**Watch monitor cards are less noisy and more informative.** Routine command
+completion no longer creates a separate step card, step boundaries require more
+evidence before splitting, and the monitor's NOW / AUTO DIGEST panels prefer
+copilot summaries, digests, and recent evidence over raw command-only status or
+placeholder text.
+
+**Watch now uses a flow agent with posterior step digests.** The watch agent
+keeps a stable baseline, the previous Now update, and current-step evidence in
+the Now prompt; the same model call decides whether to keep or split the step.
+Auto Digest no longer fires from event or time cadence alone: it closes the
+previous step when the flow agent starts the next semantic step.
+
 ## 0.28.0 — 2026-06-19
 
 **The cockpit composer now has `@` scope mentions.** Typing `@` offers

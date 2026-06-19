@@ -56,7 +56,7 @@ except ImportError:
 from . import (sources as SRC, state as S, assess as A, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
-               models as MODELS, scope_groups as SG)
+               models as MODELS, scope_groups as SG, brief as BR)
 from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
                    _deterministic_goal, _goal_context_question)
 
@@ -64,12 +64,14 @@ from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
 _WATCH_DEFAULT_MICRO_INTERVAL = 30.0
 _WATCH_DEFAULT_DIGEST_INTERVAL = 300.0
 _WATCH_DEFAULT_DIGEST_EVENTS = 25
+_WATCH_DEFAULT_NOW_EVENTS = 4
 _WATCH_DEFAULT_HEARTBEAT_INTERVAL = 600.0
 _WATCH_BUFFER_LIMIT = 24
 _WATCH_RECENT_LIMIT = 8
 _WATCH_STEP_LIMIT = 40
-_WATCH_STEP_MIN_EVENTS = 5
-_WATCH_STEP_MIN_SECONDS = 90.0
+_WATCH_STEP_MIN_EVENTS = 12
+_WATCH_STEP_MIN_SECONDS = 300.0
+_WATCH_ROUTINE_STEP_PHASES = {"running-command", "command-finished", "complete"}
 _WATCH_PRESET_INSTRUCTIONS = {
     "zh": ("中文", "Answer watch updates in Chinese."),
     "cn": ("中文", "Answer watch updates in Chinese."),
@@ -142,17 +144,22 @@ class _WatchRun:
     last_emit_at: float = 0.0
     last_summary: str = ""
     last_micro_text: str = ""
+    last_now_text: str = ""
     last_digest_text: str = ""
     last_alert_text: str = ""
     last_digest_reason: str = ""
     scope_sig: object = None
     phase: str = ""
     last_phase: str = ""
+    baseline_context: str = ""
     digest_buffer: list[str] = field(default_factory=list)
     recent_updates: list[str] = field(default_factory=list)
     events_since_digest: int = 0
+    events_since_now: int = 0
     pending_narration: bool = False
     pending_digest_reason: str = ""
+    pending_digest_step_id: int = 0
+    pending_digest_buffer: list[str] = field(default_factory=list)
     phase_digest_pending: bool = False
     done_digest_pending: bool = False
     instruction: str = ""
@@ -170,6 +177,7 @@ class _WatchRun:
     micro_interval: float = _WATCH_DEFAULT_MICRO_INTERVAL
     digest_interval: float = _WATCH_DEFAULT_DIGEST_INTERVAL
     digest_events: int = _WATCH_DEFAULT_DIGEST_EVENTS
+    now_events: int = _WATCH_DEFAULT_NOW_EVENTS
     heartbeat_interval: float = _WATCH_DEFAULT_HEARTBEAT_INTERVAL
 
 
@@ -180,7 +188,7 @@ def _parse_watch_step_decision(text: str) -> dict:
             continue
         k, v = raw.split(":", 1)
         key = k.strip().lower()
-        if key in ("action", "title", "phase", "reason", "attention"):
+        if key in ("now", "action", "title", "phase", "reason", "attention"):
             out[key] = " ".join(v.strip().split())
     action = out.get("action", "").lower()
     if action not in ("same", "new"):
@@ -2915,14 +2923,22 @@ class Cockpit(App):
         else:
             phase_body = phase
 
-        current = (step.summary or step.current) if step is not None else ""
-        current = current or r.last_micro_text or self._watch_current_activity()
-        digest = (step.digest if step is not None else "")
-        if not digest and not keys:
-            digest = r.last_digest_text
-        digest = digest or (
-            "waiting for enough evidence on this session; digest runs automatically "
-            "on phase changes, event thresholds, completion, or cadence")
+        current = ""
+        if step is not None:
+            current = step.summary or step.digest or step.current
+            if step.evidence_lines and not step.summary:
+                evidence = "\n".join(step.evidence_lines[-3:])
+                current = (current + "\n" if current else "") + evidence
+        current = current or r.last_now_text or r.last_micro_text \
+            or r.last_digest_text or self._watch_current_activity()
+        digest = (step.digest if step is not None else "") or r.last_digest_text
+        if not digest and step is not None and step.status == "active":
+            digest = "active step; auto digest will be written when this step closes"
+            if step.evidence_lines:
+                digest += "\nrecent evidence:\n" + "\n".join(step.evidence_lines[-3:])
+        elif not digest and step is not None and step.evidence_lines:
+            digest = "not digested yet; recent evidence:\n" + "\n".join(step.evidence_lines[-4:])
+        digest = digest or "no closed step digest yet"
         alert = (step.attention if step is not None else "")
         if not alert and not keys:
             alert = r.last_alert_text
@@ -3956,6 +3972,14 @@ class Cockpit(App):
         steps = self._watch_run.steps
         return steps[-1] if steps else None
 
+    def _watch_step_by_id(self, step_id: int = 0):
+        if not step_id:
+            return None
+        for step in self._watch_run.steps:
+            if getattr(step, "id", 0) == step_id:
+                return step
+        return None
+
     def _watch_latest_step_for(self, target_key: str = ""):
         if not target_key:
             return self._watch_latest_step()
@@ -3982,6 +4006,8 @@ class Cockpit(App):
         phase = (getattr(step, "phase", "") or "").replace("-", " ").strip().lower()
         return (getattr(step, "trigger", "") == "start"
                 or title == "watch started"
+                or title == "watch baseline"
+                or title == "baseline"
                 or not title
                 or (phase and title == phase)
                 or phase in ("watching sessions", "watch", "unknown"))
@@ -4005,15 +4031,33 @@ class Cockpit(App):
             if trigger:
                 step.trigger = trigger
 
+    @staticmethod
+    def _watch_phase_is_routine(phase: str = "", trigger: str = "") -> bool:
+        phase = (phase or "").strip().lower()
+        trigger = (trigger or "").strip().lower()
+        return (phase in _WATCH_ROUTINE_STEP_PHASES
+                or trigger == "completion"
+                or trigger.endswith("-> command-finished")
+                or "-> complete" in trigger)
+
+    def _watch_mark_step_complete(self, target_key: str = "") -> None:
+        step = self._watch_latest_step_for(target_key)
+        if step is None:
+            return
+        step.ended_at = step.ended_at or time.monotonic()
+        if step.status == "active":
+            step.status = "done"
+
     def _watch_new_step_allowed(self, fallback: dict, phase: str = "",
                                 target_key: str = "") -> bool:
         latest = self._watch_latest_step_for(target_key)
         if latest is None:
             return True
         trigger = str(fallback.get("trigger", "") or "")
-        if fallback.get("attention") or trigger == "completion" \
-                or phase in ("complete", "needs-attention", "stalled"):
+        if fallback.get("attention") or phase in ("needs-attention", "stalled"):
             return True
+        if self._watch_phase_is_routine(phase, trigger):
+            return False
         if self._watch_step_is_generic(latest):
             return False
         if not phase or phase == getattr(latest, "phase", ""):
@@ -4144,18 +4188,17 @@ class Cockpit(App):
         if r.active and r.started_at:
             since = f" · for {_dur(time.monotonic() - self._watch_started_at)}"
         last = f"last update: {_dur(now - r.last_emit_at)} ago" if r.last_emit_at else "last update: none"
-        if r.active and not r.paused and r.last_digest_at:
-            remaining = max(0, int(r.digest_interval - (now - r.last_digest_at)))
-            digest = f"next digest: about {_dur(remaining)}"
+        if r.active and not r.paused:
+            digest = "auto digest: on semantic step boundary"
         elif r.paused:
-            digest = f"next digest: paused ({r.pause_reason or 'scope paused'})"
+            digest = f"auto digest: paused ({r.pause_reason or 'scope paused'})"
         else:
-            digest = "next digest: off"
+            digest = "auto digest: off"
         lines = [
             f"watch: {state}{since}",
             f"target: {self._watch_subject()}",
             f"current: {self._watch_current_activity()}",
-            f"cadence: {r.mode} · micro >= {_dur(r.micro_interval)} · digest {_dur(r.digest_interval)} or {r.digest_events} events",
+            f"cadence: {r.mode} · now >= {_dur(r.micro_interval)} or {r.now_events} events · digest on step close",
             last,
             digest,
             "mode: read-only progress watcher; no prompts are injected into the agent",
@@ -4163,6 +4206,26 @@ class Cockpit(App):
         if r.instruction_label:
             lines.insert(3, f"steer: {r.instruction_label}")
         return "\n".join(lines)
+
+    def _watch_baseline_context(self) -> str:
+        rows = ["# cc-copilot watch baseline"]
+        targets = list(self._watch_run.targets.values())
+        if self.session.scope != SC.SESSION and targets:
+            rows.append(f"- watched scope: `{self._watch_subject()}`")
+            for target in targets[:6]:
+                st = getattr(target, "state", None)
+                if st is None:
+                    continue
+                rows.extend([
+                    "",
+                    f"## baseline session `{self._watch_target_subject(target, st=st)}`",
+                    BR.render(st, max_files=8, max_cmds=6),
+                ])
+            if len(targets) > 6:
+                rows.append(f"- omitted {len(targets) - 6} additional watched sessions")
+        else:
+            rows.append(BR.render(self.session.st, max_files=10, max_cmds=8))
+        return "\n".join(rows)
 
     def _watch_delta_text(self, st, d, target=None) -> str:
         subject = self._watch_target_subject(target, st=st)
@@ -4191,13 +4254,21 @@ class Cockpit(App):
             rows.append(f"- failure: `{f.tool}`{target} [L{f.line}]: {_short_activity(f.summary, 180)}")
         return "\n".join(rows)
 
-    def _watch_step_decision_text(self, delta_text: str) -> str:
-        step = self._watch_latest_step()
-        rows = ["# cc-copilot watch step decision"]
+    def _watch_flow_text(self, delta_text: str, target_key: str = "") -> str:
+        step = self._watch_latest_step_for(target_key)
+        r = self._watch_run
+        rows = ["# cc-copilot watch flow context"]
+        if r.instruction:
+            rows.append(f"- watch instruction: {r.instruction}")
+        if r.baseline_context:
+            rows.extend(["", "## baseline before watch started", r.baseline_context])
+        if r.last_now_text:
+            rows.extend(["", "## previous now", r.last_now_text])
         if step is None:
-            rows.append("- current step: none")
+            rows.extend(["", "## current watch step", "- current step: none"])
         else:
             rows.extend([
+                "",
                 "## current watch step",
                 f"- title: {step.title}",
                 f"- phase: {step.phase}",
@@ -4209,12 +4280,53 @@ class Cockpit(App):
             ])
             if step.evidence_lines:
                 rows.append("- recent evidence: " + " | ".join(step.evidence_lines[-3:]))
+        rows.extend(["", "## accumulated current-step evidence"])
+        rows.extend(r.digest_buffer[-8:] or ["- none yet"])
         rows.extend(["", "## new watch delta", delta_text])
         return "\n".join(rows)
 
-    def _watch_apply_step_decision(self, decision_text: str, fallback=None) -> None:
+    def _watch_initial_delta_text(self) -> str:
+        return "\n".join([
+            "# cc-copilot watch initial now",
+            f"- watched scope: `{self._watch_subject()}`",
+            "- watch just started; summarize the observed baseline before new events",
+            f"- current activity: {self._watch_current_activity()}",
+        ])
+
+    def _watch_emit_initial_now(self) -> None:
+        if (not self._watch_mode or self._watch_run.paused or self._busy
+                or self._watch_narrating or not N.available(self.backend)):
+            return
+        self._watch_narrating = True
+        self._watch_run.last_micro_at = time.monotonic()
+        fallback = {
+            "new_step": False,
+            "phase": self._watch_run.phase,
+            "title": self._watch_step_title(self._watch_run.phase, "start"),
+            "trigger": "start",
+            "current": self._watch_current_activity(),
+            "attention": "",
+            "evidence": "",
+            "events": 0,
+            "target_key": "",
+            "target_label": "",
+        }
+        self._watch_narrate(
+            self._watch_flow_text(self._watch_initial_delta_text()),
+            (self._evidence_sig(), self.session.store),
+            "role-event",
+            instruction=self._watch_run.instruction,
+            fallback=fallback)
+
+    def _watch_step_decision_text(self, delta_text: str) -> str:
+        rows = ["# cc-copilot watch step decision"]
+        rows.append(self._watch_flow_text(delta_text))
+        return "\n".join(rows)
+
+    def _watch_apply_step_decision(self, decision_text, fallback=None) -> None:
         fallback = fallback or {}
-        decision = _parse_watch_step_decision(decision_text)
+        decision = (decision_text if isinstance(decision_text, dict)
+                    else _parse_watch_step_decision(decision_text))
         if not decision:
             decision = {
                 "action": "new" if fallback.get("new_step") else "same",
@@ -4233,9 +4345,19 @@ class Cockpit(App):
         target_key = fallback.get("target_key", "")
         target_label = fallback.get("target_label", "")
         action = decision.get("action")
-        if action == "new" and not self._watch_new_step_allowed(fallback, phase, target_key):
+        if (action == "new"
+                and self._watch_phase_is_routine(phase, reason or fallback.get("trigger", ""))
+                and not (attention or fallback.get("attention"))):
+            action = "same"
+        latest = self._watch_latest_step_for(target_key)
+        if (action == "new" and self._watch_step_is_generic(latest)
+                and not getattr(latest, "evidence_lines", None)
+                and not getattr(latest, "event_count", 0)):
             action = "same"
         if action == "new":
+            self._watch_close_step_with_digest(
+                latest,
+                reason=("step boundary: " + reason) if reason else "step boundary")
             step = self._watch_begin_step(
                 phase,
                 trigger=("semantic: " + reason) if reason else "semantic step",
@@ -4248,6 +4370,10 @@ class Cockpit(App):
             if title:
                 step.title = title
             self._watch_run.phase = phase
+            if fallback.get("evidence"):
+                self._watch_buffer_line(fallback.get("evidence", ""))
+        elif fallback.get("trigger") == "completion" or fallback.get("phase") == "complete":
+            self._watch_mark_step_complete(target_key)
         elif title:
             step = self._watch_latest_step_for(target_key)
             self._watch_merge_step_identity(
@@ -4383,16 +4509,15 @@ class Cockpit(App):
             fallback["title"] = f"{subject_short}: {fallback['title']}"
         if semantic:
             self._watch_run.last_phase = old_phase
-            self._watch_run.events_since_digest += max(0, int(d.new_events or 0))
-            if old_phase and old_phase != "idle" and new_phase and new_phase != old_phase:
-                self._watch_run.phase_digest_pending = True
-                self._watch_run.pending_digest_reason = f"phase {old_phase} -> {new_phase}"
-            if completion:
-                self._watch_run.done_digest_pending = True
-                self._watch_run.pending_digest_reason = "completion"
+            events = max(0, int(d.new_events or 0))
+            self._watch_run.events_since_digest += events
+            self._watch_run.events_since_now += events
             return fallback
         allow_new = self._watch_new_step_allowed(fallback, fallback["phase"], target_key)
         if fallback["new_step"] and allow_new:
+            self._watch_close_step_with_digest(
+                self._watch_latest_step_for(target_key),
+                reason=trigger or "step boundary")
             self._watch_begin_step(
                 fallback["phase"],
                 trigger=trigger or (f"phase {old_phase or 'start'} -> {new_phase}"
@@ -4408,11 +4533,14 @@ class Cockpit(App):
                 if step is not None:
                     step.title = fallback["title"]
         elif fallback["new_step"]:
-            self._watch_merge_step_identity(
-                self._watch_latest_step_for(target_key),
-                title=fallback.get("title", ""),
-                phase=fallback.get("phase", ""),
-                trigger=fallback.get("trigger", ""))
+            if completion:
+                self._watch_mark_step_complete(target_key)
+            else:
+                self._watch_merge_step_identity(
+                    self._watch_latest_step_for(target_key),
+                    title=fallback.get("title", ""),
+                    phase=fallback.get("phase", ""),
+                    trigger=fallback.get("trigger", ""))
         elif not self._watch_run.steps:
             self._watch_begin_step(new_phase, trigger="activity",
                                    current=fallback["current"],
@@ -4422,28 +4550,12 @@ class Cockpit(App):
                                 evidence=evidence, events=d.new_events or 0,
                                 target_key=target_key,
                                 target_label=target_label)
-        if old_phase and old_phase != "idle" and new_phase and new_phase != old_phase:
-            self._watch_run.phase_digest_pending = True
-            self._watch_run.pending_digest_reason = f"phase {old_phase} -> {new_phase}"
         self._watch_run.last_phase = old_phase
-        self._watch_run.events_since_digest += max(0, int(d.new_events or 0))
-        if completion and self._watch_new_step_allowed(
-                {**fallback, "trigger": "completion"}, "complete", target_key):
-            self._watch_begin_step("complete", trigger="completion",
-                                   current=fallback["current"],
-                                   force=True,
-                                   target_key=target_key,
-                                   target_label=target_label)
-            if scoped_target:
-                step = self._watch_latest_step_for(target_key)
-                if step is not None:
-                    step.title = fallback["title"]
-            self._watch_update_step(current=fallback["current"],
-                                    evidence=evidence, events=d.new_events or 0,
-                                    target_key=target_key,
-                                    target_label=target_label)
-            self._watch_run.done_digest_pending = True
-            self._watch_run.pending_digest_reason = "completion"
+        events = max(0, int(d.new_events or 0))
+        self._watch_run.events_since_digest += events
+        self._watch_run.events_since_now += events
+        if completion:
+            self._watch_mark_step_complete(target_key)
         return fallback
 
     def _watch_should_emit_micro(self, d, now=None) -> bool:
@@ -4455,7 +4567,13 @@ class Cockpit(App):
             return True
         if self._watch_run.mode == "quiet":
             return False
+        if d.status_from != d.status_to or d.verdict_from != d.verdict_to:
+            return True
+        if d.new_changed or d.new_failures:
+            return True
+        events = self._watch_run.events_since_now + max(0, int(d.new_events or 0))
         return (not self._watch_run.last_micro_at
+                or events >= self._watch_run.now_events
                 or now - self._watch_run.last_micro_at >= self._watch_run.micro_interval)
 
     def _watch_pending_target(self):
@@ -4486,6 +4604,8 @@ class Cockpit(App):
         r.last_heartbeat_at = now
         r.last_emit_at = now
         r.last_micro_text = body
+        r.last_now_text = body
+        r.events_since_now = 0
         self._watch_update_step(current=body, summary=body,
                                 target_key=target_key, target_label=target_label)
         self._watch_add_recent("heartbeat", body, target_key=target_key,
@@ -4497,30 +4617,40 @@ class Cockpit(App):
         self._watch_chat(self._role(t, "role-event"))
         return True
 
+    def _watch_close_step_with_digest(self, step=None, reason: str = "step boundary") -> bool:
+        if step is None:
+            return False
+        step.ended_at = step.ended_at or time.monotonic()
+        if step.status == "active":
+            step.status = "done"
+        buffer = list(self._watch_run.digest_buffer)
+        if not buffer and step.evidence_lines:
+            buffer = list(step.evidence_lines)
+        if not buffer:
+            return False
+        emitted = self._watch_emit_digest(reason=reason, step=step,
+                                          buffer=buffer, clear_global=True)
+        if not emitted:
+            self._watch_render_digest(self._watch_fallback_digest_body(buffer),
+                                      reason=reason, step_id=step.id,
+                                      clear_global=True)
+        return True
+
     def _watch_digest_reason(self, now=None) -> str:
         r = self._watch_run
-        if not r.active or r.paused or not r.digest_buffer:
+        if not r.active or r.paused:
             return ""
-        now = time.monotonic() if now is None else now
         if r.pending_digest_reason:
             return r.pending_digest_reason
-        if r.done_digest_pending:
-            return "completion"
-        if r.phase_digest_pending:
-            return "phase change"
-        if r.events_since_digest >= r.digest_events:
-            return f"{r.events_since_digest} events"
-        if r.last_digest_at and now - r.last_digest_at >= r.digest_interval:
-            return f"{_dur(now - r.last_digest_at)} cadence"
         return ""
 
     def _watch_digest_due(self, now=None) -> bool:
         return bool(self._watch_digest_reason(now))
 
-    def _watch_digest_text(self, reason: str = "") -> str:
+    def _watch_digest_text(self, reason: str = "", buffer=None, step=None) -> str:
         r = self._watch_run
         elapsed = _dur(time.monotonic() - r.started_at) if r.started_at else "0s"
-        phase = r.phase or (
+        phase = (getattr(step, "phase", "") if step is not None else "") or r.phase or (
             "watching-sessions" if self.session.scope != SC.SESSION
             else self._watch_phase(self.session.st)
         )
@@ -4529,18 +4659,19 @@ class Cockpit(App):
             f"- watched scope: `{self._watch_subject()}`",
             f"- elapsed watch time: {elapsed}",
             f"- current phase: `{phase}`",
-            f"- current activity: {self._watch_current_activity()}",
+            f"- current step: {getattr(step, 'title', '') or 'current'}",
+            f"- current activity: {getattr(step, 'current', '') or self._watch_current_activity()}",
             f"- digest trigger: {reason or self._watch_digest_reason() or 'refresh'}",
             f"- buffered events since last digest: {r.events_since_digest}",
         ]
         if r.instruction:
             rows.append(f"- watch instruction: {r.instruction}")
         rows.extend(["", "## buffered watch evidence"])
-        rows.extend(r.digest_buffer)
+        rows.extend(list(buffer) if buffer is not None else r.digest_buffer)
         return "\n".join(rows)
 
-    def _watch_fallback_digest_body(self) -> str:
-        items = self._watch_run.digest_buffer[-4:]
+    def _watch_fallback_digest_body(self, buffer=None) -> str:
+        items = (list(buffer) if buffer is not None else self._watch_run.digest_buffer)[-4:]
         if not items:
             return "No accumulated watch changes yet."
         compact = "; ".join(_short_activity(x.lstrip("- "), 160) for x in items)
@@ -4597,6 +4728,8 @@ class Cockpit(App):
         self._watch_run.last_micro_at = now
         self._watch_last_emit_at = now
         self._watch_run.last_micro_text = plain
+        self._watch_run.last_now_text = plain
+        self._watch_run.events_since_now = 0
         target_key, target_label = self._watch_target_fields(target, st=st)
         if high_risk:
             self._watch_run.last_alert_text = plain
@@ -4632,6 +4765,8 @@ class Cockpit(App):
         self._watch_run.last_micro_at = now
         self._watch_last_emit_at = now
         self._watch_run.last_micro_text = body
+        self._watch_run.last_now_text = body
+        self._watch_run.events_since_now = 0
         if cls == "role-alert":
             self._watch_run.last_alert_text = body
             self._watch_run.last_alert_at = now
@@ -4651,7 +4786,8 @@ class Cockpit(App):
         t.append(body, style=_PAL["text"])
         self._watch_chat(self._role(t, cls))
 
-    def _watch_render_digest(self, text: str, cls="role-event", reason="") -> None:
+    def _watch_render_digest(self, text: str, cls="role-event", reason="",
+                             step_id: int = 0, clear_global: bool = True) -> None:
         body = " ".join(str(text or "").split())
         if not body:
             return
@@ -4664,12 +4800,23 @@ class Cockpit(App):
         self._watch_run.last_digest_at = now
         self._watch_run.last_digest_text = body
         self._watch_run.last_digest_reason = reason or self._watch_digest_reason() or "refresh"
-        self._watch_run.events_since_digest = 0
-        self._watch_run.digest_buffer.clear()
-        self._watch_run.pending_digest_reason = ""
-        self._watch_run.phase_digest_pending = False
-        self._watch_run.done_digest_pending = False
-        if self.session.scope == SC.SESSION:
+        if clear_global:
+            self._watch_run.events_since_digest = 0
+            self._watch_run.digest_buffer.clear()
+            self._watch_run.pending_digest_reason = ""
+            self._watch_run.pending_digest_step_id = 0
+            self._watch_run.pending_digest_buffer.clear()
+            self._watch_run.phase_digest_pending = False
+            self._watch_run.done_digest_pending = False
+        step = self._watch_step_by_id(step_id)
+        if step is not None:
+            step.digest = body
+            line = f"{time.strftime('%H:%M')} digest · {body}"
+            step.recent_updates.append(line)
+            if len(step.recent_updates) > _WATCH_RECENT_LIMIT:
+                del step.recent_updates[:len(step.recent_updates) - _WATCH_RECENT_LIMIT]
+            self._watch_add_recent("digest", body, attach_step=False)
+        elif self.session.scope == SC.SESSION:
             self._watch_update_step(digest=body)
             self._watch_add_recent("digest", body)
         else:
@@ -4681,23 +4828,16 @@ class Cockpit(App):
         self._watch_chat(self._role(t, cls))
 
     @work(thread=True)
-    def _watch_narrate(self, delta_text, step_text, origin, cls="role-event",
+    def _watch_narrate(self, flow_text, origin, cls="role-event",
                        instruction="", fallback=None):
-        decision = ""
         try:
-            decision = N.watch_step_decision(step_text, model=self.model,
-                                             backend=self.backend,
-                                             instruction=instruction)
-        except Exception:
-            decision = ""
-        try:
-            out = N.watch_progress_brief(delta_text, model=self.model,
-                                         backend=self.backend,
-                                         instruction=instruction)
+            out = N.watch_flow_update(flow_text, model=self.model,
+                                      backend=self.backend,
+                                      instruction=instruction)
         except Exception as e:
             out = f"(copilot watch summary unavailable: {e})"
         self.call_from_thread(self._watch_narration_done, out, origin, cls,
-                              decision, fallback or {})
+                              out, fallback or {})
 
     def _watch_narration_done(self, out, origin, cls, decision="", fallback=None):
         self._watch_narrating = False
@@ -4707,40 +4847,54 @@ class Cockpit(App):
         if self._evidence_sig() != sig or self.session.store is not store:
             return
         fallback = fallback or {}
+        decision = _parse_watch_step_decision(decision)
+        now_text = decision.get("now") or out
         self._watch_apply_step_decision(decision, fallback)
-        self._watch_render_narration(out, cls,
+        self._watch_render_narration(now_text, cls,
                                      target_key=fallback.get("target_key", ""),
                                      target_label=fallback.get("target_label", ""))
-        if self._watch_digest_due():
-            self._watch_emit_digest()
         self._update_header()
         self._update_status()
 
     @work(thread=True)
     def _watch_digest_narrate(self, digest_text, origin, cls="role-event", reason="",
-                              instruction=""):
+                              instruction="", step_id: int = 0,
+                              clear_global: bool = True):
         try:
             out = N.watch_digest_brief(digest_text, model=self.model,
                                        backend=self.backend,
                                        instruction=instruction)
         except Exception as e:
             out = f"(copilot watch digest unavailable: {e})"
-        self.call_from_thread(self._watch_digest_done, out, origin, cls, reason)
+        self.call_from_thread(self._watch_digest_done, out, origin, cls, reason,
+                              step_id, clear_global)
 
-    def _watch_digest_done(self, out, origin, cls, reason=""):
+    def _watch_digest_done(self, out, origin, cls, reason="", step_id: int = 0,
+                           clear_global: bool = True):
         self._watch_narrating = False
         sig, store = origin
         if not self._watch_mode or self._watch_run.paused:
             return
-        if self._evidence_sig() != sig or self.session.store is not store:
+        if self.session.store is not store:
             return
-        self._watch_render_digest(out, cls, reason=reason)
+        self._watch_render_digest(out, cls, reason=reason, step_id=step_id,
+                                  clear_global=clear_global)
         self._update_header()
         self._update_status()
 
-    def _watch_emit_digest(self, manual=False, reason="") -> bool:
+    def _watch_emit_digest(self, manual=False, reason="", step=None,
+                           buffer=None, clear_global: bool = True) -> bool:
         r = self._watch_run
         reason = reason or self._watch_digest_reason() or ("refresh" if manual else "")
+        if buffer is not None:
+            buffer = list(buffer)
+        elif r.pending_digest_buffer:
+            buffer = list(r.pending_digest_buffer)
+        else:
+            buffer = list(r.digest_buffer)
+        step_id = getattr(step, "id", 0) if step is not None else r.pending_digest_step_id
+        if step is None and step_id:
+            step = self._watch_step_by_id(step_id)
         if not r.active:
             if manual:
                 self.notify("watch is off", severity="information")
@@ -4749,23 +4903,40 @@ class Cockpit(App):
             if manual:
                 self.notify("watch is paused; run /watch to resume", severity="warning")
             return False
-        if not r.digest_buffer:
+        if not buffer:
             if manual:
-                self._watch_render_digest("No accumulated watch changes yet.", reason=reason)
+                self._watch_render_digest("No accumulated watch changes yet.", reason=reason,
+                                          step_id=step_id,
+                                          clear_global=clear_global)
             return False
         if self._watch_narrating or self._busy:
             if reason:
                 r.pending_digest_reason = reason
+                r.pending_digest_step_id = step_id
+                r.pending_digest_buffer = buffer
             if manual:
                 self.notify("watch refresh queued", severity="information")
             return False
         if N.available(self.backend) and not self._busy:
             self._watch_narrating = True
-            self._watch_digest_narrate(self._watch_digest_text(reason),
+            if clear_global:
+                r.events_since_digest = 0
+                r.digest_buffer.clear()
+                r.pending_digest_reason = ""
+                r.pending_digest_step_id = 0
+                r.pending_digest_buffer.clear()
+                r.phase_digest_pending = False
+                r.done_digest_pending = False
+            self._watch_digest_narrate(self._watch_digest_text(reason, buffer=buffer,
+                                                               step=step),
                                        (self._evidence_sig(), self.session.store),
-                                       reason=reason, instruction=r.instruction)
+                                       reason=reason, instruction=r.instruction,
+                                       step_id=step_id,
+                                       clear_global=False)
         else:
-            self._watch_render_digest(self._watch_fallback_digest_body(), reason=reason)
+            self._watch_render_digest(self._watch_fallback_digest_body(buffer),
+                                      reason=reason, step_id=step_id,
+                                      clear_global=clear_global)
         return True
 
     def action_watch(self, arg=""):
@@ -4790,9 +4961,13 @@ class Cockpit(App):
             self._watch_mode = False
             self._watch_run.digest_buffer.clear()
             self._watch_run.events_since_digest = 0
+            self._watch_run.events_since_now = 0
             self._watch_run.pending_digest_reason = ""
+            self._watch_run.pending_digest_step_id = 0
+            self._watch_run.pending_digest_buffer.clear()
             self._watch_run.phase_digest_pending = False
             self._watch_run.done_digest_pending = False
+            self._watch_run.baseline_context = ""
             self._watch_run.instruction = ""
             self._watch_run.instruction_label = ""
             self._watch_finish_current_step("stopped")
@@ -4836,11 +5011,15 @@ class Cockpit(App):
         self._watch_run.last_heartbeat_at = 0.0
         self._watch_last_summary = ""
         self._watch_run.last_micro_text = ""
+        self._watch_run.last_now_text = ""
         self._watch_run.last_digest_text = ""
         self._watch_run.last_alert_text = ""
         self._watch_run.last_digest_reason = ""
         self._watch_run.last_phase = ""
+        self._watch_run.baseline_context = ""
         self._watch_run.pending_digest_reason = ""
+        self._watch_run.pending_digest_step_id = 0
+        self._watch_run.pending_digest_buffer.clear()
         self._watch_run.phase_digest_pending = False
         self._watch_run.done_digest_pending = False
         self._watch_run.instruction = instruction
@@ -4854,6 +5033,7 @@ class Cockpit(App):
         self._watch_run.unseen_steps = 0
         self._watch_run.monitor_target_key = ""
         self._watch_run.events_since_digest = 0
+        self._watch_run.events_since_now = 0
         targets = self._reset_watch_baseline()
         if not targets:
             self._watch_mode = False
@@ -4865,12 +5045,14 @@ class Cockpit(App):
             "watching-sessions" if self.session.scope != SC.SESSION
             else self._watch_phase(self.session.st)
         )
+        self._watch_run.baseline_context = self._watch_baseline_context()
         self._watch_begin_step(self._watch_run.phase, trigger="start",
                                current=self._watch_current_activity(), force=True)
         self._watch_add_recent("start", f"{self._watch_subject()} · {self._watch_current_activity()}")
         self._ensure_watch_worker()
         self._clear_watch_chat_ephemeral()
         self._watch_chat(self._role(self._watch_start_text(reset=reset), "role-event"))
+        self._watch_emit_initial_now()
         self._update_header()
         self._update_status()
 
@@ -4936,20 +5118,18 @@ class Cockpit(App):
                     self._watch_narrating = True
                     self._watch_run.last_micro_at = time.monotonic()
                     delta_text = self._watch_delta_text(st, d, target=target)
-                    self._watch_narrate(delta_text, self._watch_step_decision_text(delta_text),
+                    flow_text = self._watch_flow_text(
+                        delta_text, target_key=fallback.get("target_key", ""))
+                    self._watch_narrate(flow_text,
                                         (self._evidence_sig(), self.session.store), cls,
                                         instruction=self._watch_run.instruction,
                                         fallback=fallback)
                 elif self._busy and cls != "role-alert":
-                    self._watch_run.pending_digest_reason = (
-                        self._watch_run.pending_digest_reason or "copilot busy")
+                    pass
                 else:
                     summary, cls = self._watch_fallback_renderable(st, d, target=target)
                     if summary is not None:
                         self._watch_chat(self._role(summary, cls))
-            reason = self._watch_digest_reason()
-            if reason:
-                self._watch_emit_digest(reason=reason)
         timeline_changed = (d.new_events or d.status_from != d.status_to
                             or d.verdict_from != d.verdict_to
                             or d.new_changed or d.new_failures)

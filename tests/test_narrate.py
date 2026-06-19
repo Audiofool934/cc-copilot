@@ -122,10 +122,27 @@ class TestNarratePrompt(unittest.TestCase):
 
         self.assertEqual(out, "ok")
         prompt = backend.prompts[0]
-        self.assertIn("WATCH DIGEST BUFFER", prompt)
+        self.assertIn("WATCH STEP DIGEST BUFFER", prompt)
+        self.assertIn("posterior", prompt)
         self.assertIn("monitoring digest", prompt)
         self.assertIn("3-5 concise sentences", prompt)
         self.assertIn("do not produce an event log", prompt.lower())
+        self.assertIn("[L8]", prompt)
+
+    def test_watch_flow_prompt_combines_now_and_step_decision(self):
+        backend = CaptureBackend()
+
+        out = N.watch_flow_update(
+            "# flow\n## previous now\npytest is running [L3]\n"
+            "## new watch delta\n- pytest failed [L8]",
+            backend=backend)
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("WATCH FLOW CONTEXT", prompt)
+        self.assertIn("previous Now update", prompt)
+        self.assertIn("now:", prompt)
+        self.assertIn("action: same|new", prompt)
         self.assertIn("[L8]", prompt)
 
     def test_watch_prompts_accept_instruction_like_now(self):
@@ -135,11 +152,15 @@ class TestNarratePrompt(unittest.TestCase):
                                backend=backend, instruction="in Chinese")
         N.watch_digest_brief("# buffer\n- pytest running [L8]",
                              backend=backend, instruction="in Chinese")
+        N.watch_flow_update("# flow\n- Bash still running [L3]",
+                            backend=backend, instruction="in Chinese")
 
         self.assertIn("instruction for how to answer", backend.prompts[0])
         self.assertIn("in Chinese", backend.prompts[0])
         self.assertIn("instruction for how to answer", backend.prompts[1])
         self.assertIn("in Chinese", backend.prompts[1])
+        self.assertIn("instruction for how to answer", backend.prompts[2])
+        self.assertIn("in Chinese", backend.prompts[2])
 
     def test_watch_step_decision_prompt_is_machine_parseable(self):
         backend = CaptureBackend()

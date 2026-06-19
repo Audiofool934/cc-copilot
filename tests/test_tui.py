@@ -1934,7 +1934,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app._chat(app._role(tui.Text("ordinary chat marker"), "role-event"))
                 app._meta("/watch")
                 await pilot.pause()
-                app._watch_run.digest_events = 1
                 old = app._watch_state
                 with open(sess.path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
@@ -1951,7 +1950,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Night gathers, and now my watch begins.", running)
         self.assertIn("watch · progress", running)
-        self.assertIn("watch · digest", running)
         self.assertIn("ordinary chat marker", stopped)
         self.assertIn("watch · stopped", stopped)
         self.assertIn("/watch view to review", stopped)
@@ -1989,28 +1987,37 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
     async def test_watch_progress_uses_copilot_narration_when_available(self):
         from cccopilot import narrate as N
-        real_avail, real_watch, real_step = N.available, N.watch_progress_brief, N.watch_step_decision
+        real_avail, real_flow = N.available, N.watch_flow_update
         captured = []
         N.available = lambda be=None: True
-        N.watch_step_decision = lambda text, model=None, backend=None, instruction="": (
-            "action: new\n"
-            "title: Running tests\n"
-            "phase: testing\n"
-            "reason: pytest started\n"
-            "attention: none")
 
-        def _watch(delta, model=None, backend=None, instruction=""):
-            captured.append((delta, instruction))
-            return "The agent is still running pytest and has not produced a failure yet [L3]."
+        def _flow(flow, model=None, backend=None, instruction=""):
+            captured.append((flow, instruction))
+            if "watch initial now" in flow:
+                return ("now: The watch baseline is captured and the agent is idle [L2].\n"
+                        "action: same\n"
+                        "title: Baseline\n"
+                        "phase: running\n"
+                        "reason: watch started\n"
+                        "attention: none")
+            return ("now: The agent is still running pytest and has not produced a failure yet [L3].\n"
+                    "action: new\n"
+                    "title: Running tests\n"
+                    "phase: testing\n"
+                    "reason: pytest started\n"
+                    "attention: none")
 
-        N.watch_progress_brief = _watch
+        N.watch_flow_update = _flow
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         try:
             async with app.run_test() as pilot:
                 await pilot.pause()
                 app._meta("/watch")
-                await pilot.pause()
+                for _ in range(10):
+                    await pilot.pause()
+                    if app._watch_run.last_now_text:
+                        break
                 old = app._watch_state
                 with open(sess.path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
@@ -2025,33 +2032,34 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                         break
         finally:
             N.available = real_avail
-            N.watch_progress_brief = real_watch
-            N.watch_step_decision = real_step
+            N.watch_flow_update = real_flow
 
         self.assertTrue(captured)
-        self.assertIn("watch delta", captured[0][0])
-        self.assertIn("in-flight tool", captured[0][0])
+        event_flow = next(flow for flow, _instruction in captured
+                          if "# cc-copilot watch delta" in flow)
+        self.assertIn("baseline before watch started", event_flow)
+        self.assertIn("previous now", event_flow)
+        self.assertIn("in-flight tool", event_flow)
         self.assertIn("watch · copilot", rendered)
         self.assertIn("still running pytest", rendered)
 
     async def test_watch_accepts_language_preset_like_now_instruction(self):
         from cccopilot import narrate as N
         from textual.widgets import Static
-        real_avail, real_watch, real_step = N.available, N.watch_progress_brief, N.watch_step_decision
+        real_avail, real_flow = N.available, N.watch_flow_update
         captured = []
         N.available = lambda be=None: True
-        N.watch_step_decision = lambda text, model=None, backend=None, instruction="": (
-            "action: new\n"
-            "title: Running tests\n"
-            "phase: testing\n"
-            "reason: pytest started\n"
-            "attention: none")
 
-        def _watch(delta, model=None, backend=None, instruction=""):
-            captured.append((delta, instruction))
-            return "测试仍在运行，暂时没有失败证据 [L3]."
+        def _flow(flow, model=None, backend=None, instruction=""):
+            captured.append((flow, instruction))
+            return ("now: 测试仍在运行，暂时没有失败证据 [L3].\n"
+                    "action: same\n"
+                    "title: Running tests\n"
+                    "phase: testing\n"
+                    "reason: pytest started\n"
+                    "attention: none")
 
-        N.watch_progress_brief = _watch
+        N.watch_flow_update = _flow
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         try:
@@ -2075,8 +2083,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 dock = str(app.query_one("#watch-dock", Static).content)
         finally:
             N.available = real_avail
-            N.watch_progress_brief = real_watch
-            N.watch_step_decision = real_step
+            N.watch_flow_update = real_flow
 
         self.assertTrue(captured)
         self.assertIn("Answer watch updates in Chinese", captured[0][1])
@@ -2087,17 +2094,19 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
     async def test_watch_semantic_step_decision_can_keep_phase_delta_on_same_step(self):
         from cccopilot import narrate as N
         real_avail = N.available
-        real_watch = N.watch_progress_brief
-        real_step = N.watch_step_decision
+        real_flow = N.watch_flow_update
         N.available = lambda be=None: True
-        N.watch_progress_brief = lambda delta, model=None, backend=None, instruction="": (
-            "The agent is continuing the same verification thread [L4].")
-        N.watch_step_decision = lambda text, model=None, backend=None, instruction="": (
-            "action: same\n"
-            "title: Continuing verification\n"
-            "phase: testing\n"
-            "reason: same verification run\n"
-            "attention: none")
+
+        def _flow_same(flow, model=None, backend=None, instruction=""):
+            title = "Watch baseline" if "watch initial now" in flow else "Continuing verification"
+            return (f"now: The agent is continuing the same verification thread [L4].\n"
+                    "action: same\n"
+                    f"title: {title}\n"
+                    "phase: testing\n"
+                    "reason: same verification run\n"
+                    "attention: none")
+
+        N.watch_flow_update = _flow_same
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         try:
@@ -2116,8 +2125,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                         break
         finally:
             N.available = real_avail
-            N.watch_progress_brief = real_watch
-            N.watch_step_decision = real_step
+            N.watch_flow_update = real_flow
 
         self.assertEqual(len(app._watch_run.steps), 1)
         self.assertEqual(app._watch_run.steps[0].title, "Continuing verification")
@@ -2126,17 +2134,25 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
     async def test_watch_semantic_step_decision_can_create_named_step(self):
         from cccopilot import narrate as N
         real_avail = N.available
-        real_watch = N.watch_progress_brief
-        real_step = N.watch_step_decision
+        real_flow = N.watch_flow_update
         N.available = lambda be=None: True
-        N.watch_progress_brief = lambda delta, model=None, backend=None, instruction="": (
-            "The agent moved into verification with pytest [L4].")
-        N.watch_step_decision = lambda text, model=None, backend=None, instruction="": (
-            "action: new\n"
-            "title: Running verification\n"
-            "phase: testing\n"
-            "reason: pytest started after edits\n"
-            "attention: none")
+
+        def _flow_new(flow, model=None, backend=None, instruction=""):
+            if "watch initial now" in flow:
+                return ("now: The watch baseline is ready [L2].\n"
+                        "action: same\n"
+                        "title: Watch baseline\n"
+                        "phase: running\n"
+                        "reason: watch started\n"
+                        "attention: none")
+            return ("now: The agent moved into verification with pytest [L4].\n"
+                    "action: new\n"
+                    "title: Running verification\n"
+                    "phase: testing\n"
+                    "reason: pytest started after edits\n"
+                    "attention: none")
+
+        N.watch_flow_update = _flow_new
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         try:
@@ -2155,23 +2171,47 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                         break
         finally:
             N.available = real_avail
-            N.watch_progress_brief = real_watch
-            N.watch_step_decision = real_step
+            N.watch_flow_update = real_flow
 
         self.assertEqual(len(app._watch_run.steps), 1)
         self.assertEqual(app._watch_run.steps[0].title, "Running verification")
         self.assertEqual(app._watch_run.steps[0].phase, "testing")
 
-    async def test_watch_auto_digest_uses_copilot_periodic_summary(self):
+    async def test_watch_auto_digest_uses_copilot_step_closure_summary(self):
         from cccopilot import narrate as N
-        real_avail, real_digest = N.available, N.watch_digest_brief
+        real_avail = N.available
+        real_digest = N.watch_digest_brief
+        real_flow = N.watch_flow_update
         captured = []
         N.available = lambda be=None: True
 
+        def _flow(flow, model=None, backend=None, instruction=""):
+            if "watch initial now" in flow:
+                return ("now: The watch baseline is ready [L2].\n"
+                        "action: same\n"
+                        "title: Watch baseline\n"
+                        "phase: running\n"
+                        "reason: watch started\n"
+                        "attention: none")
+            if "pytest" not in flow:
+                return ("now: The agent is editing the implementation [L4].\n"
+                        "action: same\n"
+                        "title: Editing implementation\n"
+                        "phase: editing\n"
+                        "reason: same implementation step\n"
+                        "attention: none")
+            return ("now: The agent moved into verification and pytest is still running [L4].\n"
+                    "action: new\n"
+                    "title: Running verification\n"
+                    "phase: testing\n"
+                    "reason: pytest started after implementation\n"
+                    "attention: none")
+
         def _digest(buffer, model=None, backend=None, instruction=""):
             captured.append((buffer, instruction))
-            return "The watch moved into verification and pytest is still running [L4]."
+            return "The previous watch step closed as verification started with pytest [L4]."
 
+        N.watch_flow_update = _flow
         N.watch_digest_brief = _digest
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
@@ -2179,14 +2219,26 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await pilot.pause()
                 app._meta("/watch")
-                await pilot.pause()
-                app._watch_run.mode = "quiet"       # buffer without a micro narration
-                app._watch_run.digest_events = 1    # force the automatic event trigger
+                for _ in range(10):
+                    await pilot.pause()
+                    if app._watch_run.last_now_text:
+                        break
                 old = app._watch_state
                 with open(sess.path, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                    fh.write(json.dumps(tool("Edit", {"file_path": "app.py"}, "e1", 5)) + "\n")
+                    fh.write(json.dumps(result("e1", "ok", ago=4)) + "\n")
+                    fh.write(json.dumps(asst("implementation adjusted", ago=3)) + "\n")
                 st = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st, tui.S.diff(old, st))
+                for _ in range(10):
+                    await pilot.pause()
+                    if "editing" in app._watch_run.steps[0].phase:
+                        break
+
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 2)) + "\n")
+                st2 = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st2, tui.S.diff(st, st2))
                 rendered = ""
                 for _ in range(10):
                     await pilot.pause()
@@ -2195,25 +2247,37 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                     if "watch · digest" in rendered:
                         break
         finally:
-            N.available, N.watch_digest_brief = real_avail, real_digest
+            N.available = real_avail
+            N.watch_digest_brief = real_digest
+            N.watch_flow_update = real_flow
 
         self.assertTrue(captured)
         self.assertIn("watch digest buffer", captured[0][0])
         self.assertIn("in-flight `Bash`", captured[0][0])
+        self.assertIn("step boundary", captured[0][0])
         self.assertIn("watch · digest", rendered)
-        self.assertIn("moved into verification", rendered)
+        self.assertIn("previous watch step closed", rendered)
         self.assertEqual(app._watch_run.events_since_digest, 0)
-        self.assertEqual(app._watch_run.digest_buffer, [])
+        self.assertTrue(app._watch_run.digest_buffer)
 
     async def test_watch_digest_waits_while_copilot_is_busy_then_auto_emits(self):
         from cccopilot import narrate as N
-        real_avail, real_digest = N.available, N.watch_digest_brief
+        real_avail = N.available
+        real_digest = N.watch_digest_brief
+        real_flow = N.watch_flow_update
         captured = []
         N.available = lambda be=None: True
+        N.watch_flow_update = lambda flow, model=None, backend=None, instruction="": (
+            "now: The watch baseline is ready [L2].\n"
+            "action: same\n"
+            "title: Watch baseline\n"
+            "phase: running\n"
+            "reason: watch started\n"
+            "attention: none")
 
         def _digest(buffer, model=None, backend=None, instruction=""):
             captured.append((buffer, instruction))
-            return "The queued watch digest now summarizes the test run [L4]."
+            return "The queued watch digest now summarizes the buffered test run [L4]."
 
         N.watch_digest_brief = _digest
         sess = self._session("sess-A")
@@ -2222,15 +2286,18 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             async with app.run_test() as pilot:
                 await pilot.pause()
                 app._meta("/watch")
-                await pilot.pause()
+                for _ in range(10):
+                    await pilot.pause()
+                    if app._watch_run.last_now_text:
+                        break
                 app._watch_run.mode = "quiet"
-                app._watch_run.digest_events = 1
                 app._busy = True
                 old = app._watch_state
                 with open(sess.path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
                 st = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st, tui.S.diff(old, st))
+                app._meta("/watch refresh")
                 await pilot.pause()
                 self.assertFalse(captured)
                 self.assertTrue(app._watch_run.pending_digest_reason)
@@ -2245,7 +2312,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                     if "watch · digest" in rendered:
                         break
         finally:
-            N.available, N.watch_digest_brief = real_avail, real_digest
+            N.available = real_avail
+            N.watch_digest_brief = real_digest
+            N.watch_flow_update = real_flow
 
         self.assertTrue(captured)
         self.assertIn("digest trigger", captured[0][0])
@@ -2276,6 +2345,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 title = str(app.query_one("#watch-monitor-title", Static).content)
                 phase = str(app.query_one("#watch-monitor-phase", Static).content)
+                digest = str(app.query_one("#watch-monitor-digest", Static).content)
                 menu = str(app.query_one("#chat-pin", Static).content)
                 self.assertTrue(app._watch_monitor_open)
                 self.assertFalse(app.query_one("#chat").display)
@@ -2286,6 +2356,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("step 1/1", title)
                 self.assertIn("latest", title)
                 self.assertIn("testing", phase)
+                self.assertIn("recent evidence", digest)
+                self.assertIn("phase `testing`", digest)
+                self.assertNotIn("waiting for enough evidence", digest)
 
                 await pilot.press("left")
                 await pilot.pause()
@@ -2320,6 +2393,37 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PHASE", phase)
         self.assertIn("Esc", menu)
         self.assertIn("←/→", menu)
+
+    async def test_watch_command_completion_marks_same_step_done(self):
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                await pilot.pause()
+                old = app._watch_state
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                st1 = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st1, tui.S.diff(old, st1))
+                await pilot.pause()
+
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(result("t1", "ok", ago=1)) + "\n")
+                    fh.write(json.dumps(asst("tests passed", ago=0)) + "\n")
+                st2 = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st2, tui.S.diff(st1, st2))
+                await pilot.pause()
+        finally:
+            N.available = real_avail
+
+        self.assertEqual(len(app._watch_run.steps), 1)
+        self.assertEqual(app._watch_run.steps[0].status, "done")
+        self.assertIn("testing", app._watch_run.steps[0].phase)
 
     async def test_watch_multi_session_tracks_non_anchor_delta(self):
         from textual.widgets import Static
@@ -2408,7 +2512,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app.query_one("#chat").display)
             self.assertTrue(app.query_one("#watch-monitor").display)
 
-    async def test_watch_micro_cadence_suppresses_chat_and_auto_digests_evidence(self):
+    async def test_watch_now_cadence_suppresses_chat_without_auto_digest(self):
         from cccopilot import narrate as N
         real_avail = N.available
         N.available = lambda be=None: False
@@ -2431,7 +2535,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 first_count = first.count("watch · progress")
 
                 with open(sess.path, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asst("still running tests", 3)) + "\n")
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest -q"}, "t2", 3)) + "\n")
                 st2 = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st2, tui.S.diff(st1, st2))
                 await pilot.pause()
@@ -2441,8 +2545,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(first_count, 1)
         self.assertEqual(second.count("watch · progress"), first_count)
-        self.assertTrue(app._watch_run.last_digest_text)
-        self.assertEqual(app._watch_run.digest_buffer, [])
+        self.assertFalse(app._watch_run.last_digest_text)
+        self.assertTrue(app._watch_run.digest_buffer)
 
     async def test_watch_pauses_when_scope_changes(self):
         from textual.widgets import Static

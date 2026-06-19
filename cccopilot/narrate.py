@@ -247,6 +247,36 @@ def watch_progress_brief(delta_text: str, model: str = None, backend=None,
                      model=model, backend=backend)
 
 
+_WATCH_FLOW_TASK = (
+    "The evidence below is the WATCH FLOW CONTEXT for a coding-agent session. "
+    "It includes the baseline before watch started, the previous Now update, "
+    "the current watch step, and the newest observed delta. Produce the next "
+    "Now update and decide whether the newest delta still belongs to the "
+    "current semantic step or should start the next step. The Now update should "
+    "be a short process-status sentence or two, not a command echo and not an "
+    "event log. Prefer SAME unless the agent meaningfully changes intent or "
+    "work phase. Use NEW when the current step should be closed and digested: "
+    "starting a new implementation area, moving from editing to verification, "
+    "switching from verification to fixing failures, reaching completion, or "
+    "needing human attention. Use ONLY the cited evidence; keep citations in "
+    "the now line for observed facts. Return exactly these machine-readable "
+    "lines and nothing else:\n"
+    "now: short readable process update, 1-2 sentences\n"
+    "action: same|new\n"
+    "title: short human title, 2-7 words\n"
+    "phase: planning|editing|building|testing|debugging|reviewing|blocked|complete|running|other\n"
+    "reason: short reason for the boundary decision\n"
+    "attention: none or short attention note"
+)
+
+
+def watch_flow_update(flow_text: str, model: str = None, backend=None,
+                      instruction: str = "") -> str:
+    """Produce a watch Now update and semantic step-boundary decision together."""
+    return run_brief(flow_text, _with_instruction(_WATCH_FLOW_TASK, instruction),
+                     model=model, backend=backend)
+
+
 _WATCH_STEP_DECISION_TASK = (
     "The evidence below contains the CURRENT WATCH STEP and a NEW WATCH DELTA "
     "from a coding-agent session. Decide whether the new delta belongs on the "
@@ -272,19 +302,21 @@ def watch_step_decision(step_text: str, model: str = None, backend=None,
 
 
 _WATCH_DIGEST_TASK = (
-    "The evidence below is an accumulated WATCH DIGEST BUFFER from a coding-agent "
+    "The evidence below is a WATCH STEP DIGEST BUFFER from a coding-agent "
     "session that cc-copilot has been following after explicit human opt-in. "
-    "Write a readable monitoring digest in 3-5 concise sentences. Summarize the "
-    "phase of work, meaningful progress since the last digest, any failures or "
-    "retries, and whether the human needs to act now. Use ONLY the cited "
-    "evidence. Keep citations for observed facts. Do not produce an event log, "
-    "do not list every changed file, and do not invent percent complete."
+    "This digest is posterior: it closes the step that just ended before the "
+    "watch monitor moves to the next semantic step. Write a readable monitoring "
+    "digest in 3-5 concise sentences. Summarize the step's meaningful progress, "
+    "important decisions or file changes, verification/failures/retries, and "
+    "whether the human needs to act now. Use ONLY the cited evidence. Keep "
+    "citations for observed facts. Do not produce an event log, do not list "
+    "every changed file, and do not invent percent complete."
 )
 
 
 def watch_digest_brief(buffer_text: str, model: str = None, backend=None,
                        instruction: str = "") -> str:
-    """Narrate accumulated watch evidence into a periodic monitoring digest."""
+    """Narrate accumulated watch evidence into a posterior step digest."""
     return run_brief(buffer_text, _with_instruction(_WATCH_DIGEST_TASK, instruction),
                      model=model, backend=backend)
 
