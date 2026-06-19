@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.27.0 — 2026-06-19
+
+**Attached-session HUD now leads with the session title.** The prompt-area HUD
+shows the human-readable session title/name first and keeps the short
+`agent:session-id` as a disambiguating suffix, instead of making the id the
+primary label.
+
+**`/watch` summaries are now copilot-written process updates.** Watch mode still
+uses the activity timeline for raw events, but chat updates now send the new
+watch delta through the configured copilot backend and render a short,
+process-oriented summary. If no backend is available or the copilot is already
+answering, it falls back to the deterministic change line.
+
+**Long-watch monitoring now has an explicit design and digest path.** The new
+`docs/watch-mode-design.md` captures the opt-in product contract, activity/watch
+lane split, micro-update cadence, rolling digest model, and scope-change safety
+rules. The TUI now buffers watch evidence, supports `/watch digest`, shows digest
+timing in the HUD/status output, and pauses watch when the evidence scope
+changes instead of silently narrating a different target.
+
 ## 0.26.0 — 2026-06-19
 
 **Attached sessions are visible above the prompt box.** The cockpit now shows a

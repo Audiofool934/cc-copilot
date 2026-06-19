@@ -789,7 +789,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("activity current session", header)
         hud_text = str(hud.content)
         self.assertIn("attached session", hud_text)
+        self.assertIn("task", hud_text)
         self.assertIn("claude:sess-A", hud_text)
+        self.assertLess(hud_text.index("task"), hud_text.index("claude:sess-A"))
 
     async def test_timeline_resize_keys_persist_and_clamp(self):
         import tempfile
@@ -1454,6 +1456,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("attached sessions", hud)
         self.assertIn("multi-session", hud)
         self.assertIn("2 selected of 3", hud)
+        self.assertIn("task", hud)
         self.assertIn("sess-A", hud)
         self.assertTrue("sess-B" in hud or "sess-C" in hud)
 
@@ -1759,26 +1762,171 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("watch:on", hud)
 
     async def test_watch_progress_summary_surfaces_failures(self):
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                await pilot.pause()
+                old = app._watch_state
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                    fh.write(json.dumps(result("t1", "assertion failed", is_error=True, ago=3)) + "\n")
+                st = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st, tui.S.diff(old, st))
+                await pilot.pause()
+                alerts = [w for w in app.query_one("#chat").children
+                          if "role-alert" in w.classes]
+                rendered = "\n".join(str(w.render()) for w in alerts)
+        finally:
+            N.available = real_avail
+
+        self.assertIn("watch", rendered)
+        self.assertIn("needs attention", rendered)
+        self.assertIn("Bash failed", rendered)
+
+    async def test_watch_progress_uses_copilot_narration_when_available(self):
+        from cccopilot import narrate as N
+        real_avail, real_watch = N.available, N.watch_progress_brief
+        captured = []
+        N.available = lambda be=None: True
+
+        def _watch(delta, model=None, backend=None):
+            captured.append(delta)
+            return "The agent is still running pytest and has not produced a failure yet [L3]."
+
+        N.watch_progress_brief = _watch
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                await pilot.pause()
+                old = app._watch_state
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                st = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st, tui.S.diff(old, st))
+                rendered = ""
+                for _ in range(10):
+                    await pilot.pause()
+                    rendered = "\n".join(str(w.render())
+                                         for w in app.query_one("#chat").children)
+                    if "watch · copilot" in rendered:
+                        break
+        finally:
+            N.available, N.watch_progress_brief = real_avail, real_watch
+
+        self.assertTrue(captured)
+        self.assertIn("watch delta", captured[0])
+        self.assertIn("in-flight tool", captured[0])
+        self.assertIn("watch · copilot", rendered)
+        self.assertIn("still running pytest", rendered)
+
+    async def test_watch_digest_uses_copilot_periodic_summary(self):
+        from cccopilot import narrate as N
+        real_avail, real_digest = N.available, N.watch_digest_brief
+        captured = []
+        N.available = lambda be=None: True
+
+        def _digest(buffer, model=None, backend=None):
+            captured.append(buffer)
+            return "The watch moved into verification and pytest is still running [L4]."
+
+        N.watch_digest_brief = _digest
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                await pilot.pause()
+                app._watch_run.mode = "quiet"       # buffer without a micro narration
+                old = app._watch_state
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                st = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st, tui.S.diff(old, st))
+                app._meta("/watch digest")
+                rendered = ""
+                for _ in range(10):
+                    await pilot.pause()
+                    rendered = "\n".join(str(w.render())
+                                         for w in app.query_one("#chat").children)
+                    if "watch · digest" in rendered:
+                        break
+        finally:
+            N.available, N.watch_digest_brief = real_avail, real_digest
+
+        self.assertTrue(captured)
+        self.assertIn("watch digest buffer", captured[0])
+        self.assertIn("in-flight `Bash`", captured[0])
+        self.assertIn("watch · digest", rendered)
+        self.assertIn("moved into verification", rendered)
+        self.assertEqual(app._watch_run.events_since_digest, 0)
+        self.assertEqual(app._watch_run.digest_buffer, [])
+
+    async def test_watch_micro_cadence_suppresses_chat_but_keeps_digest_buffer(self):
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                await pilot.pause()
+                app._watch_run.micro_interval = 999
+
+                old = app._watch_state
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                st1 = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st1, tui.S.diff(old, st1))
+                await pilot.pause()
+                first = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
+                first_count = first.count("watch · progress")
+
+                with open(sess.path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(asst("still running tests", 3)) + "\n")
+                st2 = tui.S.build(tui.SRC.parse(sess.path))
+                app._on_watch(st2, tui.S.diff(st1, st2))
+                await pilot.pause()
+                second = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
+        finally:
+            N.available = real_avail
+
+        self.assertGreaterEqual(first_count, 1)
+        self.assertEqual(second.count("watch · progress"), first_count)
+        self.assertGreaterEqual(len(app._watch_run.digest_buffer), 2)
+        self.assertGreaterEqual(app._watch_run.events_since_digest, 2)
+
+    async def test_watch_pauses_when_scope_changes(self):
+        from textual.widgets import Static
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
             app._meta("/watch")
             await pilot.pause()
-            old = app._watch_state
-            with open(sess.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
-                fh.write(json.dumps(result("t1", "assertion failed", is_error=True, ago=3)) + "\n")
-            st = tui.S.build(tui.SRC.parse(sess.path))
-            app._on_watch(st, tui.S.diff(old, st))
+            b = write([user("other task", 100, sessionId="sess-B"), asst("ok", 5)],
+                      dir=self.home)
+            app.session.switch_path(b)
+            app._watch_scope_changed("attached session changed")
             await pilot.pause()
-            alerts = [w for w in app.query_one("#chat").children
-                      if "role-alert" in w.classes]
-            rendered = "\n".join(str(w.render()) for w in alerts)
+            hud = str(app.query_one("#session-hud", Static).content)
+            rendered = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
 
-        self.assertIn("watch", rendered)
-        self.assertIn("needs attention", rendered)
-        self.assertIn("Bash failed", rendered)
+        self.assertTrue(app._watch_mode)
+        self.assertTrue(app._watch_run.paused)
+        self.assertIn("watch:paused", hud)
+        self.assertIn("watch · paused", rendered)
 
     async def test_busy_tick_advances_only_while_busy(self):
         sess = self._session("sess-A")

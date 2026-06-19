@@ -20,6 +20,7 @@ import re
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
 
 # Disable the Kitty keyboard protocol by default. Its "associated text" feature
 # encodes IME-committed input (e.g. multi-character Chinese from pinyin) as
@@ -58,6 +59,36 @@ from . import (sources as SRC, state as S, assess as A, narrate as N,
                models as MODELS)
 from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
                    _deterministic_goal, _goal_context_question)
+
+
+_WATCH_DEFAULT_MICRO_INTERVAL = 30.0
+_WATCH_DEFAULT_DIGEST_INTERVAL = 300.0
+_WATCH_DEFAULT_DIGEST_EVENTS = 25
+_WATCH_BUFFER_LIMIT = 24
+
+
+@dataclass
+class _WatchRun:
+    """Opt-in `/watch` state for one cockpit-visible monitoring run."""
+
+    active: bool = False
+    paused: bool = False
+    pause_reason: str = ""
+    started_at: float = 0.0
+    last_micro_at: float = 0.0
+    last_digest_at: float = 0.0
+    last_alert_at: float = 0.0
+    last_emit_at: float = 0.0
+    last_summary: str = ""
+    scope_sig: tuple | None = None
+    phase: str = ""
+    digest_buffer: list[str] = field(default_factory=list)
+    events_since_digest: int = 0
+    pending_narration: bool = False
+    mode: str = "normal"
+    micro_interval: float = _WATCH_DEFAULT_MICRO_INTERVAL
+    digest_interval: float = _WATCH_DEFAULT_DIGEST_INTERVAL
+    digest_events: int = _WATCH_DEFAULT_DIGEST_EVENTS
 
 
 # ── themes (small curated set; everything references semantic tokens) ──
@@ -188,7 +219,7 @@ _HELP_TEXT = (
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /status                 fleet board — every session, neediest first\n"
-    "  /watch                  follow this session's progress until /watch stop\n"
+    "  /watch                  process watch; /watch digest summarizes recent progress\n"
     "  /sessions  /here         choose evidence session(s) · watch your own live one\n"
     "  /target                 show the current cockpit target (id · evidence · scope)\n"
     "  /resume                 resume a cockpit session\n"
@@ -221,7 +252,7 @@ _SLASH_CMDS = [
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
     ("/status", "fleet board — every session in this project, neediest first", False),
-    ("/watch", "follow this session's progress until /watch stop", False),
+    ("/watch", "process watch; /watch digest summarizes recent progress", False),
     ("/sessions", "choose one or more evidence sessions", False),
     ("/use", "change evidence session by number / id", True),
     ("/here", "observe your own current (live) session", False),
@@ -648,10 +679,12 @@ def _scope_timeline_summary(session, snap: dict) -> Text:
 def _append_attached_chip(t: Text, agent: str, sid: str, title: str = "") -> None:
     """Append one compact agent/session chip for the prompt-area attached HUD."""
     ag = (agent or "claude").strip().lower()
-    t.append(f"{ag}:{sid}", style=_agent_hex(ag))
-    title = _short_activity(title, 24)
+    ident = f"{ag}:{sid}"
+    title = _short_activity(title, 32)
     if title and title != "(untitled)":
-        t.append(" " + title, style=_PAL["text"])
+        t.append(title, style=_PAL["text"])
+        t.append(" · ", style=_PAL["muted"])
+    t.append(ident, style=_agent_hex(ag))
 
 
 def _timeline_status_line(st):
@@ -1431,11 +1464,56 @@ class Cockpit(App):
         self._watch_size = -1
         self._watch_state = None
         self._watch_worker_started = False
+        self._watch_run = _WatchRun()
         self._watch_mode = False
         self._watch_started_at = 0.0
         self._watch_last_emit_at = 0.0
         self._watch_last_summary = ""
+        self._watch_narrating = False
         self._timeline_sig = None       # evidence identity of the last rebuild
+
+    @property
+    def _watch_mode(self) -> bool:
+        return self._watch_run.active
+
+    @_watch_mode.setter
+    def _watch_mode(self, value: bool) -> None:
+        self._watch_run.active = bool(value)
+        if not value:
+            self._watch_run.paused = False
+            self._watch_run.pause_reason = ""
+
+    @property
+    def _watch_started_at(self) -> float:
+        return self._watch_run.started_at
+
+    @_watch_started_at.setter
+    def _watch_started_at(self, value: float) -> None:
+        self._watch_run.started_at = float(value or 0.0)
+
+    @property
+    def _watch_last_emit_at(self) -> float:
+        return self._watch_run.last_emit_at
+
+    @_watch_last_emit_at.setter
+    def _watch_last_emit_at(self, value: float) -> None:
+        self._watch_run.last_emit_at = float(value or 0.0)
+
+    @property
+    def _watch_last_summary(self) -> str:
+        return self._watch_run.last_summary
+
+    @_watch_last_summary.setter
+    def _watch_last_summary(self, value: str) -> None:
+        self._watch_run.last_summary = str(value or "")
+
+    @property
+    def _watch_narrating(self) -> bool:
+        return self._watch_run.pending_narration
+
+    @_watch_narrating.setter
+    def _watch_narrating(self, value: bool) -> None:
+        self._watch_run.pending_narration = bool(value)
 
     # ---- prompt history (composer ↑/↓, terminal-style) ----
     def _prompt_history_from_session(self) -> list:
@@ -2203,10 +2281,18 @@ class Cockpit(App):
     def _append_watch_hud(self, t: Text) -> None:
         if not self._watch_mode:
             return
-        t.append(" · watch:on", style=_PAL["accent"])
-        if self._watch_last_emit_at:
-            age = max(0, int(time.monotonic() - self._watch_last_emit_at))
+        r = self._watch_run
+        if r.paused:
+            t.append(" · watch:paused", style=_PAL["warning"])
+        else:
+            t.append(" · watch:on", style=_PAL["accent"])
+        now = time.monotonic()
+        if r.last_emit_at:
+            age = max(0, int(now - r.last_emit_at))
             t.append(f" · update {_dur(age)} ago", style=_PAL["muted"])
+        if r.active and not r.paused and r.last_digest_at:
+            remaining = max(0, int(r.digest_interval - (now - r.last_digest_at)))
+            t.append(f" · digest {_dur(remaining)}", style=_PAL["muted"])
 
     def _update_session_hud(self, snap=None) -> None:
         hud = self._session_hud()
@@ -2864,6 +2950,23 @@ class Cockpit(App):
         self._watch_path = self.session.path
         self._watch_size = self.session.last_size
         self._watch_state = self.session.st
+        self._watch_run.scope_sig = self._evidence_sig()
+
+    def _watch_scope_changed(self, reason="evidence changed"):
+        was_active = self._watch_mode and not self._watch_run.paused
+        self._reset_watch_baseline()
+        if not was_active:
+            return
+        self._watch_run.paused = True
+        self._watch_run.pause_reason = reason
+        self._watch_run.last_emit_at = time.monotonic()
+        t = Text()
+        t.append("watch · paused", style=_PAL["warning"])
+        t.append(f" · {reason}; run /watch to resume on this scope",
+                 style=_PAL["muted"])
+        self._chat(self._role(t, "role-event"))
+        self._update_header()
+        self._update_status()
 
     def _watch_subject(self) -> str:
         st = self.session.st
@@ -2894,23 +2997,166 @@ class Cockpit(App):
         return t
 
     def _watch_status_body(self) -> str:
-        state = "on" if self._watch_mode else "off"
+        r = self._watch_run
+        state = "paused" if r.active and r.paused else ("on" if r.active else "off")
         since = ""
-        if self._watch_mode and self._watch_started_at:
+        now = time.monotonic()
+        if r.active and r.started_at:
             since = f" · for {_dur(time.monotonic() - self._watch_started_at)}"
+        last = f"last update: {_dur(now - r.last_emit_at)} ago" if r.last_emit_at else "last update: none"
+        if r.active and not r.paused and r.last_digest_at:
+            remaining = max(0, int(r.digest_interval - (now - r.last_digest_at)))
+            digest = f"next digest: about {_dur(remaining)}"
+        elif r.paused:
+            digest = f"next digest: paused ({r.pause_reason or 'scope paused'})"
+        else:
+            digest = "next digest: off"
         lines = [
             f"watch: {state}{since}",
             f"attached: {self._watch_subject()}",
             f"current: {self._watch_current_activity()}",
+            f"cadence: {r.mode} · micro >= {_dur(r.micro_interval)} · digest {_dur(r.digest_interval)} or {r.digest_events} events",
+            last,
+            digest,
             "mode: read-only progress watcher; no prompts are injected into the agent",
         ]
         return "\n".join(lines)
 
-    def _watch_progress_renderable(self, st, d):
-        if not self._watch_mode:
+    def _watch_delta_text(self, st, d) -> str:
+        rows = [
+            "# cc-copilot watch delta",
+            f"- attached session: `{self._watch_subject()}`",
+            f"- new transcript events since last watch update: {d.new_events}",
+            f"- status: `{d.status_from or 'empty'}` -> `{d.status_to}`",
+            f"- safety: `{d.verdict_from or 'empty'}` -> `{d.verdict_to}`",
+            f"- current activity: {self._watch_current_activity(st)}",
+        ]
+        pending = getattr(st, "pending_tool", None)
+        if pending is not None:
+            rows.append(f"- in-flight tool: `{pending.tool_name or '?'}` [L{pending.line}]")
+        last = getattr(st, "last_record", None)
+        if last is not None and getattr(last, "line", 0):
+            text = _short_activity(getattr(last, "text", "") or getattr(last, "kind", ""), 180)
+            rows.append(f"- latest observed event: {text} [L{last.line}]")
+        for fc in d.new_changed[:5]:
+            rows.append(f"- changed file: `{fc.path}` ({fc.total} edit/write) [L{fc.last_line}]")
+        for f in d.new_failures[:3]:
+            target = f" on `{f.target}`" if getattr(f, "target", "") else ""
+            rows.append(f"- failure: `{f.tool}`{target} [L{f.line}]: {_short_activity(f.summary, 180)}")
+        return "\n".join(rows)
+
+    def _watch_high_risk(self, d) -> bool:
+        return bool(d.new_failures or d.status_to == "stalled"
+                    or d.verdict_to == "intervene")
+
+    def _watch_digest_evidence_line(self, st, d) -> str:
+        bits = []
+        if d.new_events:
+            bits.append(f"+{d.new_events} transcript events")
+        if d.status_from != d.status_to:
+            bits.append(f"status `{d.status_from or 'empty'}` -> `{d.status_to}`")
+        if d.verdict_from != d.verdict_to:
+            bits.append(f"safety `{d.verdict_from or 'empty'}` -> `{d.verdict_to}`")
+        pending = getattr(st, "pending_tool", None)
+        if pending is not None:
+            bits.append(f"in-flight `{pending.tool_name or '?'}` [L{pending.line}]")
+        if d.new_changed:
+            files = ", ".join(fc.path for fc in d.new_changed[:4])
+            extra = "" if len(d.new_changed) <= 4 else f", +{len(d.new_changed) - 4} more"
+            bits.append(f"changed {files}{extra} [L{d.new_changed[-1].last_line}]")
+        if d.new_failures:
+            f = d.new_failures[-1]
+            bits.append(f"{f.tool} failed [L{f.line}]: {_short_activity(f.summary, 140)}")
+        if not bits:
+            bits.append(self._watch_current_activity(st))
+        phase = self._watch_phase(st, d)
+        self._watch_run.phase = phase
+        return f"- phase `{phase}`: " + "; ".join(bits)
+
+    def _watch_phase(self, st, d=None) -> str:
+        if d is not None and self._watch_high_risk(d):
+            return "needs-attention"
+        pending = getattr(st, "pending_tool", None)
+        if pending is not None:
+            name = (pending.tool_name or "tool").strip().lower()
+            if name == "bash":
+                return "running-command"
+            if name in ("edit", "write", "multiedit"):
+                return "editing"
+            return f"running-{name}"
+        if getattr(st, "status", "") == "stalled":
+            return "stalled"
+        if getattr(st, "status", "") == "running":
+            return "running"
+        if getattr(st, "commands", None):
+            return "command-finished"
+        return getattr(st, "status", "") or "unknown"
+
+    def _watch_buffer_line(self, line: str) -> None:
+        line = " ".join(str(line or "").split())
+        if not line:
+            return
+        buf = self._watch_run.digest_buffer
+        if buf and buf[-1] == line:
+            return
+        buf.append(line)
+        if len(buf) > _WATCH_BUFFER_LIMIT:
+            del buf[:len(buf) - _WATCH_BUFFER_LIMIT]
+
+    def _watch_buffer_delta(self, st, d) -> None:
+        if not self._watch_mode or self._watch_run.paused:
+            return
+        self._watch_buffer_line(self._watch_digest_evidence_line(st, d))
+        self._watch_run.events_since_digest += max(0, int(d.new_events or 0))
+
+    def _watch_should_emit_micro(self, d, now=None) -> bool:
+        if not self._watch_mode or self._watch_run.paused:
+            return False
+        now = time.monotonic() if now is None else now
+        if self._watch_high_risk(d):
+            self._watch_run.last_alert_at = now
+            return True
+        if self._watch_run.mode == "quiet":
+            return False
+        return (not self._watch_run.last_micro_at
+                or now - self._watch_run.last_micro_at >= self._watch_run.micro_interval)
+
+    def _watch_digest_due(self, now=None) -> bool:
+        r = self._watch_run
+        if not r.active or r.paused or not r.digest_buffer:
+            return False
+        now = time.monotonic() if now is None else now
+        enough_time = bool(r.last_digest_at and now - r.last_digest_at >= r.digest_interval)
+        enough_events = r.events_since_digest >= r.digest_events
+        return enough_time or enough_events
+
+    def _watch_digest_text(self) -> str:
+        r = self._watch_run
+        elapsed = _dur(time.monotonic() - r.started_at) if r.started_at else "0s"
+        rows = [
+            "# cc-copilot watch digest buffer",
+            f"- attached session: `{self._watch_subject()}`",
+            f"- elapsed watch time: {elapsed}",
+            f"- current phase: `{r.phase or self._watch_phase(self.session.st)}`",
+            f"- current activity: {self._watch_current_activity()}",
+            f"- buffered events since last digest: {r.events_since_digest}",
+            "",
+            "## buffered watch evidence",
+        ]
+        rows.extend(r.digest_buffer)
+        return "\n".join(rows)
+
+    def _watch_fallback_digest_body(self) -> str:
+        items = self._watch_run.digest_buffer[-4:]
+        if not items:
+            return "No accumulated watch changes yet."
+        compact = "; ".join(_short_activity(x.lstrip("- "), 160) for x in items)
+        return "Recent watch evidence: " + compact
+
+    def _watch_fallback_renderable(self, st, d):
+        if not self._watch_mode or self._watch_run.paused:
             return None, "role-event"
-        high_risk = bool(d.new_failures or d.status_to == "stalled"
-                         or d.verdict_to == "intervene")
+        high_risk = self._watch_high_risk(d)
         meaningful = (high_risk or d.status_from != d.status_to
                       or d.verdict_from != d.verdict_to
                       or bool(d.new_changed) or bool(getattr(st, "pending_tool", None)))
@@ -2950,13 +3196,130 @@ class Cockpit(App):
         if plain == self._watch_last_summary:
             return None, cls
         self._watch_last_summary = plain
-        self._watch_last_emit_at = time.monotonic()
+        now = time.monotonic()
+        self._watch_run.last_micro_at = now
+        self._watch_last_emit_at = now
         return t, cls
+
+    def _watch_progress_changed(self, st, d) -> bool:
+        if not self._watch_mode or self._watch_run.paused:
+            return False
+        return (bool(d.new_failures) or d.status_from != d.status_to
+                or d.verdict_from != d.verdict_to or bool(d.new_changed)
+                or bool(getattr(st, "pending_tool", None)))
+
+    def _watch_render_narration(self, text: str, cls="role-event") -> None:
+        body = " ".join(str(text or "").split())
+        if not body:
+            return
+        plain = "watch copilot " + body
+        if plain == self._watch_last_summary:
+            return
+        self._watch_last_summary = plain
+        now = time.monotonic()
+        self._watch_run.last_micro_at = now
+        self._watch_last_emit_at = now
+        self._watch_buffer_line(f"- micro summary: {body}")
+        t = Text()
+        t.append("watch · copilot", style=_PAL["accent"])
+        t.append(" · ", style=_PAL["muted"])
+        t.append(body, style=_PAL["text"])
+        self._chat(self._role(t, cls))
+
+    def _watch_render_digest(self, text: str, cls="role-event") -> None:
+        body = " ".join(str(text or "").split())
+        if not body:
+            return
+        plain = "watch digest " + body
+        if plain == self._watch_last_summary:
+            return
+        now = time.monotonic()
+        self._watch_last_summary = plain
+        self._watch_last_emit_at = now
+        self._watch_run.last_digest_at = now
+        self._watch_run.events_since_digest = 0
+        self._watch_run.digest_buffer.clear()
+        t = Text()
+        t.append("watch · digest", style=_PAL["accent"])
+        t.append(" · ", style=_PAL["muted"])
+        t.append(body, style=_PAL["text"])
+        self._chat(self._role(t, cls))
+
+    @work(thread=True)
+    def _watch_narrate(self, delta_text, origin, cls="role-event"):
+        try:
+            out = N.watch_progress_brief(delta_text, model=self.model,
+                                         backend=self.backend)
+        except Exception as e:
+            out = f"(copilot watch summary unavailable: {e})"
+        self.call_from_thread(self._watch_narration_done, out, origin, cls)
+
+    def _watch_narration_done(self, out, origin, cls):
+        self._watch_narrating = False
+        sig, store = origin
+        if not self._watch_mode:
+            return
+        if self._evidence_sig() != sig or self.session.store is not store:
+            return
+        self._watch_render_narration(out, cls)
+        self._update_header()
+        self._update_status()
+
+    @work(thread=True)
+    def _watch_digest_narrate(self, digest_text, origin, cls="role-event"):
+        try:
+            out = N.watch_digest_brief(digest_text, model=self.model,
+                                       backend=self.backend)
+        except Exception as e:
+            out = f"(copilot watch digest unavailable: {e})"
+        self.call_from_thread(self._watch_digest_done, out, origin, cls)
+
+    def _watch_digest_done(self, out, origin, cls):
+        self._watch_narrating = False
+        sig, store = origin
+        if not self._watch_mode or self._watch_run.paused:
+            return
+        if self._evidence_sig() != sig or self.session.store is not store:
+            return
+        self._watch_render_digest(out, cls)
+        self._update_header()
+        self._update_status()
+
+    def _watch_emit_digest(self, manual=False) -> bool:
+        r = self._watch_run
+        if not r.active:
+            if manual:
+                self.notify("watch is off", severity="information")
+            return False
+        if r.paused:
+            if manual:
+                self.notify("watch is paused; run /watch to resume", severity="warning")
+            return False
+        if not r.digest_buffer:
+            if manual:
+                self._watch_render_digest("No accumulated watch changes yet.")
+            return False
+        if self._watch_narrating:
+            if manual:
+                self.notify("watch narration is already running", severity="information")
+            return False
+        if N.available(self.backend) and not self._busy:
+            self._watch_narrating = True
+            self._watch_digest_narrate(self._watch_digest_text(),
+                                       (self._evidence_sig(), self.session.store))
+        else:
+            self._watch_render_digest(self._watch_fallback_digest_body())
+        return True
 
     def action_watch(self, arg=""):
         arg = (arg or "").strip().lower()
         if arg in ("status", "state"):
             self._result(self._watch_status_body(), markdown=False, title="/watch status")
+            return
+        if arg in ("digest", "summary", "summarize"):
+            self._watch_emit_digest(manual=True)
+            self._update_header()
+            self._update_status()
             return
         if arg in ("stop", "off", "end"):
             if not self._watch_mode:
@@ -2964,6 +3327,8 @@ class Cockpit(App):
                 self._update_header()
                 return
             self._watch_mode = False
+            self._watch_run.digest_buffer.clear()
+            self._watch_run.events_since_digest = 0
             self._chat(self._role(Text("watch · stopped", style=_PAL["muted"]), "role-event"))
             if not self.alerts and self._watch_worker_started:
                 old_stop = self._watch_stop
@@ -2974,7 +3339,7 @@ class Cockpit(App):
             self._update_status()
             return
         if arg not in ("", "start", "on", "reset"):
-            self.notify("usage: /watch [stop|status]", severity="warning")
+            self.notify("usage: /watch [stop|status|digest|reset]", severity="warning")
             return
 
         self.session.refresh()
@@ -2988,7 +3353,14 @@ class Cockpit(App):
         if not self._watch_started_at or not reset:
             self._watch_started_at = now
         self._watch_last_emit_at = now
+        self._watch_run.paused = False
+        self._watch_run.pause_reason = ""
+        self._watch_run.last_micro_at = 0.0
+        self._watch_run.last_digest_at = now
+        self._watch_run.last_alert_at = 0.0
         self._watch_last_summary = ""
+        self._watch_run.digest_buffer.clear()
+        self._watch_run.events_since_digest = 0
         self._reset_watch_baseline()
         self._ensure_watch_worker()
         self._chat(self._role(self._watch_start_text(reset=reset), "role-event"))
@@ -3001,7 +3373,7 @@ class Cockpit(App):
         while not self._watch_stop.wait(self.poll):
             path = self.session.path
             if path != self._watch_path:
-                self._reset_watch_baseline()
+                self.call_from_thread(self._watch_scope_changed, "evidence changed")
                 continue
             try:
                 size = os.path.getsize(path)
@@ -3022,9 +3394,24 @@ class Cockpit(App):
         self.session.st = st
         self._update_header()
         self._update_status()
-        summary, cls = self._watch_progress_renderable(st, d)
-        if summary is not None:
-            self._chat(self._role(summary, cls))
+        if self._watch_progress_changed(st, d):
+            self._watch_buffer_delta(st, d)
+            cls = ("role-alert" if (d.new_failures or d.status_to == "stalled"
+                                    or d.verdict_to == "intervene")
+                   else "role-event")
+            if self._watch_should_emit_micro(d):
+                if (N.available(self.backend) and not self._busy
+                        and not self._watch_narrating):
+                    self._watch_narrating = True
+                    self._watch_run.last_micro_at = time.monotonic()
+                    self._watch_narrate(self._watch_delta_text(st, d),
+                                        (self._evidence_sig(), self.session.store), cls)
+                else:
+                    summary, cls = self._watch_fallback_renderable(st, d)
+                    if summary is not None:
+                        self._chat(self._role(summary, cls))
+            if self._watch_digest_due():
+                self._watch_emit_digest()
         if d.new_events or d.status_from != d.status_to or d.verdict_from != d.verdict_to:
             self._timeline(_timeline_delta_line(st, d))
             line = (_activity_line(st.last_record, _agent_hex(_agent_of(self.session)))
@@ -3072,7 +3459,7 @@ class Cockpit(App):
                 self.notify("no current Claude/Codex session detected",
                             severity="warning")
                 return
-            self._reset_watch_baseline()
+            self._watch_scope_changed("attached session changed")
             self._refresh_scope_view()
             self.notify("now observing your live session", severity="information")
             return
@@ -3097,6 +3484,7 @@ class Cockpit(App):
             if arg:
                 out = self.session.meta(cmd)
                 self.notify(str(out).splitlines()[0])
+                self._watch_scope_changed("evidence scope changed")
                 self._refresh_scope_view()
             else:
                 self.action_sessions()
@@ -3142,7 +3530,7 @@ class Cockpit(App):
         if low.startswith("/use"):
             out = self.session.meta(cmd)
             self.notify(str(out).splitlines()[0])
-            self._reset_watch_baseline()
+            self._watch_scope_changed("attached session changed")
             self._refresh_scope_view(); return
         if low == "/since" or low.startswith("/since "):
             if self._no_live():
@@ -3402,7 +3790,7 @@ class Cockpit(App):
         except ValueError as e:
             self.notify(str(e), severity="warning")
             return
-        self._reset_watch_baseline()
+        self._watch_scope_changed("evidence selection changed")
         self.sub_title = _sub_title(self.session)
         self._refresh_scope_view()
         self.notify(msg, severity="information")
@@ -3428,7 +3816,7 @@ class Cockpit(App):
             live = self.session.attach_conv(chosen)
             self._sync_prompt_history_from_session()
             self._rebuild_chat()
-            self._reset_watch_baseline()
+            self._watch_scope_changed("cockpit conversation changed")
             self.sub_title = chosen.conv_id[:8]
             self._refresh_scope_view()
             self.notify(("→ " if live else "history-only → ") + chosen.conv_id[:8],

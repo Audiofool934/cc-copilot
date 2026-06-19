@@ -76,6 +76,33 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertIn("just the blocker", prompt)
         self.assertIn("never invent facts", prompt)
 
+    def test_watch_progress_prompt_asks_for_process_not_event_log(self):
+        backend = CaptureBackend()
+
+        out = N.watch_progress_brief("# delta\n- Bash still running [L3]",
+                                     backend=backend)
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("WATCH DELTA", prompt)
+        self.assertIn("readable process update", prompt)
+        self.assertIn("not an event log", prompt)
+        self.assertIn("[L3]", prompt)
+
+    def test_watch_digest_prompt_asks_for_periodic_monitoring_digest(self):
+        backend = CaptureBackend()
+
+        out = N.watch_digest_brief("# buffer\n- pytest running [L8]",
+                                   backend=backend)
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("WATCH DIGEST BUFFER", prompt)
+        self.assertIn("monitoring digest", prompt)
+        self.assertIn("3-5 concise sentences", prompt)
+        self.assertIn("do not produce an event log", prompt.lower())
+        self.assertIn("[L8]", prompt)
+
     def test_empty_instruction_leaves_the_task_unchanged(self):
         self.assertEqual(N._with_instruction("BASE TASK", ""), "BASE TASK")
         self.assertEqual(N._with_instruction("BASE TASK", "   "), "BASE TASK")

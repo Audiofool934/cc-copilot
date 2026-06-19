@@ -228,6 +228,39 @@ def recap_since(since_text: str, model: str = None, backend=None,
                      model=model, backend=backend)
 
 
+_WATCH_PROGRESS_TASK = (
+    "The evidence below is a small WATCH DELTA from a coding-agent session that "
+    "the human asked cc-copilot to follow. Turn it into a readable process "
+    "update, not an event log. In 1-3 concise sentences, explain what appears "
+    "to be happening now, how the work progressed since the last watch update, "
+    "and whether anything needs attention. Use ONLY the cited evidence; keep "
+    "citations for observed facts. Do not list every file or event. Do not "
+    "recommend a new instruction unless the evidence shows a blocker/failure; "
+    "if there is a blocker, name it plainly."
+)
+
+
+def watch_progress_brief(delta_text: str, model: str = None, backend=None) -> str:
+    """Narrate a small watch delta into a process-oriented progress update."""
+    return run_brief(delta_text, _WATCH_PROGRESS_TASK, model=model, backend=backend)
+
+
+_WATCH_DIGEST_TASK = (
+    "The evidence below is an accumulated WATCH DIGEST BUFFER from a coding-agent "
+    "session that cc-copilot has been following after explicit human opt-in. "
+    "Write a readable monitoring digest in 3-5 concise sentences. Summarize the "
+    "phase of work, meaningful progress since the last digest, any failures or "
+    "retries, and whether the human needs to act now. Use ONLY the cited "
+    "evidence. Keep citations for observed facts. Do not produce an event log, "
+    "do not list every changed file, and do not invent percent complete."
+)
+
+
+def watch_digest_brief(buffer_text: str, model: str = None, backend=None) -> str:
+    """Narrate accumulated watch evidence into a periodic monitoring digest."""
+    return run_brief(buffer_text, _WATCH_DIGEST_TASK, model=model, backend=backend)
+
+
 _NEXT_STEP_TASK = (
     "The evidence below is the work this coding agent has just completed, plus "
     "its current status. The returning human wants to know what to do NEXT. "
