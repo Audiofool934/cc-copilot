@@ -63,6 +63,7 @@ class TestNewProviders(unittest.TestCase):
             "groq": "GROQ_API_KEY",
             "xai": "XAI_API_KEY",
             "gemini-api": "GEMINI_API_KEY",
+            "ollama-cloud": "OLLAMA_API_KEY",
         }
         for name, key_env in expect.items():
             self.assertIn(name, reg)
@@ -75,6 +76,14 @@ class TestNewProviders(unittest.TestCase):
             self.assertNotIn(name, M.CATALOG)
             self.assertIsNone(OB.choice_for_or_none(name))
             self.assertEqual(M.models_for(name), [])
+
+    def test_ollama_cloud_catalog(self):
+        self.assertEqual(M.default_for("ollama-cloud"), "glm-5.2")
+        ids = [m.id for m in M.models_for("ollama-cloud")]
+        self.assertIn("glm-5.2", ids)
+        self.assertIn("deepseek-v4-pro", ids)
+        self.assertNotIn("qwen3.5:397b", ids)
+        self.assertNotIn("qwen3.5", ids)
 
     def test_provider_refs_resolve(self):
         self.assertEqual(M.resolve_ref("openai/gpt-5.5"),

@@ -41,6 +41,31 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertNotIn("current brief", prompt.lower())
         self.assertNotIn("=== BRIEF", prompt)
 
+    def test_chat_prompt_guides_multi_session_answers_to_compare_sessions(self):
+        backend = CaptureBackend()
+
+        N.chat_brief("# cc-copilot evidence context\n"
+                     "scope: `multi-session`\n"
+                     "- evidence session(s): `a1b2c3d4`, `b5c6d7e8`\n",
+                     [], "where are we stuck?", backend=backend)
+
+        prompt = backend.prompts[0]
+        self.assertIn("Scope guidance", prompt)
+        self.assertIn("multiple agent sessions", prompt)
+        self.assertIn("Do not flatten them into one event stream", prompt)
+        self.assertIn("compare by session label", prompt)
+
+    def test_chat_prompt_guides_project_answers_to_decision_mode(self):
+        backend = CaptureBackend()
+
+        N.chat_brief("# cc-copilot evidence context\nscope: `project`\n",
+                     [], "what should I do?", backend=backend)
+
+        prompt = backend.prompts[0]
+        self.assertIn("project-wide evidence", prompt)
+        self.assertIn("cross-session risks", prompt)
+        self.assertIn("lead with the decision", prompt)
+
     def test_next_step_prompt_asks_for_the_next_step_grounded_in_evidence(self):
         backend = CaptureBackend()
 
@@ -102,6 +127,33 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertIn("3-5 concise sentences", prompt)
         self.assertIn("do not produce an event log", prompt.lower())
         self.assertIn("[L8]", prompt)
+
+    def test_watch_prompts_accept_instruction_like_now(self):
+        backend = CaptureBackend()
+
+        N.watch_progress_brief("# delta\n- Bash still running [L3]",
+                               backend=backend, instruction="in Chinese")
+        N.watch_digest_brief("# buffer\n- pytest running [L8]",
+                             backend=backend, instruction="in Chinese")
+
+        self.assertIn("instruction for how to answer", backend.prompts[0])
+        self.assertIn("in Chinese", backend.prompts[0])
+        self.assertIn("instruction for how to answer", backend.prompts[1])
+        self.assertIn("in Chinese", backend.prompts[1])
+
+    def test_watch_step_decision_prompt_is_machine_parseable(self):
+        backend = CaptureBackend()
+
+        out = N.watch_step_decision("# current\n- testing\n# delta\n- pytest failed [L8]",
+                                    backend=backend)
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("CURRENT WATCH STEP", prompt)
+        self.assertIn("NEW WATCH DELTA", prompt)
+        self.assertIn("action: same|new", prompt)
+        self.assertIn("title:", prompt)
+        self.assertIn("phase:", prompt)
 
     def test_empty_instruction_leaves_the_task_unchanged(self):
         self.assertEqual(N._with_instruction("BASE TASK", ""), "BASE TASK")

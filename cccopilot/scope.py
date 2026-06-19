@@ -112,7 +112,7 @@ def render_evidence(path: str, st=None, scope: str = SESSION,
     """
     sc = normalize(scope)
     if st is None and path and os.path.isfile(path):
-        st = S.build(SRC.parse(path))
+        st = S.cached_build(path, SRC.parse)
     if sc == SESSION:
         title = _session_title(st, None) if st is not None else "history-only session"
         text = B.render(st) if st is not None else _history_only(path)
@@ -338,7 +338,7 @@ def _candidate_refs(path: str, inject_current: bool = False) -> list:
     refs = [r for r in refs if not r.own or os.path.abspath(r.path) == here]
     if path and os.path.isfile(path) and not any(os.path.abspath(r.path) == here for r in refs):
         try:
-            st = S.build(SRC.parse(path))
+            st = S.cached_build(path, SRC.parse)
             sid = getattr(st.tr, "session_id", "") or os.path.basename(path)[:-6]
             refs.append(LOC.SessionRef(
                 path, sid, os.path.getmtime(path), os.path.getsize(path),
@@ -389,7 +389,7 @@ def _mark_current_session(refs: list, here: str, inject: bool = False) -> None:
     cur_src = SRC.source_for_path(cur_path)
     cur_sid = cur_src.current_session_id()
     try:
-        st = S.build(SRC.parse(cur_path))
+        st = S.cached_build(cur_path, SRC.parse)
         title = getattr(st.tr, "title", "") or ""
         cur_sid = cur_sid or getattr(st.tr, "session_id", "")
     except OSError:
@@ -411,7 +411,7 @@ def _session_items(path: str, current_st=None, selectors=None) -> list:
     for ref in refs:
         try:
             st = current_st if os.path.abspath(ref.path) == here and current_st is not None \
-                else S.build(SRC.parse(ref.path))
+                else S.cached_build(ref.path, SRC.parse)
             a = A.assess(st)
         except Exception:
             continue

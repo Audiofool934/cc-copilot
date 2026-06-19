@@ -750,9 +750,11 @@ def registry() -> dict:
         # it used to read CC_COPILOT_MODEL, which let a model picked for any
         # OTHER provider silently become ollama's default (cross-provider
         # contamination). Config `model = …` / --model still apply per call.
-        "ollama":     OpenAICompatBackend("ollama", "http://localhost:11434/v1/chat/completions",
-                                          "OLLAMA_API_KEY", MODELS.default_for("ollama"),
-                                          needs_key=False),
+        "ollama":       OpenAICompatBackend("ollama", "http://localhost:11434/v1/chat/completions",
+                                              "OLLAMA_API_KEY", MODELS.default_for("ollama"),
+                                              needs_key=False),
+        "ollama-cloud": OpenAICompatBackend("ollama-cloud", "https://ollama.com/v1/chat/completions",
+                                              "OLLAMA_API_KEY", MODELS.default_for("ollama-cloud")),
     }
     base = os.environ.get("CC_COPILOT_API_BASE", "").strip().rstrip("/")
     if base:

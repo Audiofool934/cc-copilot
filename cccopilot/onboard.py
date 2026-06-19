@@ -65,6 +65,7 @@ CHOICES = [
     _api("qwen", "Qwen (DashScope)", "DASHSCOPE_API_KEY"),
     _api("xai", "xAI Grok", "XAI_API_KEY"),
     _api("zai", "Z.ai GLM", "ZAI_API_KEY"),
+    _api("ollama-cloud", "Ollama Cloud", "OLLAMA_API_KEY"),
     Choice("", "Skip for now", "skip",
            "deterministic recaps only — set a model later with `cc-copilot init`"),
 ]
@@ -195,7 +196,7 @@ def render_config(backend, model="", env=None, history_enabled=True,
         "# recap / brief --narrate). The deterministic core needs none of this.",
         "",
         "# backend: claude | codex | openai | deepseek | openrouter | moonshot | qwen",
-        "#          zai | groq | xai | gemini-api | ollama | llm | gemini",
+        "#          zai | groq | xai | gemini-api | ollama | ollama-cloud | llm | gemini",
     ]
     if backend:
         lines.append(f'backend = "{_esc(backend)}"')
@@ -224,7 +225,7 @@ def render_config(backend, model="", env=None, history_enabled=True,
         if ex not in env:
             lines.append(f'# {ex} = "sk-..."')
     lines.append("# More provider keys: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, GROQ_API_KEY,")
-    lines.append("# XAI_API_KEY, GEMINI_API_KEY, ZAI_API_KEY.")
+    lines.append("# XAI_API_KEY, GEMINI_API_KEY, ZAI_API_KEY, OLLAMA_API_KEY.")
     lines += [
         "# Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):",
         "# CC_COPILOT_API_BASE = \"http://localhost:11434\"",

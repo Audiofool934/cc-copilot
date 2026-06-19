@@ -1040,7 +1040,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--narrate", action="store_true",
                     help="append an LLM narration grounded in the cited facts")
     sp.add_argument("--model", help="model for --narrate (passed to the backend)")
-    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
+    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…; see `backends`)")
     sp.set_defaults(func=cmd_brief)
 
     sp = sub.add_parser("backends", help="list LLM backends and their availability")
@@ -1085,7 +1085,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="deterministic next-step only — no LLM recommendation")
     sp.add_argument("--model", help="model for the recommendation (passed to the backend)")
     sp.add_argument("--backend",
-                    help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
+                    help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…; see `backends`)")
     sp.set_defaults(func=cmd_now)
 
     sp = sub.add_parser("goal",
@@ -1105,7 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="deterministic goal draft only — no LLM refinement")
     sp.add_argument("--model", help="model for the goal draft (passed to the backend)")
     sp.add_argument("--backend",
-                    help="LLM backend (claude/codex/deepseek/ollama/…; see `backends`)")
+                    help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…; see `backends`)")
     sp.set_defaults(func=cmd_goal)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
@@ -1113,7 +1113,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("question", help='e.g. "did it drift?" or "draft the next instruction"')
     sp.add_argument("--session", help="session id, prefix, or path (default: most recent)")
     sp.add_argument("--model", help="model passed to the LLM backend")
-    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/…)")
+    sp.add_argument("--backend", help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…)")
     scope_arg(sp)
     sp.set_defaults(func=cmd_ask, path=False)
 
@@ -1122,7 +1122,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("session", nargs="?",
                         help="session id, prefix, or path (default: most recent OTHER session)")
         sp.add_argument("--model", help="model passed to the LLM backend")
-        sp.add_argument("--backend", help="LLM backend (codex/claude/deepseek/ollama/…)")
+        sp.add_argument("--backend", help="LLM backend (codex/claude/deepseek/ollama/ollama-cloud/…)")
         sp.add_argument("--no-alerts", action="store_true",
                         help="disable the background stall/off-track alert thread")
         sp.add_argument("--no-persist", dest="persist", action="store_false", default=None,

@@ -18,7 +18,7 @@ from . import scope as SC, state as S, transcript as T, sources as SRC
 from .brief import _dur
 
 
-DEFAULT_CONTEXT_TOKENS = 60000
+DEFAULT_CONTEXT_TOKENS = 256000
 RECENT_TAIL_RECORDS = 14
 KEYWORD_MATCH_RECORDS = 18
 LINE_WINDOW_RADIUS = 1
@@ -205,7 +205,7 @@ def _sources(path: str, st, scope: str, sessions) -> list:
     for ref in SC.resolve_session_refs(path, SC.parse_selectors(sessions)):
         try:
             rst = st if here and os.path.abspath(ref.path) == here and st is not None \
-                else S.build(SRC.parse(ref.path))
+                else S.cached_build(ref.path, SRC.parse)
         except Exception:
             continue
         out.append(_source(ref.path, rst, ref.session_id))
@@ -216,7 +216,7 @@ def _load_current(path: str, st) -> Optional[_Source]:
     if st is None:
         if not path or not os.path.isfile(path):
             return None
-        st = S.build(SRC.parse(path))
+        st = S.cached_build(path, SRC.parse)
     sid = getattr(st.tr, "session_id", "") or (os.path.basename(path or "")[:-6])
     return _source(path, st, sid)
 

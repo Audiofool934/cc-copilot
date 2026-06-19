@@ -220,6 +220,13 @@ class TestOpenAICompat(unittest.TestCase):
         self.assertFalse(be.available())
         self.assertRaises(BK.BackendError, be.complete, "hi")
 
+    def test_ollama_cloud_backend(self):
+        be = BK.registry()["ollama-cloud"]
+        self.assertIsInstance(be, BK.OpenAICompatBackend)
+        self.assertEqual(be.endpoint, "https://ollama.com/v1/chat/completions")
+        self.assertEqual(be.key_env, "OLLAMA_API_KEY")
+        self.assertTrue(be.needs_key)
+
     def test_no_key_endpoint_health_reports_connection_failure(self):
         be = BK.OpenAICompatBackend("t", "http://127.0.0.1:9/v1/chat/completions",
                                     "NOKEY", "m", needs_key=False)

@@ -11,7 +11,7 @@ _VARS = ("CC_COPILOT_CONFIG", "CC_COPILOT_NO_ONBOARD", "CC_COPILOT_BACKEND",
          "CC_COPILOT_MODEL", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
          "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY",
          "DASHSCOPE_API_KEY", "DASHSCOPE_API_BASE", "GROQ_API_KEY",
-         "XAI_API_KEY", "GEMINI_API_KEY")
+         "XAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY")
 
 
 class _Base(unittest.TestCase):
@@ -68,7 +68,7 @@ class TestDetect(_Base):
         self.assertEqual(labels, [
             "Claude", "Codex", "DeepSeek", "Gemini API", "Groq",
             "Moonshot Kimi", "OpenAI", "OpenRouter", "Qwen (DashScope)",
-            "xAI Grok", "Z.ai GLM", "Skip for now",
+            "xAI Grok", "Z.ai GLM", "Ollama Cloud", "Skip for now",
         ])
 
     def test_key_provider_brand_colors(self):
@@ -84,6 +84,20 @@ class TestWriteChoice(_Base):
         self.assertEqual(data.get("backend"), "openai")
         self.assertEqual(data.get("model"), "gpt-4o")
         self.assertEqual(data["env"]["OPENAI_API_KEY"], "sk-secret")
+
+    def test_ollama_cloud_key_capture_persists_and_applies(self):
+        # mirrors the cockpit's /model -> KeyPrompt -> _finish_api_switch path:
+        # write_choice persists backend+model+key (0600), apply_to_env makes the
+        # running process pick it up immediately.
+        OB.write_choice("ollama-cloud", model="glm-5.2", key_value="oll-secret")
+        data = CFG._load_simple(self.p)
+        self.assertEqual(data.get("backend"), "ollama-cloud")
+        self.assertEqual(data.get("model"), "glm-5.2")
+        self.assertEqual(data["env"]["OLLAMA_API_KEY"], "oll-secret")
+        OB.apply_to_env("ollama-cloud", model="glm-5.2", key_value="oll-secret")
+        self.assertEqual(os.environ.get("CC_COPILOT_BACKEND"), "ollama-cloud")
+        self.assertEqual(os.environ.get("OLLAMA_API_KEY"), "oll-secret")
+        self.assertEqual(os.environ.get("CC_COPILOT_MODEL"), "glm-5.2")
 
     def test_skip_comments_out_backend(self):
         OB.write_choice("skip")
@@ -163,6 +177,7 @@ class TestChoiceFor(_Base):
         self.assertEqual(OB.choice_for_or_none("claude").kind, "cli")
         # …while non-curated backends and skip/empty return None (no key logic).
         self.assertIsNone(OB.choice_for_or_none("ollama"))
+        self.assertEqual(OB.choice_for_or_none("ollama-cloud").kind, "api")
         self.assertIsNone(OB.choice_for_or_none("gemini"))
         self.assertIsNone(OB.choice_for_or_none("skip"))
         self.assertIsNone(OB.choice_for_or_none(""))

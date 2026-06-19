@@ -7,8 +7,10 @@ from) so a brief can cite its sources and a human can re-verify.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections import OrderedDict
 from typing import Optional
 
 from .transcript import Transcript, Record, MUTATING_TOOLS, READONLY_TOOLS
@@ -18,6 +20,8 @@ from .transcript import Transcript, Record, MUTATING_TOOLS, READONLY_TOOLS
 # (crashed, was killed, or is genuinely stuck), which is what a returning human
 # most needs flagged.
 STUCK_SECONDS = 180
+_CACHE_MAX = 128
+_STATE_CACHE = OrderedDict()
 
 
 def _short(s: str, n: int = 200) -> str:
@@ -266,6 +270,43 @@ def build(tr: Transcript, intent_window: int = 3, agent_tail: int = 3) -> State:
             break  # the turn aborted — the prior tool_call is no longer pending
 
     return st
+
+
+def cached_build(path: str, parse_fn, intent_window: int = 3,
+                 agent_tail: int = 3) -> State:
+    """Build a :class:`State` for a transcript path with stat-based reuse.
+
+    Multi-session/project views often inspect the same sibling transcripts on
+    every poll. Parsing is deterministic, so path + size + mtime_ns is a strong
+    invalidation key and avoids repeatedly folding unchanged JSONL files.
+    """
+    p = os.path.abspath(path or "")
+    try:
+        stt = os.stat(p)
+    except OSError:
+        # Preserve the pre-cache semantics for callers/tests that provide a
+        # virtual parse_fn. Real missing files still fail when parse_fn reads.
+        tr = parse_fn(p)
+        return (build(tr) if (intent_window, agent_tail) == (3, 3)
+                else build(tr, intent_window=intent_window, agent_tail=agent_tail))
+    sig = (stt.st_size, getattr(stt, "st_mtime_ns", int(stt.st_mtime * 1e9)))
+    hit = _STATE_CACHE.get(p)
+    if hit is not None and hit[0] == sig:
+        _STATE_CACHE.move_to_end(p)
+        return hit[1]
+    tr = parse_fn(p)
+    state = (build(tr) if (intent_window, agent_tail) == (3, 3)
+             else build(tr, intent_window=intent_window, agent_tail=agent_tail))
+    _STATE_CACHE[p] = (sig, state)
+    _STATE_CACHE.move_to_end(p)
+    while len(_STATE_CACHE) > _CACHE_MAX:
+        _STATE_CACHE.popitem(last=False)
+    return state
+
+
+def clear_cache() -> None:
+    """Test/diagnostic hook for the transcript state cache."""
+    _STATE_CACHE.clear()
 
 
 def _input_path(inp: dict) -> str:

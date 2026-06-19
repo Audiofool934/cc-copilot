@@ -108,6 +108,13 @@ CATALOG = {
         ModelInfo("qwen3", "strong local all-rounder"),
         ModelInfo("gemma3", "best single-GPU quality"),
     ],
+    "ollama-cloud": [
+        ModelInfo("glm-5.2", "flagship general — recommended; browse more at ollama.com/search?c=cloud"),
+        ModelInfo("deepseek-v4-pro", "flagship reasoning"),
+        ModelInfo("deepseek-v4-flash", "cheap and fast"),
+        ModelInfo("kimi-k2.7-code", "coding"),
+        ModelInfo("gemma4:31b", "Google open model"),
+    ],
 }
 
 
@@ -130,6 +137,7 @@ _REF_BACKEND_ALIASES = {
     "gemini": "gemini-api",
     "gemini-api": "gemini-api",
     "ollama": "ollama",
+    "ollama-cloud": "ollama-cloud",
 }
 
 # Backends whose model ids commonly contain provider/model slashes. While one of

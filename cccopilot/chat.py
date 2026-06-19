@@ -20,7 +20,7 @@ import threading
 from . import (sources as SRC, state as S, brief as B, assess as A,
                narrate as N, locate as LOC, store as ST, scope as SC,
                observe as O, context as EC, lastlook as LL, since as SI,
-               handoff as HO, collide as CD)
+               handoff as HO, collide as CD, scope_groups as SG)
 
 _GLYPH = {"running": "🟢", "stalled": "🔴", "awaiting-agent": "🟡",
           "idle": "⚪", "empty": "∅"}
@@ -337,7 +337,7 @@ def _subagent_rollup(paths) -> str:
     counts, needy = {}, 0
     for p in shown:
         try:
-            cst = S.build(SRC.parse(p))
+            cst = S.cached_build(p, SRC.parse)
         except OSError:
             continue
         counts[cst.status] = counts.get(cst.status, 0) + 1
@@ -401,7 +401,7 @@ class ChatSession:
         self.last_size = size
         self.prev = self.st
         try:
-            self.st = S.build(SRC.parse(self.path))
+            self.st = S.cached_build(self.path, SRC.parse)
         except OSError:                    # transcript gone — stay in history-only mode
             self.st = None
             return False
@@ -561,6 +561,27 @@ class ChatSession:
                     f"  {question}")
         return f"unknown command {cmd!r} — try /help"
 
+    def _scope_groups_text(self) -> str:
+        groups = SG.list_groups()
+        if not groups:
+            return "saved scope groups: none\nusage: /scope save <name>"
+        rows = ["saved scope groups:"]
+        for g in groups:
+            sel = f":{len(g.scope_sessions)}" if g.scope_sessions else ""
+            rows.append(f"  {g.name} → {g.scope}{sel}")
+        rows.append("usage: /scope load <name>  ·  /scope delete <name>")
+        return "\n".join(rows)
+
+    def _apply_scope_group(self, group) -> None:
+        self.scope = group.scope
+        if self.scope == SC.SESSION:
+            self.scope_sessions = []
+        elif group.scope_sessions:
+            self.set_scope_sessions(group.scope_sessions)
+        else:
+            self.scope_sessions = []
+        self._persist_state()
+
     def _scope(self, arg):
         if not arg:
             selected = ("selected sessions: " + ", ".join(s[:8] for s in self.scope_sessions)
@@ -569,8 +590,44 @@ class ChatSession:
                     + selected + "\n"
                     "available: session, multi-session, project\n"
                     "usage: /scope <session|multi-session|project> [session-id|prefix ...]\n"
-                    "       /scope all   # clear the selected subset")
+                    "       /scope all   # clear the selected subset\n"
+                    "       /scope save|load|delete <name>  ·  /scope groups")
         toks = arg.split()
+        sub = toks[0].lower() if toks else ""
+        if sub in ("groups", "list", "ls"):
+            return self._scope_groups_text()
+        if sub == "save":
+            if len(toks) < 2:
+                return "usage: /scope save <name>"
+            try:
+                g = SG.save(toks[1], self.scope, self.scope_sessions)
+            except ValueError as e:
+                return str(e)
+            sel = f":{len(g.scope_sessions)}" if g.scope_sessions else ""
+            return f"saved scope group {g.name} → {g.scope}{sel}"
+        if sub in ("load", "use"):
+            if len(toks) < 2:
+                return "usage: /scope load <name>"
+            try:
+                g = SG.get(toks[1])
+            except ValueError as e:
+                return str(e)
+            if g is None:
+                return f"no saved scope group {toks[1]!r}"
+            try:
+                self._apply_scope_group(g)
+            except ValueError as e:
+                return str(e)
+            return f"scope group {g.name} → {self.scope_label()}\n{self.banner()}"
+        if sub in ("delete", "del", "rm"):
+            if len(toks) < 2:
+                return "usage: /scope delete <name>"
+            try:
+                ok = SG.delete(toks[1])
+            except ValueError as e:
+                return str(e)
+            return (f"deleted scope group {toks[1]}"
+                    if ok else f"no saved scope group {toks[1]!r}")
         if len(toks) == 1 and toks[0].lower() in ("all", "*", "clear", "reset"):
             self.scope_sessions = []
             self._persist_state()
@@ -974,7 +1031,7 @@ class ChatSession:
                 continue
             self._alert_size = size
             try:
-                st = S.build(SRC.parse(self.path))
+                st = S.cached_build(self.path, SRC.parse)
             except Exception:
                 continue
             msg = _fmt_alert(S.diff(self._alert_state, st))

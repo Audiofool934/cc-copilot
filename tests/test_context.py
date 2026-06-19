@@ -7,6 +7,22 @@ from tests.util import asst, result, tool, user, write
 
 
 class TestEvidenceContext(unittest.TestCase):
+    def test_default_context_budget_is_256k_and_env_can_override(self):
+        p = write([user("task", 60), asst("done", 5)])
+        st = S.build(T.parse(p))
+        old = os.environ.get("CC_COPILOT_CONTEXT_TOKENS")
+        try:
+            os.environ.pop("CC_COPILOT_CONTEXT_TOKENS", None)
+            self.assertEqual(EC.build(p, st, "session").stats.budget_tokens, 256000)
+
+            os.environ["CC_COPILOT_CONTEXT_TOKENS"] = "128000"
+            self.assertEqual(EC.build(p, st, "session").stats.budget_tokens, 128000)
+        finally:
+            if old is None:
+                os.environ.pop("CC_COPILOT_CONTEXT_TOKENS", None)
+            else:
+                os.environ["CC_COPILOT_CONTEXT_TOKENS"] = old
+
     def test_keyword_retrieval_includes_full_raw_assistant_message(self):
         long_table = (
             "overnight funnel results:\n"

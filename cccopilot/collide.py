@@ -103,7 +103,7 @@ def collisions(cwd: str, window_seconds: float = COLLISION_WINDOW_SECONDS,
         if now - r.mtime > window_seconds:
             continue
         try:
-            st = S.build(SRC.parse(r.path))
+            st = S.cached_build(r.path, SRC.parse)
         except OSError:
             continue
         items.append((r.session_id, r.agent, st))
@@ -113,7 +113,7 @@ def collisions(cwd: str, window_seconds: float = COLLISION_WINDOW_SECONDS,
         if r.agent == "claude":
             for cp in LOC.subagent_paths(r.path):
                 try:
-                    cst = S.build(SRC.parse(cp))
+                    cst = S.cached_build(cp, SRC.parse)
                 except OSError:
                     continue
                 csid = os.path.basename(cp)

@@ -1,5 +1,96 @@
 # Changelog
 
+## Unreleased
+
+## 0.28.0 — 2026-06-19
+
+**The cockpit composer now has `@` scope mentions.** Typing `@` offers
+`@session`, `@sessions`, and `@project`; accepting one switches the evidence
+scope or opens the existing sessions picker without sending a chat prompt.
+Saved scope groups created with `/scope save <name>` also appear as `@name`.
+
+**Multi-session chat now makes its scope visible and answerable.** Ordinary chat
+turns get a lightweight `evidence · ...` marker, and multi-session/project
+answers are prompted to compare by session/project area, call out blockers and
+risks, and lead with the next decision instead of flattening logs.
+
+**Multi-session activity now has tabs.** The activity panel keeps an `all`
+overview, but empty-input `Tab` / `Shift+Tab` now switches into independent
+per-session activity views. Live updates in a different session rebuild the
+current tab instead of appending foreign lines into the active session view.
+
+**Multi-session scopes can be saved.** `/scope save <name>`, `/scope load
+<name>`, `/scope groups`, and `/scope delete <name>` persist reusable evidence
+groups in the cc-copilot state dir. They affect only what cc-copilot reads.
+
+**Multi-session parsing is cached by transcript stat.** Shared context, observe,
+fleet, collision, watch, and TUI scope views reuse unchanged parsed state by
+path/size/mtime, reducing repeated JSONL folding in project and multi-session
+views.
+
+**The default copilot evidence window is now 256k.** cc-copilot's local context
+packing budget moves from 60k to 256k tokens by default, while
+`CC_COPILOT_CONTEXT_TOKENS` still overrides it for smaller or larger model
+windows.
+
+**Ollama Cloud is available as a first-class backend.** `ollama-cloud` uses the
+OpenAI-compatible Ollama Cloud endpoint with `OLLAMA_API_KEY`, appears in
+onboarding, and ships with a curated cloud model list.
+
+**`/watch` is moving to an automatic observer loop.** Digests are now triggered
+by the loop itself through event thresholds, cadence, phase changes, completion,
+or queued work after copilot becomes idle; `/watch refresh` remains as a force
+refresh path, while `/watch digest` is kept only as a compatibility alias.
+
+**Watch is promoted to a core cockpit loop.** `/watch` is now presented beside
+`/goal` and `/now` as a primary supervision workflow, while still requiring
+explicit opt-in before any automatic digest loop starts.
+
+**Watch has an in-place monitor surface.** A clickable watch dock now lives below
+the prompt box: off starts watch, on opens `/watch view`, and paused resumes on
+the current scope. `/watch view` swaps the main chat area for a read-only monitor
+while keeping session activity above it, with phase, current activity, auto
+digest, attention, recent watch updates, and an `Esc` return path.
+
+**Watch monitor is step-based.** The monitor now renders a single watch step card
+at a time. It follows the latest step by default, `Left` browses older steps,
+and `Right` moves forward until it returns to latest/follow mode.
+
+**Watch steps can be cut semantically by copilot.** When a model backend is
+available, cc-copilot asks for a small step-boundary decision (`same` vs `new`)
+from the new watch delta and current step card. If that decision is unavailable
+or unparsable, the deterministic phase/attention/completion fallback still runs.
+
+**Watch no longer leaves process history piled in chat.** Runtime watch
+micro-updates and digests are now treated as ephemeral chat output. `/watch stop`
+prunes those process messages and leaves one compact stopped summary, while
+`/watch view` remains the step-level review surface.
+
+**Watch now understands multi-session scopes.** Starting `/watch` from
+`multi-session` or `project` scope builds per-transcript baselines for the
+selected live sessions, labels process updates by session, and feeds those
+targeted deltas into the same step monitor and digest loop. Changing the selected
+scope still pauses watch and requires an explicit `/watch` to resume.
+
+**Watch monitor separates sessions.** Multi-session/project watch keeps
+one watch run, but the monitor no longer mixes session progress into one step
+stream. `Tab` / `Shift+Tab` switches sessions, and `Left` / `Right` browses
+steps only within the selected session.
+
+**Watch monitor rendering is lighter.** The monitor now skips no-op repaints and
+only refreshes elapsed-time polish on a low-frequency bucket. Wider-scope
+activity/header refreshes are also throttled instead of reparsing every selected
+session on every poll, so leaving `/watch view` open in multi-session scope
+should not churn the TUI while nothing changed.
+
+**`/watch` accepts light presets.** Similar to `/now in spanish`, `/watch 中文`
+or `/watch english` stores a watch instruction and threads it into copilot-written
+watch summaries and digests.
+
+**Prompt-area HUD is less crowded.** The attached-session HUD now stays focused
+on the evidence target for the next prompt; watch state lives in the watch dock
+instead of sharing the attached-session line.
+
 ## 0.27.0 — 2026-06-19
 
 **Attached-session HUD now leads with the session title.** The prompt-area HUD

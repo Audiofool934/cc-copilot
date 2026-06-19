@@ -240,9 +240,35 @@ _WATCH_PROGRESS_TASK = (
 )
 
 
-def watch_progress_brief(delta_text: str, model: str = None, backend=None) -> str:
+def watch_progress_brief(delta_text: str, model: str = None, backend=None,
+                         instruction: str = "") -> str:
     """Narrate a small watch delta into a process-oriented progress update."""
-    return run_brief(delta_text, _WATCH_PROGRESS_TASK, model=model, backend=backend)
+    return run_brief(delta_text, _with_instruction(_WATCH_PROGRESS_TASK, instruction),
+                     model=model, backend=backend)
+
+
+_WATCH_STEP_DECISION_TASK = (
+    "The evidence below contains the CURRENT WATCH STEP and a NEW WATCH DELTA "
+    "from a coding-agent session. Decide whether the new delta belongs on the "
+    "current step card or should start a new semantic step. Prefer SAME when the "
+    "agent is continuing the same unit of work, even if raw status labels change. "
+    "Use NEW only for a meaningful shift in intent or work phase: starting a new "
+    "implementation area, moving from editing to verification, switching from "
+    "verification to fixing failures, reaching completion, or needing human "
+    "attention. Return exactly these machine-readable lines and nothing else:\n"
+    "action: same|new\n"
+    "title: short human title, 2-7 words\n"
+    "phase: planning|editing|building|testing|debugging|reviewing|blocked|complete|running|other\n"
+    "reason: short reason for the boundary decision\n"
+    "attention: none or short attention note"
+)
+
+
+def watch_step_decision(step_text: str, model: str = None, backend=None,
+                        instruction: str = "") -> str:
+    """Decide whether a watch delta starts a new semantic monitor step."""
+    return run_brief(step_text, _with_instruction(_WATCH_STEP_DECISION_TASK, instruction),
+                     model=model, backend=backend)
 
 
 _WATCH_DIGEST_TASK = (
@@ -256,9 +282,11 @@ _WATCH_DIGEST_TASK = (
 )
 
 
-def watch_digest_brief(buffer_text: str, model: str = None, backend=None) -> str:
+def watch_digest_brief(buffer_text: str, model: str = None, backend=None,
+                       instruction: str = "") -> str:
     """Narrate accumulated watch evidence into a periodic monitoring digest."""
-    return run_brief(buffer_text, _WATCH_DIGEST_TASK, model=model, backend=backend)
+    return run_brief(buffer_text, _with_instruction(_WATCH_DIGEST_TASK, instruction),
+                     model=model, backend=backend)
 
 
 _NEXT_STEP_TASK = (
@@ -372,16 +400,42 @@ def chat(state, history, question: str, model: str = None, backend=None) -> str:
     return chat_brief(render(state), history, question, model=model, backend=backend)
 
 
-def _chat_task(history, question: str) -> str:
+def _scope_guidance(brief_text: str) -> str:
+    text = str(brief_text or "")
+    if "scope: `multi-session`" in text or "multi-session evidence context" in text:
+        return (
+            "Scope guidance: this answer is grounded in multiple agent sessions. "
+            "Do not flatten them into one event stream. When more than one "
+            "session matters, compare by session label, call out blockers/risks "
+            "and ownership, and lead with the decision the human can make next. "
+            "Keep citations attached to each session-specific claim."
+        )
+    if "scope: `project`" in text:
+        return (
+            "Scope guidance: this answer is grounded in project-wide evidence. "
+            "Use session facts, git/project facts, and file excerpts together. "
+            "Group claims by session or project area when useful, call out "
+            "cross-session risks, and lead with the decision the human can make "
+            "next. Keep citations on observed facts."
+        )
+    return ""
+
+
+def _chat_task(history, question: str, brief_text: str = "") -> str:
     convo = ""
     if history:
         convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
                  "continuity, but the current evidence context above is the "
                  "source of new observed facts):\n"
                  + _history_by_budget(history) + "\n\n")
-    return (convo + 'Current question from the returning human: "'
+    scope = _scope_guidance(brief_text)
+    if scope:
+        scope += "\n\n"
+    return (convo
+            + 'Current question from the returning human: "'
             + question.strip() + '"\n'
-            "Answer as cc-copilot. Use the current evidence context for "
+            + scope
+            + "Answer as cc-copilot. Use the current evidence context for "
             "observed facts and keep citations. Synthesize or recommend when "
             "grounded; label inference. If the answer needs unavailable "
             "evidence, name what is missing.")
@@ -396,11 +450,12 @@ def chat_brief(brief_text: str, history, question: str, model: str = None, backe
     treated as fresh evidence — so a later answer cannot launder an un-cited
     claim from an earlier one.
     """
-    return run_brief(brief_text, _chat_task(history, question), model=model, backend=backend)
+    return run_brief(brief_text, _chat_task(history, question, brief_text),
+                     model=model, backend=backend)
 
 
 def chat_brief_stream(brief_text: str, history, question: str, model: str = None,
                       backend=None) -> StreamHandle:
     """Streaming :func:`chat_brief` — identical grounding, chunked delivery."""
-    return run_brief_stream(brief_text, _chat_task(history, question),
+    return run_brief_stream(brief_text, _chat_task(history, question, brief_text),
                             model=model, backend=backend)

@@ -64,20 +64,33 @@ updates.
 
 The user must explicitly start it:
 
-- `/watch` starts watching the currently attached live session.
+- `/watch` starts watching the currently attached live session. In
+  `multi-session` or `project` evidence scope, it watches the selected live
+  session transcripts in that scope and labels each update by session.
+- `/watch <preset>` starts watch with a light narration steer, for example
+  `/watch 中文`, `/watch english`, or a short free-text instruction.
 - `/watch stop` exits watch mode.
+- `/watch view` opens the read-only watch monitor in the main TUI, replacing the
+  chat area while preserving session activity above it.
+- In the monitor, `Left` browses the previous watch step and `Right` moves
+  forward; reaching the latest step resumes follow-latest mode.
+- `/watch refresh` forces a monitor refresh; normal digests are automatic.
 - `/watch status` reports scope, elapsed time, last update, next digest, and
   whether model narration is active.
-- Future auto-watch behavior must be a separate opt-in setting or command, never
+- Future auto-start behavior must be a separate opt-in setting or command, never
   implied by opening the TUI.
 
 The watched scope must remain visible:
 
-- HUD: `watch:on`, elapsed time, watched title/session, last update age.
+- Attached-session HUD: evidence target only, so the next prompt's context is
+  readable at a glance.
+- Watch dock: `off` / `on` / `paused`, phase, queued digest, and attention state.
 - If the attached session or evidence store changes, watch should pause or reset
   visibly instead of silently narrating a new target.
-- Multi-session watch should remain explicit; the first implementation should
-  prefer one attached session.
+- Multi-session/project watch should name the selected session count and keep
+  per-session boundaries visible in updates and digest evidence.
+- Changing the selected scope still pauses watch. Resuming on the new scope
+  requires another explicit `/watch`, which rebuilds baselines for that scope.
 
 ## Three Lanes
 
@@ -152,6 +165,7 @@ Default cadence should avoid spam:
 - Micro update no more than once every 20-45 seconds unless an alert fires.
 - Digest every 3-5 minutes, or after a larger event threshold such as 20-40 new
   transcript events.
+- Digest automatically on meaningful phase boundaries and completion.
 - Heartbeat after a long quiet period, for example 5-10 minutes, only if the
   watched task is still running.
 - Alert immediately for failures, stalls, `intervene`, or human-input waits.
@@ -200,23 +214,51 @@ change occurred, suppress the digest or emit a short heartbeat instead.
 
 Entering watch should make the TUI feel different without taking control away:
 
-- HUD shows watch state above the prompt box near attached sessions.
-- Chat receives marked watch updates, but watch updates should be visually
-  distinguishable from assistant answers.
-- A future dedicated watch panel can replace the current activity-first view while
-  watch mode is active:
+- The attached-session HUD stays focused on evidence scope, not process state.
+- A one-line watch dock below the prompt box is clickable: off starts watch,
+  on opens the monitor, paused resumes on the current scope.
+- Chat can receive marked watch updates while watch is active, but they are
+  ephemeral process output. When watch stops, chat is pruned back to a compact
+  end summary; the monitor keeps the step-level record.
+- `/watch view` opens an in-place watch monitor below the session activity panel.
+  It has a top menu with `Esc` return, `Left` / `Right` step navigation,
+  session tabs for multi-session/project watch, `/watch refresh`, and
+  `/watch stop`.
 
 ```text
-WATCH · <session title> · 18m · last 32s · next digest 2m
-Phase: testing
-Latest: pytest is still running against parser changes.
-Digest: Since the last check, the agent finished edits, started verification,
+watch monitor · session 2/3 <session title> · step 4/4 · latest · 18m
+PHASE
+testing · active · 2m
+NOW
+pytest is still running against parser changes.
+AUTO DIGEST
+Since the last check, the agent finished edits, started verification,
 and is waiting on the test run. No human action yet.
-Needs attention: none
+ATTENTION
+none
 ```
 
-The first implementation can stay in chat + HUD, but the state model should not
-assume chat is the only long-term surface.
+The monitor is a consumption surface, not a separate page. The session activity
+timeline remains visible above it, and `Shift+Up` / `Shift+Down` keep resizing
+that activity panel. It reads the same watch state that chat/HUD use; it does
+not parse transcripts independently.
+
+Watch steps are coarse semantic cards, not raw log rows. When a model backend is
+available, cc-copilot asks for a small machine-readable boundary decision from
+the current step plus the new delta: `same` updates the current card, while `new`
+starts a named semantic step. If that model decision is unavailable or cannot be
+parsed, deterministic fallback creates steps from explicit watch start, phase
+changes, completion, and attention/pause events. Digests and micro summaries
+update the current latest step instead of creating a new page every time.
+
+For multi-session/project scope, each transcript has an independent baseline.
+Changed sessions feed into the same watch loop as target-labeled deltas, so the
+monitor can summarize a cross-session run without flattening away which agent
+session produced the evidence. The monitor does not mix those deltas into one
+view: `Tab` / `Shift+Tab` switches sessions, while `Left` / `Right` browses
+steps only within the selected session. Global watch events such as start/pause
+may appear across session views, but session progress remains separated by
+target.
 
 ## Opt-In And Safety
 
@@ -226,6 +268,10 @@ Watch must be boringly explicit:
 - Stopping watch is always available and cheap.
 - Model narration is shown as `watch · copilot`.
 - Fallback summaries are shown as deterministic watch updates.
+- Digests run automatically after explicit `/watch`; the user should not have to
+  remember a manual digest command during normal use.
+- Watch process output should not pile up in the normal chat history after
+  `/watch stop`; persistent review belongs in `/watch view`.
 - No watched-agent prompt injection.
 - No notifications unless `watch --notify` or a future explicit setting enables
   them.
@@ -257,14 +303,15 @@ back deterministically when the model is unavailable or busy.
 
 ### Slice 3: Rolling Digest
 
-Add digest accumulation and a digest renderer. The first digest can be manual
-with `/watch digest`; then enable timed digest once tests prove it does not spam.
+Add digest accumulation and a digest renderer. Digests are loop-driven by event
+thresholds, elapsed cadence, phase changes, and completion. `/watch refresh` is
+a force-refresh/debug path, not the main user workflow.
 
 ### Slice 4: Watch TUI Surface
 
-Add a compact watch status block or mode-specific HUD line. Do not remove the
-activity panel; instead, make it clear which text is raw activity and which text
-is copilot interpretation.
+Add a compact watch dock under the prompt box and an in-place monitor pane.
+Do not remove the activity panel; instead, make it clear which text is raw
+activity and which text is copilot interpretation.
 
 ### Slice 5: Configurable Modes
 
@@ -295,4 +342,3 @@ Before shipping the long-watch version:
 - Unit tests cover model summary and deterministic fallback.
 - TUI tests cover HUD/watch markers and rendered watch updates.
 - Full suite passes.
-

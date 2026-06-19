@@ -26,7 +26,7 @@ TEMPLATE = '''\
 
 # Default backend:
 # codex | claude | openai | deepseek | openrouter | moonshot | qwen | zai
-# groq | xai | gemini-api | ollama | gemini | llm
+# groq | xai | gemini-api | ollama | ollama-cloud | gemini | llm
 backend = "codex"
 
 # Default model for that backend (optional — omit to use the backend's own default)
@@ -39,7 +39,7 @@ backend = "codex"
 # OPENAI_API_KEY = "sk-..."
 # OPENROUTER_API_KEY = "sk-..."
 # More providers: MOONSHOT_API_KEY, DASHSCOPE_API_KEY, GROQ_API_KEY,
-# XAI_API_KEY, GEMINI_API_KEY, ZAI_API_KEY.
+# XAI_API_KEY, GEMINI_API_KEY, ZAI_API_KEY, OLLAMA_API_KEY.
 # Any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, a proxy, …):
 # CC_COPILOT_API_BASE = "http://localhost:11434"
 # CC_COPILOT_API_KEY = "..."

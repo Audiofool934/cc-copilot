@@ -96,6 +96,23 @@ class TestReplMetaCommands(unittest.TestCase):
         s = self._sess()
         self.assertIn("agent sessions", s.meta("/sessions"))
 
+    def test_scope_groups_save_load_list_delete(self):
+        s = self._sess()
+        self.assertIn("scope → project", s.meta("/scope project"))
+        self.assertIn("saved scope group release → project",
+                      s.meta("/scope save release"))
+        self.assertIn("release → project", s.meta("/scope groups"))
+
+        self.assertIn("scope → session", s.meta("/scope session"))
+        self.assertEqual(s.scope, "session")
+
+        out = s.meta("/scope load release")
+        self.assertIn("scope group release → project", out)
+        self.assertEqual(s.scope, "project")
+
+        self.assertIn("deleted scope group release", s.meta("/scope delete release"))
+        self.assertIn("no saved scope group", s.meta("/scope load release"))
+
     def test_goal_without_backend_returns_paste_ready_deterministic_goal(self):
         from cccopilot import narrate as N
         real_avail = N.available

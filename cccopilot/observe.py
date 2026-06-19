@@ -39,7 +39,7 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     """Build a ranked, deterministic attention model for a scope."""
     sc = SC.normalize(scope)
     if st is None and path and os.path.isfile(path):
-        st = S.build(SRC.parse(path))
+        st = S.cached_build(path, SRC.parse)
     root = _project_root(path, st)
 
     if sc == SC.SESSION:
@@ -54,7 +54,7 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     for ref in refs:
         try:
             cur = (st if st is not None and os.path.abspath(ref.path) == here
-                   else S.build(SRC.parse(ref.path)))
+                   else S.cached_build(ref.path, SRC.parse))
             items.append(_item(ref, cur))
         except Exception:
             continue

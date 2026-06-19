@@ -63,9 +63,13 @@ Inside the cockpit:
 ```text
 /sessions   choose one or more agent sessions (incl. your own live session)
 /here       observe the session you're running inside of
+@session    scope the next answers to the current session
+@sessions   open the session picker for selected-session evidence
+@project    scope answers to project evidence
+@release    load a saved scope group (created with `/scope save release`)
 /target     show the current cockpit target (id, evidence session, scope)
 /status     fleet board — every session in this project, neediest first
-/watch      process watch for the attached session; `/watch digest` summarizes recent progress
+/watch      core observer loop; `/watch 中文` steers output; `/watch view` monitor
 /observe    attention queue and next human decision
 /now        recommend the next step from the completed work (LLM; deterministic fallback)
 /since      recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
@@ -204,6 +208,10 @@ cc-copilot ask --scope multi --scope-sessions a1b2c3d4,b5c53c29 "compare these"
 cc-copilot observe --scope project
 ```
 
+In the cockpit, save a reusable evidence group with `/scope save release`,
+review groups with `/scope groups`, and load one with `/scope load release` or
+the composer shortcut `@release`.
+
 Session discovery spans every coding agent with sessions on this machine:
 
 ```text
@@ -239,9 +247,17 @@ It gives you:
   split across raw transcript, project facts, chat, memory, and summary index.
 - Attached-sessions HUD immediately above the composer, so you can see whether
   the next prompt is grounded in one session, selected sessions, or the project.
-- `/watch` mode for long-running agent work: it follows transcript growth,
-  writes copilot process summaries plus periodic digests in chat, and stays
-  read-only.
+- Composer `@` scope picker: `@session`, `@sessions`, `@project`, and saved
+  groups such as `@release` switch the evidence scope without going through the
+  full picker.
+- Core `/watch` observer loop for long-running agent work: it follows transcript
+  growth, runs automatic copilot summaries/digests, accepts light presets such
+  as `/watch 中文`, opens the in-place semantic step monitor with `/watch view`,
+  and stays read-only. In multi-session/project scope it watches the selected
+  live transcripts and labels updates by session. The monitor keeps separate
+  session views, with `Tab` switching sessions and `←` / `→` browsing steps
+  inside the selected session. Watch process updates are pruned from chat on
+  stop, leaving a compact end summary and the full step record in the monitor.
 - Background alerts when the agent stalls, errors, or goes off track.
 - Checkbox session picker with `[ ]` / `[x]` multi-select.
 - Resumable Cockpit Sessions via `/resume`.
@@ -328,6 +344,7 @@ Supported backend families:
 | `xai` | `XAI_API_KEY` | Grok (`grok-4.3`) |
 | `gemini-api` | `GEMINI_API_KEY` | Google's OpenAI-compat endpoint (≠ the `gemini` CLI) |
 | `ollama` | none | local server at `http://localhost:11434` |
+| `ollama-cloud` | `OLLAMA_API_KEY` | Ollama Cloud at `https://ollama.com` |
 | `custom` | `CC_COPILOT_API_BASE` or `CC_COPILOT_LLM_CMD` | proxy/API/CLI escape hatch |
 
 Each API provider ships a small **curated model list** (see `cc-copilot backends
