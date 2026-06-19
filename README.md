@@ -65,6 +65,7 @@ Inside the cockpit:
 /here       observe the session you're running inside of
 /target     show the current cockpit target (id, evidence session, scope)
 /status     fleet board — every session in this project, neediest first
+/watch      follow the attached session's progress until `/watch stop`
 /observe    attention queue and next human decision
 /now        recommend the next step from the completed work (LLM; deterministic fallback)
 /since      recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
@@ -238,6 +239,8 @@ It gives you:
   split across raw transcript, project facts, chat, memory, and summary index.
 - Attached-sessions HUD immediately above the composer, so you can see whether
   the next prompt is grounded in one session, selected sessions, or the project.
+- `/watch` mode for long-running agent work: it follows transcript growth,
+  summarizes meaningful progress in chat, and stays read-only.
 - Background alerts when the agent stalls, errors, or goes off track.
 - Checkbox session picker with `[ ]` / `[x]` multi-select.
 - Resumable Cockpit Sessions via `/resume`.

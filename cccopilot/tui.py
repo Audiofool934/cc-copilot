@@ -188,6 +188,7 @@ _HELP_TEXT = (
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /status                 fleet board — every session, neediest first\n"
+    "  /watch                  follow this session's progress until /watch stop\n"
     "  /sessions  /here         choose evidence session(s) · watch your own live one\n"
     "  /target                 show the current cockpit target (id · evidence · scope)\n"
     "  /resume                 resume a cockpit session\n"
@@ -220,6 +221,7 @@ _SLASH_CMDS = [
     ("/check", "safety / off-track verdict (LLM-free)", False),
     ("/diff", "what changed since your last turn", False),
     ("/status", "fleet board — every session in this project, neediest first", False),
+    ("/watch", "follow this session's progress until /watch stop", False),
     ("/sessions", "choose one or more evidence sessions", False),
     ("/use", "change evidence session by number / id", True),
     ("/here", "observe your own current (live) session", False),
@@ -263,6 +265,7 @@ _TIPS = [
     "/observe surfaces the next human decision waiting on you",
     "/brief recaps with sources, no LLM, no guessing",
     "/diff shows what changed since your last turn",
+    "/watch follows a long-running agent task and calls out changes",
     "Read-only: the cockpit never writes to the agent or transcript",
     "/sessions picks which session(s) the cockpit watches",
     "/use <n|id> switches the watched session by number or id",
@@ -1427,6 +1430,11 @@ class Cockpit(App):
         self._watch_path = None
         self._watch_size = -1
         self._watch_state = None
+        self._watch_worker_started = False
+        self._watch_mode = False
+        self._watch_started_at = 0.0
+        self._watch_last_emit_at = 0.0
+        self._watch_last_summary = ""
         self._timeline_sig = None       # evidence identity of the last rebuild
 
     # ---- prompt history (composer ↑/↓, terminal-style) ----
@@ -1562,7 +1570,7 @@ class Cockpit(App):
         self.set_interval(0.12, self._tick_busy, name="busy-spinner")
         self.set_interval(self.poll, self._tick_refresh, name="auto-refresh")
         if self.alerts:
-            self.watch_agent()
+            self._ensure_watch_worker()
         # first launch (no config yet, no explicit --backend): greet with the
         # model picker over the dimmed cockpit. Deferred so the cockpit paints
         # behind it first.
@@ -1806,6 +1814,8 @@ class Cockpit(App):
         yield SystemCommand("Diff", "What changed since last turn", self.action_diff)
         yield SystemCommand("Status", "Fleet board — every session in this project, neediest first",
                             self.action_status)
+        yield SystemCommand("Watch", "Follow this session's progress until /watch stop",
+                            self.action_watch)
         yield SystemCommand("Evidence", "Choose one or more agent sessions",
                             self.action_sessions)
         yield SystemCommand("Target", "Show the current cockpit target", self.action_target)
@@ -2155,11 +2165,13 @@ class Cockpit(App):
             _append_attached_chip(t, ag, sid, _session_title(st) if st is not None else "")
             if st is None:
                 t.append(" · history-only · transcript gone", style=_PAL["warning"])
+                self._append_watch_hud(t)
                 return t
             a = A.assess(st)
             t.append(f" · {st.status}", style="bold")
             t.append(f" · {a.verdict}", style=_VERDICT_HEX.get(a.verdict, _PAL["muted"]))
             t.append(f" · idle {_dur(st.idle_seconds)}", style=_PAL["muted"])
+            self._append_watch_hud(t)
             return t
 
         items = snap.get("items", [])
@@ -2169,9 +2181,11 @@ class Cockpit(App):
         t.append(f" · {_selection_label(self.session, snap)}", style=_PAL["text"])
         if snap.get("error"):
             t.append(f" · {snap['error']}", style=_PAL["warning"])
+            self._append_watch_hud(t)
             return t
         if not items:
             t.append(" · no live evidence sessions", style=_PAL["warning"])
+            self._append_watch_hud(t)
             return t
         for ref, rst, _a in items[:3]:
             t.append(" · ", style=_PAL["muted"])
@@ -2183,7 +2197,16 @@ class Cockpit(App):
         bits = _health_bits(items)[:3]
         if bits:
             t.append(" · " + " · ".join(bits), style=_PAL["muted"])
+        self._append_watch_hud(t)
         return t
+
+    def _append_watch_hud(self, t: Text) -> None:
+        if not self._watch_mode:
+            return
+        t.append(" · watch:on", style=_PAL["accent"])
+        if self._watch_last_emit_at:
+            age = max(0, int(time.monotonic() - self._watch_last_emit_at))
+            t.append(f" · update {_dur(age)} ago", style=_PAL["muted"])
 
     def _update_session_hud(self, snap=None) -> None:
         hud = self._session_hud()
@@ -2831,10 +2854,146 @@ class Cockpit(App):
         self._drain_msg_queue()         # a message queued during /since sends now
 
     # ---- background watcher ----
+    def _ensure_watch_worker(self):
+        if self._watch_worker_started:
+            return
+        self._watch_worker_started = True
+        self.watch_agent()
+
     def _reset_watch_baseline(self):
         self._watch_path = self.session.path
         self._watch_size = self.session.last_size
         self._watch_state = self.session.st
+
+    def _watch_subject(self) -> str:
+        st = self.session.st
+        return f"{_agent_of(self.session)}:{_sid(st=st, path=self.session.path)}"
+
+    def _watch_current_activity(self, st=None) -> str:
+        st = self.session.st if st is None else st
+        if st is None:
+            return "history-only; transcript unavailable"
+        pending = getattr(st, "pending_tool", None)
+        if pending is not None:
+            target = _short_activity(_tool_activity_target(pending), 90)
+            return (pending.tool_name or "tool") + (" running: " + target if target else " running")
+        if getattr(st, "commands", None):
+            cmd = _short_activity(st.commands[-1].cmd, 90)
+            return f"latest command: {cmd}" if cmd else st.status
+        return f"{st.status} · idle {_dur(st.idle_seconds)}"
+
+    def _watch_start_text(self, reset=False) -> Text:
+        t = Text()
+        t.append("watch · ", style=_PAL["muted"])
+        if reset:
+            t.append("baseline reset", style=_PAL["accent"])
+        else:
+            t.append("Night gathers, and now my watch begins.", style=_PAL["accent"])
+        t.append(f" · {self._watch_subject()}", style=_PAL["muted"])
+        t.append(f" · {self._watch_current_activity()}", style=_PAL["text"])
+        return t
+
+    def _watch_status_body(self) -> str:
+        state = "on" if self._watch_mode else "off"
+        since = ""
+        if self._watch_mode and self._watch_started_at:
+            since = f" · for {_dur(time.monotonic() - self._watch_started_at)}"
+        lines = [
+            f"watch: {state}{since}",
+            f"attached: {self._watch_subject()}",
+            f"current: {self._watch_current_activity()}",
+            "mode: read-only progress watcher; no prompts are injected into the agent",
+        ]
+        return "\n".join(lines)
+
+    def _watch_progress_renderable(self, st, d):
+        if not self._watch_mode:
+            return None, "role-event"
+        high_risk = bool(d.new_failures or d.status_to == "stalled"
+                         or d.verdict_to == "intervene")
+        meaningful = (high_risk or d.status_from != d.status_to
+                      or d.verdict_from != d.verdict_to
+                      or bool(d.new_changed) or bool(getattr(st, "pending_tool", None)))
+        if not meaningful:
+            return None, "role-event"
+
+        t = Text()
+        t.append("watch · ", style=_PAL["muted"])
+        if high_risk:
+            t.append("needs attention", style=_PAL["error"])
+            cls = "role-alert"
+        else:
+            t.append("progress", style=_PAL["accent"])
+            cls = "role-event"
+        if d.new_events:
+            t.append(f" · +{d.new_events} ev", style=_PAL["muted"])
+        if d.status_from != d.status_to:
+            t.append(f" · {d.status_from or 'empty'} -> {d.status_to}",
+                     style=_PAL["secondary"])
+        if d.verdict_from != d.verdict_to:
+            t.append(f" · safety {d.verdict_from or 'empty'} -> {d.verdict_to}",
+                     style=_VERDICT_HEX.get(d.verdict_to, _PAL["muted"]))
+        pending = getattr(st, "pending_tool", None)
+        if pending is not None:
+            t.append(f" · {self._watch_current_activity(st)}", style=_PAL["text"])
+        if d.new_changed:
+            files = ", ".join(fc.path for fc in d.new_changed[:3])
+            extra = "" if len(d.new_changed) <= 3 else f", +{len(d.new_changed) - 3} more"
+            t.append(f" · changed: {files}{extra}", style=_PAL["success"])
+        if d.new_failures:
+            f = d.new_failures[-1]
+            t.append(f" · {f.tool} failed [L{f.line}]", style=_PAL["error"])
+            if f.summary:
+                t.append(": " + _short_activity(f.summary, 90), style=_PAL["text"])
+
+        plain = " ".join(t.plain.split())
+        if plain == self._watch_last_summary:
+            return None, cls
+        self._watch_last_summary = plain
+        self._watch_last_emit_at = time.monotonic()
+        return t, cls
+
+    def action_watch(self, arg=""):
+        arg = (arg or "").strip().lower()
+        if arg in ("status", "state"):
+            self._result(self._watch_status_body(), markdown=False, title="/watch status")
+            return
+        if arg in ("stop", "off", "end"):
+            if not self._watch_mode:
+                self.notify("watch is already off", severity="information")
+                self._update_header()
+                return
+            self._watch_mode = False
+            self._chat(self._role(Text("watch · stopped", style=_PAL["muted"]), "role-event"))
+            if not self.alerts and self._watch_worker_started:
+                old_stop = self._watch_stop
+                self._watch_stop = threading.Event()
+                self._watch_worker_started = False
+                old_stop.set()
+            self._update_header()
+            self._update_status()
+            return
+        if arg not in ("", "start", "on", "reset"):
+            self.notify("usage: /watch [stop|status]", severity="warning")
+            return
+
+        self.session.refresh()
+        if self.session.st is None:
+            self.notify("history-only view — /sessions to attach a live session",
+                        severity="warning")
+            return
+        reset = self._watch_mode or arg == "reset"
+        self._watch_mode = True
+        now = time.monotonic()
+        if not self._watch_started_at or not reset:
+            self._watch_started_at = now
+        self._watch_last_emit_at = now
+        self._watch_last_summary = ""
+        self._reset_watch_baseline()
+        self._ensure_watch_worker()
+        self._chat(self._role(self._watch_start_text(reset=reset), "role-event"))
+        self._update_header()
+        self._update_status()
 
     @work(thread=True, exclusive=True, group="watch")
     def watch_agent(self):
@@ -2863,6 +3022,9 @@ class Cockpit(App):
         self.session.st = st
         self._update_header()
         self._update_status()
+        summary, cls = self._watch_progress_renderable(st, d)
+        if summary is not None:
+            self._chat(self._role(summary, cls))
         if d.new_events or d.status_from != d.status_to or d.verdict_from != d.verdict_to:
             self._timeline(_timeline_delta_line(st, d))
             line = (_activity_line(st.last_record, _agent_hex(_agent_of(self.session)))
@@ -2899,6 +3061,8 @@ class Cockpit(App):
             self.action_diff(); return
         if low == "/status":
             self.action_status(); return
+        if low == "/watch" or low.startswith("/watch "):
+            self.action_watch(cmd.strip()[6:].strip()); return
         if low == "/sessions":
             self.action_sessions(); return
         if low == "/target":

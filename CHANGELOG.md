@@ -1,11 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.26.0 — 2026-06-19
 
 **Attached sessions are visible above the prompt box.** The cockpit now shows a
 compact `attached session(s)` HUD line directly above the composer, summarizing
 the active single session, selected multi-session set, or project scope before
 you send a prompt. The full picker stays under `/sessions`.
+
+**`/watch` turns the cockpit into a progress watcher.** Start `/watch` after
+kicking off long-running agent work and the cockpit follows the attached session,
+adds a `watch:on` marker to the HUD, and writes compact progress / blocker
+summaries into chat as the transcript grows. `/watch stop` exits the mode and
+`/watch status` reports the current baseline. The first watch begins with the
+small vow: "Night gathers, and now my watch begins."
 
 ## 0.25.0 — 2026-06-15
 

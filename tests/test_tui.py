@@ -1727,6 +1727,59 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app._watch_path, b)
         self.assertIs(app._watch_state, app.session.st)
 
+    async def test_watch_command_marks_hud_and_quotes_vow(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/watch")
+            await pilot.pause()
+            hud = str(app.query_one("#session-hud", Static).content)
+            chat = "\n".join(str(getattr(s, "content", "") or "")
+                             for s in app.query("#chat Static"))
+
+        self.assertTrue(app._watch_mode)
+        self.assertIn("watch:on", hud)
+        self.assertIn("Night gathers, and now my watch begins.", chat)
+
+    async def test_watch_stop_clears_hud_marker(self):
+        from textual.widgets import Static
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/watch")
+            await pilot.pause()
+            app._meta("/watch stop")
+            await pilot.pause()
+            hud = str(app.query_one("#session-hud", Static).content)
+
+        self.assertFalse(app._watch_mode)
+        self.assertNotIn("watch:on", hud)
+
+    async def test_watch_progress_summary_surfaces_failures(self):
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._meta("/watch")
+            await pilot.pause()
+            old = app._watch_state
+            with open(sess.path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
+                fh.write(json.dumps(result("t1", "assertion failed", is_error=True, ago=3)) + "\n")
+            st = tui.S.build(tui.SRC.parse(sess.path))
+            app._on_watch(st, tui.S.diff(old, st))
+            await pilot.pause()
+            alerts = [w for w in app.query_one("#chat").children
+                      if "role-alert" in w.classes]
+            rendered = "\n".join(str(w.render()) for w in alerts)
+
+        self.assertIn("watch", rendered)
+        self.assertIn("needs attention", rendered)
+        self.assertIn("Bash failed", rendered)
+
     async def test_busy_tick_advances_only_while_busy(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
