@@ -320,6 +320,11 @@ primary evidence first:
 - git/file evidence
 - cockpit conversation memory
 
+Each model context also includes a compact **Target Context** card: cc-copilot's
+role as a read-only supervisor, the active scope, the target agent/session(s),
+whether bounded project facts are included, and the boundary that the copilot
+has no hidden agent context, no tool access, and does not inject prompts.
+
 Summaries still exist, but they are navigation aids and UI surfaces, not the
 only source of truth. See [docs/evidence-context-engine.md](docs/evidence-context-engine.md).
 
@@ -360,7 +365,12 @@ and typed fast-paths work too: `/model deepseek-v4-pro` (model only),
 Answers **stream** as the model produces them (claude: token deltas; the HTTP
 backends: SSE; codex: whole message + exact usage), and when the backend
 reports exact token usage it replaces the HUD's `~` estimate — including the
-turn's real cost for claude. `CC_COPILOT_STREAM=0` opts out of streaming.
+turn's real cost for claude and cache-hit tokens when the provider reports them.
+The OpenAI backend sends a stable `prompt_cache_key` to improve prompt-cache
+routing, and cc-copilot keeps stable task instructions before the evidence pack
+while leaving the current question/steer after the evidence for recency.
+DeepSeek/OpenAI cache usage is shown as `cache …` in the HUD. `CC_COPILOT_STREAM=0`
+opts out of streaming.
 
 Set defaults once — the guided way (pick a model, capture an API key):
 

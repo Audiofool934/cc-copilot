@@ -82,6 +82,25 @@ The promise is complete observable context, not complete hidden agent context.
    project facts, cockpit chat, summary index, output tokens, and total context
    window usage.
 
+6. **Target awareness**
+   Include a compact Target Context section in every model context. It tells the
+   model that cc-copilot is a read-only supervisor, not the target agent; names
+   the active scope and target session(s); states whether bounded project facts
+   are included; and repeats the boundary that there is no hidden agent context,
+   no tool access, and no prompt injection into the target.
+
+7. **Cache-aware model input**
+   Provider prompt caches reward repeated exact prefixes. cc-copilot therefore
+   keeps the global narration contract stable, sends OpenAI's `prompt_cache_key`
+   on the direct OpenAI backend, and surfaces provider-reported cache-hit tokens
+   in the HUD. Stable task contracts are placed before the evidence pack so
+   repeated `/now`, `/watch`, `/goal`, `/loop`, and chat calls can share a longer
+   cacheable prefix. Current-turn details such as the user's question, slash
+   command steering, and prior cockpit turns stay after the evidence pack so
+   recency and multi-turn UX are preserved. More aggressive prompt reordering is
+   a separate quality tradeoff: raw cited evidence still leads the evidence pack
+   so answer grounding is not weakened just to chase cache hits.
+
 ## Architecture
 
 ```text

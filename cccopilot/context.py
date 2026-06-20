@@ -88,7 +88,8 @@ def estimate_tokens(text: str) -> int:
 
 
 def format_hud(stats: ContextStats, output_tokens: int = None,
-               out_exact: bool = False, cost_usd: float = None) -> str:
+               out_exact: bool = False, cost_usd: float = None,
+               cached_tokens: int = 0) -> str:
     """Compact context usage line for TUI/CLI surfaces.
 
     ``out_exact`` means ``output_tokens`` is backend-reported, not the local
@@ -105,6 +106,8 @@ def format_hud(stats: ContextStats, output_tokens: int = None,
     if output_tokens is not None:
         mark = "" if out_exact else "~"
         parts.insert(1, f"out {mark}{_tok(output_tokens)}")
+    if cached_tokens:
+        parts.append(f"cache {_tok(cached_tokens)}")
     if cost_usd is not None:
         parts.append("$<0.01" if 0 < cost_usd < 0.005 else f"${cost_usd:.2f}")
     if stats.truncated:
@@ -158,7 +161,8 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
     index_text = _render_summary_index(path, st, sc, selectors)
     memory = _render_memory(memory_text)
     chat_text = _render_chat_history(history, max_chars=chat_history_budget_chars(max_tokens))
-    status_text = _render_status(path, st, sc, selectors, sources, terms, selected)
+    status_text = _render_status(path, st, sc, selectors, sources, terms, selected,
+                                 project_context=project_context)
 
     stats = ContextStats(
         budget_tokens=max_tokens,
@@ -752,14 +756,72 @@ def _render_summary_index(path: str, st, scope: str, selectors: list) -> str:
             "when raw transcript evidence is available.\n\n" + ev.text)
 
 
+def _agent_name(path: str) -> str:
+    try:
+        return SRC.source_for_path(path).name
+    except Exception:
+        return "agent"
+
+
+def _target_title(st) -> str:
+    tr = getattr(st, "tr", None)
+    return _clip_project_line(getattr(tr, "title", "") or "", limit=80)
+
+
+def _target_line(src: _Source) -> str:
+    st = src.st
+    sid = (src.session_id or os.path.basename(src.path or "")[:-6] or src.label)[:8]
+    agent = _agent_name(src.path)
+    if st is None:
+        return f"`{agent}` session `{sid}` unavailable/history-only"
+    title = _target_title(st)
+    status = getattr(st, "status", "") or "unknown"
+    cwd = getattr(st.tr, "cwd", "") or "?"
+    parts = [f"`{agent}` session `{sid}`", f"status `{status}`"]
+    if title:
+        parts.append(f"title `{title}`")
+    parts.append(f"cwd `{cwd}`")
+    return " · ".join(parts)
+
+
+def _render_target_context(path: str, st, scope: str, selectors: list,
+                           sources: list, project_context: bool) -> list:
+    rows = ["## Target Context",
+            "- copilot role: read-only supervisor; not the target agent",
+            f"- target scope: `{scope}`"
+            + (f" · selected sessions: {', '.join(selectors)}" if selectors else ""),
+            "- target boundary: observes transcript evidence and bounded project facts; "
+            "no hidden agent context, no tool access, no prompt injection"]
+    rows.append("- project context: "
+                + ("bounded read-only facts included" if project_context else "not included"))
+    if sources:
+        if scope == SC.SESSION:
+            rows.append(f"- target session: {_target_line(sources[0])}")
+        else:
+            rows.append(f"- target sessions: {len(sources)}")
+            for src in sources[:6]:
+                rows.append(f"  - {_target_line(src)}")
+            if len(sources) > 6:
+                rows.append(f"  - ...and {len(sources) - 6} more")
+    elif path:
+        agent = _agent_name(path)
+        rows.append(f"- target transcript: `{agent}` `{path}` unavailable/history-only")
+    else:
+        rows.append("- target session: unavailable")
+    rows.append("")
+    return rows
+
+
 def _render_status(path: str, st, scope: str, selectors: list, sources: list,
-                   terms: list, selected: dict) -> str:
+                   terms: list, selected: dict, project_context: bool = True) -> str:
     rows = ["# cc-copilot evidence context",
             "coverage: primary transcript records + read-only project facts; summaries are indexes.",
             f"scope: `{scope}`" + (f" · selected sessions: {', '.join(selectors)}" if selectors else ""),
             f"retrieval: {len(selected)} raw record(s) from {sum(len(s.records) for s in sources)} candidate record(s)"
             + (f" · terms: {', '.join(terms)}" if terms else ""),
             ""]
+    rows.extend(_render_target_context(path, st, scope, selectors, sources,
+                                       project_context))
     if scope != SC.SESSION:
         rows.append("## Current Status Facts")
         if sources:

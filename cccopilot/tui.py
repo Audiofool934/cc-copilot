@@ -3252,9 +3252,12 @@ class Cockpit(App):
                 (" · " + " · ".join(hud_parts)) if hud_parts else "")
             hud_sty = _PAL["accent"]
         elif self._ctx_stats is not None:
+            cached = (getattr(self.session.last_usage, "cached_tokens", 0)
+                      if self.session.last_usage is not None else 0)
             hud_str = EC.format_hud(self._ctx_stats, self._out_tokens,
                                     out_exact=self._out_exact,
-                                    cost_usd=self._last_cost)
+                                    cost_usd=self._last_cost,
+                                    cached_tokens=cached)
             hud_parts, hud_sty = hud_str.split(" · "), _PAL["muted"]
         else:
             hud_str, hud_parts, hud_sty = "", [], _PAL["muted"]

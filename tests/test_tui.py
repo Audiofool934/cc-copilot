@@ -1243,9 +1243,10 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         """In a narrow sidebar the status bar stacks into rows instead of cropping
         — every datum that's on the wide single line survives into the narrow
         stack (the user's hard requirement: all details stay visible)."""
-        from cccopilot import context as EC, assess as A
+        from cccopilot import context as EC, assess as A, backends as BK
         sess = self._session("sess-A")
         sess.model = "gpt-5"
+        sess.last_usage = BK.Usage(1200, 300, cached_tokens=512)
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test(size=(120, 26)) as pilot:
             await pilot.pause()
@@ -1268,7 +1269,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             # the HUD parts (split from EC.format_hud) are the easiest to lose.
             data = ["copilot codex:gpt-5", "claude session", "idle", verdict,
                     "ctx ~1.2k / 200k", "out ~300", "raw 1.1k", "project 4k",
-                    "chat 800", "memory 120", "index 90", "trimmed"]
+                    "chat 800", "memory 120", "index 90", "cache 512", "trimmed"]
             for tok in data:
                 self.assertIn(tok, wide, f"{tok} missing from wide line")
                 self.assertIn(tok, narrow, f"{tok} dropped when narrow")

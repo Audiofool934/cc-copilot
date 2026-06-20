@@ -215,6 +215,65 @@ class TestOpenAICompat(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_openai_backend_adds_prompt_cache_key(self):
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                seen.update(json.loads(self.rfile.read(n)))
+                out = {"choices": [{"message": {"content": "ok"}}],
+                       "usage": {"prompt_tokens": 20, "completion_tokens": 2,
+                                 "prompt_tokens_details": {"cached_tokens": 8}}}
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(out).encode())
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            be = BK.OpenAICompatBackend("openai", f"http://127.0.0.1:{port}/chat/completions",
+                                        "NOKEY", "gpt-test", needs_key=False)
+            self.assertEqual(be.complete("hello"), "ok")
+            self.assertEqual(seen["prompt_cache_key"], "cc-copilot:gpt-test")
+            self.assertEqual(be.last_usage.cached_tokens, 8)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_non_openai_backend_does_not_send_prompt_cache_key(self):
+        seen = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                seen.update(json.loads(self.rfile.read(n)))
+                out = {"choices": [{"message": {"content": "ok"}}]}
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(out).encode())
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            be = BK.OpenAICompatBackend("deepseek", f"http://127.0.0.1:{port}/chat/completions",
+                                        "NOKEY", "deepseek-test", needs_key=False)
+            self.assertEqual(be.complete("hello"), "ok")
+            self.assertNotIn("prompt_cache_key", seen)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
     def test_missing_key_raises(self):
         be = BK.OpenAICompatBackend("t", "http://x/chat/completions", "DEFINITELY_UNSET_KEY", "m")
         self.assertFalse(be.available())

@@ -52,8 +52,25 @@ class TestEvidenceContext(unittest.TestCase):
         ctx = EC.build(p, st, "session", question="what happened?")
         self.assertTrue(ctx.text.lstrip().startswith("## Primary Raw Transcript Evidence"))
         raw_i = ctx.text.index("## Primary Raw Transcript Evidence")
+        target_i = ctx.text.index("## Target Context")
         status_i = ctx.text.index("## Current Status Facts")
+        self.assertLess(raw_i, target_i)
+        self.assertLess(target_i, status_i)
         self.assertLess(raw_i, status_i)
+
+    def test_target_context_names_supervisor_boundary_and_target(self):
+        p = write([user("task", 60), asst("done", 5)])
+        st = S.build(T.parse(p))
+
+        ctx = EC.build(p, st, "session", question="what happened?",
+                       project_context=False)
+
+        self.assertIn("## Target Context", ctx.text)
+        self.assertIn("copilot role: read-only supervisor; not the target agent", ctx.text)
+        self.assertIn("target scope: `session`", ctx.text)
+        self.assertIn("no hidden agent context, no tool access, no prompt injection", ctx.text)
+        self.assertIn("project context: not included", ctx.text)
+        self.assertIn("target session: `claude` session `testsess`", ctx.text)
 
     def test_cited_line_expansion_keeps_tool_call_and_result_together(self):
         p = write([

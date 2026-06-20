@@ -136,6 +136,21 @@ class TestSseParser(unittest.TestCase):
         self.assertEqual((usage.input_tokens, usage.output_tokens, usage.cached_tokens),
                          (9, 2, 3))
 
+    def test_deepseek_cache_usage_fields(self):
+        lines = [
+            "data: " + _j({"choices": [{"delta": {"content": "ok"}}]}),
+            "data: " + _j({"choices": [],
+                           "usage": {"prompt_tokens": 100,
+                                     "completion_tokens": 4,
+                                     "prompt_cache_hit_tokens": 70,
+                                     "prompt_cache_miss_tokens": 30}}),
+            "data: [DONE]",
+        ]
+        ev = list(BK._parse_sse_stream(iter(lines)))
+        usage = [v for k, v in ev if k == "usage"][0]
+        self.assertEqual((usage.input_tokens, usage.output_tokens, usage.cached_tokens),
+                         (100, 4, 70))
+
     def test_plain_json_body_despite_stream_true(self):
         body = _j({"choices": [{"message": {"content": "blocking shape"}}],
                    "usage": {"prompt_tokens": 4, "completion_tokens": 1}})
@@ -629,6 +644,11 @@ class TestHudExactness(unittest.TestCase):
         self.assertIn("$0.34", EC.format_hud(st, 10, cost_usd=0.344))
         self.assertIn("$<0.01", EC.format_hud(st, 10, cost_usd=0.001))
         self.assertNotIn("$", EC.format_hud(st, 10))
+
+    def test_format_hud_cache_hits(self):
+        st = EC.ContextStats()
+        self.assertIn("cache 12k", EC.format_hud(st, 10, cached_tokens=12345))
+        self.assertNotIn("cache", EC.format_hud(st, 10, cached_tokens=0))
 
     def test_format_answering_exact(self):
         st = EC.ContextStats(estimated_tokens=100, raw_tokens=50)

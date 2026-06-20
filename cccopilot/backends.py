@@ -77,6 +77,29 @@ class Usage:
         return d
 
 
+def _usage_from_chat_usage(u) -> Usage:
+    """Normalize OpenAI-compatible chat usage shapes.
+
+    OpenAI reports prompt-cache hits under
+    ``prompt_tokens_details.cached_tokens``. DeepSeek reports the same concept
+    as top-level ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``.
+    Keep this parser central so blocking and streaming HTTP paths account for
+    cache hits identically.
+    """
+    u = u if isinstance(u, dict) else {}
+    details = u.get("prompt_tokens_details") or {}
+    hit = u.get("prompt_cache_hit_tokens", 0) or 0
+    miss = u.get("prompt_cache_miss_tokens", 0) or 0
+    prompt = u.get("prompt_tokens", 0) or 0
+    if not prompt and (hit or miss):
+        prompt = hit + miss
+    cached = details.get("cached_tokens", 0) or hit
+    return Usage(
+        input_tokens=prompt,
+        output_tokens=u.get("completion_tokens", 0) or u.get("output_tokens", 0) or 0,
+        cached_tokens=cached)
+
+
 class Backend:
     name = "?"
     # exact usage for the LAST complete()/stream() call, when the provider
@@ -245,11 +268,7 @@ def _parse_sse_stream(lines):
                 yield ("text", txt)
         u = obj.get("usage")
         if u:
-            details = u.get("prompt_tokens_details") or {}
-            yield ("usage", Usage(
-                input_tokens=u.get("prompt_tokens", 0) or 0,
-                output_tokens=u.get("completion_tokens", 0) or 0,
-                cached_tokens=details.get("cached_tokens", 0) or 0))
+            yield ("usage", _usage_from_chat_usage(u))
     if not saw_sse and non_sse:
         # plain JSON response despite stream:true — extract the blocking shape
         try:
@@ -259,9 +278,7 @@ def _parse_sse_stream(lines):
                 yield ("text", txt)
             u = obj.get("usage")
             if u:
-                yield ("usage", Usage(
-                    input_tokens=u.get("prompt_tokens", 0) or 0,
-                    output_tokens=u.get("completion_tokens", 0) or 0))
+                yield ("usage", _usage_from_chat_usage(u))
         except (ValueError, KeyError, IndexError, TypeError):
             pass
 
@@ -574,14 +591,35 @@ class OpenAICompatBackend(Backend):
             headers["Authorization"] = f"Bearer {key}"
         return headers
 
+    def _cache_body_fields(self, prompt: str, model: str = None) -> dict:
+        """Provider-specific request fields that improve prompt cache routing.
+
+        The generic OpenAI-compatible shape must stay conservative because many
+        compatible servers reject unknown fields. For OpenAI proper, the current
+        API supports ``prompt_cache_key`` on Chat Completions; using a stable key
+        alongside the provider's prefix hash improves routing for requests that
+        share long common prefixes without changing model behavior.
+        """
+        if self.name != "openai":
+            return {}
+        raw = os.environ.get("CC_COPILOT_PROMPT_CACHE_KEY", "").strip()
+        if raw:
+            return {"prompt_cache_key": raw}
+        # Keep this stable. OpenAI already combines this key with its prompt
+        # prefix hash, so adding dynamic prompt content here would fragment cache
+        # routing for exactly the turns we want to share a cache.
+        return {"prompt_cache_key": f"cc-copilot:{model or self.default_model}"}
+
     def complete(self, prompt, model=None, timeout=180) -> str:
         self.last_usage = None
         headers = self._headers()
-        body = json.dumps({
+        req_body = {
             "model": model or self.default_model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-        }).encode("utf-8")
+        }
+        req_body.update(self._cache_body_fields(prompt, model))
+        body = json.dumps(req_body).encode("utf-8")
         req = urllib.request.Request(self.endpoint, data=body, method="POST", headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -599,10 +637,7 @@ class OpenAICompatBackend(Backend):
             raise BackendError(f"{self.name} request failed: {e}")
         u = data.get("usage") if isinstance(data, dict) else None
         if u:
-            self.last_usage = Usage(
-                input_tokens=u.get("prompt_tokens", 0) or 0,
-                output_tokens=u.get("completion_tokens", 0) or 0,
-                cached_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0)
+            self.last_usage = _usage_from_chat_usage(u)
         try:
             # content is None for tool-call-only responses; .strip() would then
             # raise AttributeError, so fold it into the unexpected-shape path.
@@ -617,6 +652,7 @@ class OpenAICompatBackend(Backend):
         base = {"model": model or self.default_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True}
+        base.update(self._cache_body_fields(prompt, model))
         # degrade in two steps: a 400/422 on the first attempt usually means the
         # server rejects the stream_options field — retry once without it; a
         # 400/422 again means it rejects streaming itself — fall back to the

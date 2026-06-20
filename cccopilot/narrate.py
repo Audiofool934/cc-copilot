@@ -171,7 +171,14 @@ def _as_evidence_context(brief_text: str) -> str:
     return "\n".join(lines)
 
 
-def _prompt(brief_text: str, task: str) -> str:
+_DEFAULT_TURN_TASK = (
+    "Execute the TASK above using only the EVIDENCE CONTEXT above. Keep "
+    "citations for observed facts, label inference, and say what evidence is "
+    "missing when the context is insufficient."
+)
+
+
+def _prompt(brief_text: str, task: str, turn_task: str = None) -> str:
     # Invariant A: scrub secret-shaped content from the model-bound copy at the
     # single narration chokepoint. Every model call (run_brief / *_stream / ask
     # / chat / recap / next-step) funnels through here, so redacting the composed
@@ -179,11 +186,18 @@ def _prompt(brief_text: str, task: str) -> str:
     # history alike. The on-disk transcript, the [L<n>] line map, and what the
     # cockpit shows the human locally are untouched (this copy only ever leaves
     # for the backend).
+    task = str(task or "").strip()
+    turn_task = str(turn_task or _DEFAULT_TURN_TASK).strip()
     return redact(
         _PREAMBLE
+        + "\n\n=== TASK (stable instructions) ===\n"
+        + task
+        + "\n=== END TASK ===\n"
         + "\n\n=== EVIDENCE CONTEXT (observed facts and citations) ===\n"
         + _as_evidence_context(brief_text)
-        + "\n=== END EVIDENCE CONTEXT ===\n\n" + task)
+        + "\n=== END EVIDENCE CONTEXT ===\n\n"
+        + "=== CURRENT TURN ===\n"
+        + turn_task)
 
 
 def _with_instruction(task: str, instruction: str = "") -> str:
@@ -201,17 +215,27 @@ def _with_instruction(task: str, instruction: str = "") -> str:
             "keep the [L…] citations; never invent facts to satisfy it.")
 
 
+def _turn_with_instruction(instruction: str = "") -> str:
+    instruction = (instruction or "").strip()
+    if not instruction:
+        return _DEFAULT_TURN_TASK
+    return (_DEFAULT_TURN_TASK + "\n\nThe returning human added an instruction "
+            'for how to answer: "' + instruction + '". Honor it for language, '
+            "tone, length, or focus — but stay grounded in the evidence above "
+            "and keep the [L…] citations; never invent facts to satisfy it.")
+
+
 def run(state, task: str, model: str = None, backend=None, timeout: int = 180) -> str:
     return run_brief(render(state), task, model=model, backend=backend, timeout=timeout)
 
 
 def run_brief(brief_text: str, task: str, model: str = None,
-              backend=None, timeout: int = 180) -> str:
+              backend=None, timeout: int = 180, turn_task: str = None) -> str:
     be = _be(backend)
     if not be.available():
         raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
                            f"Try `cc-copilot backends` to see your options.")
-    return _complete_with_retries(be, _prompt(brief_text, task),
+    return _complete_with_retries(be, _prompt(brief_text, task, turn_task=turn_task),
                                   model=model, timeout=timeout)
 
 
@@ -267,7 +291,8 @@ def stream_enabled() -> bool:
 
 
 def run_brief_stream(brief_text: str, task: str, model: str = None,
-                     backend=None, timeout: int = 180) -> StreamHandle:
+                     backend=None, timeout: int = 180,
+                     turn_task: str = None) -> StreamHandle:
     """Streaming sibling of :func:`run_brief` — same grounding contract, the
     answer just arrives in chunks. ``CC_COPILOT_STREAM=0`` forces the blocking
     single-chunk path."""
@@ -275,7 +300,7 @@ def run_brief_stream(brief_text: str, task: str, model: str = None,
     if not be.available():
         raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
                            f"Try `cc-copilot backends` to see your options.")
-    prompt = _prompt(brief_text, task)
+    prompt = _prompt(brief_text, task, turn_task=turn_task)
     if not stream_enabled():
         def _one():
             yield _complete_with_retries(be, prompt, model=model, timeout=timeout)
@@ -308,8 +333,8 @@ def recap_since(since_text: str, model: str = None, backend=None,
     delta and keeps its ``[L…]`` citations; it does not invent. ``instruction``
     is an optional free-text steer (`/since in spanish`) that shapes the wording
     without loosening the grounding."""
-    return run_brief(since_text, _with_instruction(_SINCE_RECAP_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(since_text, _SINCE_RECAP_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 _WATCH_PROGRESS_TASK = (
@@ -327,8 +352,8 @@ _WATCH_PROGRESS_TASK = (
 def watch_progress_brief(delta_text: str, model: str = None, backend=None,
                          instruction: str = "") -> str:
     """Narrate a small watch delta into a process-oriented progress update."""
-    return run_brief(delta_text, _with_instruction(_WATCH_PROGRESS_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(delta_text, _WATCH_PROGRESS_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 _WATCH_FLOW_TASK = (
@@ -357,8 +382,8 @@ _WATCH_FLOW_TASK = (
 def watch_flow_update(flow_text: str, model: str = None, backend=None,
                       instruction: str = "") -> str:
     """Produce a watch Now update and semantic step-boundary decision together."""
-    return run_brief(flow_text, _with_instruction(_WATCH_FLOW_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(flow_text, _WATCH_FLOW_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 _WATCH_STEP_DECISION_TASK = (
@@ -381,8 +406,8 @@ _WATCH_STEP_DECISION_TASK = (
 def watch_step_decision(step_text: str, model: str = None, backend=None,
                         instruction: str = "") -> str:
     """Decide whether a watch delta starts a new semantic monitor step."""
-    return run_brief(step_text, _with_instruction(_WATCH_STEP_DECISION_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(step_text, _WATCH_STEP_DECISION_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 _WATCH_DIGEST_TASK = (
@@ -401,8 +426,8 @@ _WATCH_DIGEST_TASK = (
 def watch_digest_brief(buffer_text: str, model: str = None, backend=None,
                        instruction: str = "") -> str:
     """Narrate accumulated watch evidence into a posterior step digest."""
-    return run_brief(buffer_text, _with_instruction(_WATCH_DIGEST_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(buffer_text, _WATCH_DIGEST_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 _NEXT_STEP_TASK = (
@@ -427,15 +452,16 @@ def next_step_brief(brief_text: str, model: str = None, backend=None,
     evidence and keeps its ``[L…]`` citations; it recommends, it doesn't invent.
     ``instruction`` is an optional free-text steer (`/now in spanish`) that
     shapes the wording without loosening the grounding."""
-    return run_brief(brief_text, _with_instruction(_NEXT_STEP_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(brief_text, _NEXT_STEP_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 def next_step_brief_stream(brief_text: str, model: str = None, backend=None,
                            instruction: str = "") -> StreamHandle:
     """Streaming sibling of :func:`next_step_brief` — identical grounding."""
-    return run_brief_stream(brief_text, _with_instruction(_NEXT_STEP_TASK, instruction),
-                            model=model, backend=backend)
+    return run_brief_stream(brief_text, _NEXT_STEP_TASK, model=model,
+                            backend=backend,
+                            turn_task=_turn_with_instruction(instruction))
 
 
 _GOAL_DRAFT_TASK = (
@@ -457,15 +483,16 @@ _GOAL_DRAFT_TASK = (
 def goal_brief(brief_text: str, model: str = None, backend=None,
                instruction: str = "") -> str:
     """Draft a paste-ready agent ``/goal`` command from evidence context."""
-    return run_brief(brief_text, _with_instruction(_GOAL_DRAFT_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(brief_text, _GOAL_DRAFT_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 def goal_brief_stream(brief_text: str, model: str = None, backend=None,
                       instruction: str = "") -> StreamHandle:
     """Streaming sibling of :func:`goal_brief` — identical grounding."""
-    return run_brief_stream(brief_text, _with_instruction(_GOAL_DRAFT_TASK, instruction),
-                            model=model, backend=backend)
+    return run_brief_stream(brief_text, _GOAL_DRAFT_TASK, model=model,
+                            backend=backend,
+                            turn_task=_turn_with_instruction(instruction))
 
 
 _LOOP_DRAFT_TASK = (
@@ -492,35 +519,49 @@ _LOOP_DRAFT_TASK = (
 def loop_brief(brief_text: str, model: str = None, backend=None,
                instruction: str = "") -> str:
     """Draft a paste-ready agent ``/loop`` command from evidence context."""
-    return run_brief(brief_text, _with_instruction(_LOOP_DRAFT_TASK, instruction),
-                     model=model, backend=backend)
+    return run_brief(brief_text, _LOOP_DRAFT_TASK, model=model, backend=backend,
+                     turn_task=_turn_with_instruction(instruction))
 
 
 def loop_brief_stream(brief_text: str, model: str = None, backend=None,
                       instruction: str = "") -> StreamHandle:
     """Streaming sibling of :func:`loop_brief` — identical grounding."""
-    return run_brief_stream(brief_text, _with_instruction(_LOOP_DRAFT_TASK, instruction),
-                            model=model, backend=backend)
+    return run_brief_stream(brief_text, _LOOP_DRAFT_TASK, model=model,
+                            backend=backend,
+                            turn_task=_turn_with_instruction(instruction))
 
 
 def ask(state, question: str, model: str = None, backend=None) -> str:
     return ask_brief(render(state), question, model=model, backend=backend)
 
 
+_ASK_TASK = (
+    "Answer the returning human's current question as cc-copilot. Use cited "
+    "evidence for observed facts. Synthesize or recommend when grounded; label "
+    "inference. If the answer needs unavailable evidence, name what is missing."
+)
+
+
+def _ask_turn(question: str) -> str:
+    return ('Current question from the returning human: "'
+            + question.strip() + '"\n'
+            + _DEFAULT_TURN_TASK)
+
+
 def _ask_task(question: str) -> str:
-    return ('The returning human asks: "' + question.strip() + '"\n'
-            "Answer as cc-copilot. Use cited evidence for observed facts. "
-            "Synthesize or recommend when grounded; label inference. "
-            "If the answer needs unavailable evidence, name what is missing.")
+    """Backward-compatible single-block ask task for tests/extensions."""
+    return _ASK_TASK + "\n\n" + _ask_turn(question)
 
 
 def ask_brief(brief_text: str, question: str, model: str = None, backend=None) -> str:
-    return run_brief(brief_text, _ask_task(question), model=model, backend=backend)
+    return run_brief(brief_text, _ASK_TASK, model=model, backend=backend,
+                     turn_task=_ask_turn(question))
 
 
 def ask_brief_stream(brief_text: str, question: str, model: str = None,
                      backend=None) -> StreamHandle:
-    return run_brief_stream(brief_text, _ask_task(question), model=model, backend=backend)
+    return run_brief_stream(brief_text, _ASK_TASK, model=model, backend=backend,
+                            turn_task=_ask_turn(question))
 
 
 def _history_by_budget(history, max_chars: int = _HISTORY_CHARS) -> str:
@@ -572,7 +613,16 @@ def _scope_guidance(brief_text: str) -> str:
     return ""
 
 
-def _chat_task(history, question: str, brief_text: str = "") -> str:
+_CHAT_TASK = (
+    "Answer the current cockpit chat turn as cc-copilot. The current evidence "
+    "context is the only source of new observed facts. Prior cockpit turns, when "
+    "supplied, are continuity only; do not treat old answer prose as fresh "
+    "evidence. Keep citations for observed facts, synthesize or recommend only "
+    "when grounded, label inference, and name missing evidence when needed."
+)
+
+
+def _chat_turn(history, question: str, brief_text: str = "") -> str:
     convo = ""
     if history:
         convo = ("PRIOR TURNS (your earlier grounded answers — reference for "
@@ -592,21 +642,26 @@ def _chat_task(history, question: str, brief_text: str = "") -> str:
             "evidence, name what is missing.")
 
 
+def _chat_task(history, question: str, brief_text: str = "") -> str:
+    """Backward-compatible single-block chat task for tests/extensions."""
+    return _CHAT_TASK + "\n\n" + _chat_turn(history, question, brief_text)
+
+
 def chat_brief(brief_text: str, history, question: str, model: str = None, backend=None) -> str:
     """Multi-turn sibling of :func:`ask` for the live chat sidecar.
 
-    The current evidence context (re-read this turn, prepended by
+    The current evidence context (re-read this turn and included by
     :func:`run_brief`) is the only source of new observed facts. Prior turns are
     replayed as *already-grounded* answers — referenced for continuity, never
     treated as fresh evidence — so a later answer cannot launder an un-cited
     claim from an earlier one.
     """
-    return run_brief(brief_text, _chat_task(history, question, brief_text),
-                     model=model, backend=backend)
+    return run_brief(brief_text, _CHAT_TASK, model=model, backend=backend,
+                     turn_task=_chat_turn(history, question, brief_text))
 
 
 def chat_brief_stream(brief_text: str, history, question: str, model: str = None,
                       backend=None) -> StreamHandle:
     """Streaming :func:`chat_brief` — identical grounding, chunked delivery."""
-    return run_brief_stream(brief_text, _chat_task(history, question, brief_text),
-                            model=model, backend=backend)
+    return run_brief_stream(brief_text, _CHAT_TASK, model=model, backend=backend,
+                            turn_task=_chat_turn(history, question, brief_text))

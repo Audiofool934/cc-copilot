@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.29.2 — 2026-06-20
+
+**Prompt-cache visibility and cache-friendly prompt layout.** HTTP backend usage
+parsing now recognizes DeepSeek's `prompt_cache_hit_tokens` /
+`prompt_cache_miss_tokens`, the HUD shows provider-reported cache hits as
+`cache …`, and the direct OpenAI backend sends a stable `prompt_cache_key` so
+repeated cc-copilot requests route toward warm prompt caches. Model prompts now
+put stable task contracts before the evidence pack while keeping the current
+question/steer after evidence, improving prefix reuse without weakening grounding
+or multi-turn recency.
+
+**Target awareness in model context.** Evidence packs now include a compact Target
+Context section so the copilot model sees its role as a read-only supervisor, the
+active scope, the target agent/session(s), whether bounded project facts are
+included, and the no-hidden-context / no-tools / no-injection boundary.
+
 ## 0.29.1 — 2026-06-20
 
 **Watch is isolated from the main cockpit chat.** Automatic watch updates now stay

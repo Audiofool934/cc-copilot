@@ -24,9 +24,20 @@ class TestNarratePrompt(unittest.TestCase):
         prompt = N._prompt("# 🛰  cc-copilot brief — demo\nbody [L1]", "Task")
 
         self.assertIn("=== EVIDENCE CONTEXT", prompt)
+        self.assertLess(prompt.index("=== TASK"), prompt.index("=== EVIDENCE CONTEXT"))
+        self.assertLess(prompt.index("=== EVIDENCE CONTEXT"), prompt.index("=== CURRENT TURN"))
         self.assertIn("# cc-copilot evidence context — demo", prompt)
         self.assertNotIn("=== BRIEF", prompt)
         self.assertNotIn("# 🛰  cc-copilot brief", prompt)
+
+    def test_prompt_keeps_current_turn_after_evidence_for_recency(self):
+        prompt = N._prompt("# evidence\nbody [L1]", "Stable task",
+                           turn_task="Current question: what changed?")
+
+        self.assertLess(prompt.index("Stable task"),
+                        prompt.index("=== EVIDENCE CONTEXT"))
+        self.assertLess(prompt.index("body [L1]"),
+                        prompt.index("Current question: what changed?"))
 
     def test_chat_prompt_avoids_brief_identity_language(self):
         backend = CaptureBackend()
@@ -39,6 +50,8 @@ class TestNarratePrompt(unittest.TestCase):
         prompt = backend.prompts[0]
         self.assertIn("# cc-copilot multi-session evidence context — demo", prompt)
         self.assertIn("current evidence context", prompt)
+        self.assertLess(prompt.index("body [sess:L1]"),
+                        prompt.index("so what should I do now?"))
         self.assertNotIn("current brief", prompt.lower())
         self.assertNotIn("=== BRIEF", prompt)
 
@@ -91,6 +104,8 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertIn("instruction for how to answer", prompt)
         self.assertIn("never invent facts", prompt)     # grounding contract restated
         self.assertIn("do NEXT", prompt)                # base task still present
+        self.assertLess(prompt.index("do NEXT"), prompt.index("=== EVIDENCE CONTEXT"))
+        self.assertLess(prompt.index("body [L7]"), prompt.index("in spanish"))
 
     def test_instruction_is_folded_into_since_recap(self):
         backend = CaptureBackend()
