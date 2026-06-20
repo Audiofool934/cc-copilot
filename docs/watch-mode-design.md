@@ -2,8 +2,9 @@
 
 Date: 2026-06-19
 
-Status: research and product design note. This document describes the intended
-shape of `/watch`; it is not a release checklist.
+Status: current design note for the implemented `/watch` v1. This document
+captures product contract, UX invariants, and remaining watch-mode direction; it
+is not a release checklist.
 
 ## Purpose
 
@@ -179,9 +180,9 @@ Micro updates answer: "What just changed?"
 
 They should be one concise sentence, grounded only in the new delta. Good shapes:
 
-- `watch · copilot · The agent is still running pytest, with no new failure visible yet [L42].`
-- `watch · copilot · The work moved from editing into verification; pytest is now in flight [L58].`
-- `watch · needs attention · The latest test run failed in parser coverage, so this needs review before waiting longer [L77].`
+- `NOW: The agent is still running pytest, with no new failure visible yet [L42].`
+- `NOW: The work moved from editing into verification; pytest is now in flight [L58].`
+- `ATTENTION: The latest test run failed in parser coverage, so this needs review before waiting longer [L77].`
 
 They should not list every changed file, every event, or every command argument.
 That remains the activity lane's job.
@@ -217,9 +218,9 @@ Entering watch should make the TUI feel different without taking control away:
 - The attached-session HUD stays focused on evidence scope, not process state.
 - A one-line watch dock below the prompt box is clickable: off starts watch,
   on opens the monitor, paused resumes on the current scope.
-- Chat can receive marked watch updates while watch is active, but they are
-  ephemeral process output. When watch stops, chat is pruned back to a compact
-  end summary; the monitor keeps the step-level record.
+- Automatic watch updates do not mount into the normal chat pane. They update
+  the watch dock and monitor state instead; `/watch stop` leaves the monitor
+  record available until the next watch run.
 - `/watch view` opens an in-place watch monitor below the session activity panel.
   It has a top menu with `Esc` return, `Left` / `Right` step navigation,
   session tabs for multi-session/project watch, `/watch refresh`, and
@@ -240,8 +241,8 @@ none
 
 The monitor is a consumption surface, not a separate page. The session activity
 timeline remains visible above it, and `Shift+Up` / `Shift+Down` keep resizing
-that activity panel. It reads the same watch state that chat/HUD use; it does
-not parse transcripts independently.
+that activity panel. It reads the same watch state as the dock and monitor
+controls; it does not parse transcripts independently.
 
 Watch steps are coarse semantic cards, not raw log rows. When a model backend is
 available, cc-copilot asks for a small machine-readable boundary decision from
@@ -266,12 +267,13 @@ Watch must be boringly explicit:
 
 - Starting watch is an explicit user command.
 - Stopping watch is always available and cheap.
-- Model narration is shown as `watch · copilot`.
-- Fallback summaries are shown as deterministic watch updates.
+- Model narration is shown in the watch monitor/dock state, not as ordinary
+  chat.
+- Fallback summaries are shown as deterministic watch monitor updates.
 - Digests run automatically after explicit `/watch`; the user should not have to
   remember a manual digest command during normal use.
-- Watch process output should not pile up in the normal chat history after
-  `/watch stop`; persistent review belongs in `/watch view`.
+- Watch process output should not enter the normal chat history; persistent
+  review belongs in `/watch view`.
 - No watched-agent prompt injection.
 - No notifications unless `watch --notify` or a future explicit setting enables
   them.
@@ -286,36 +288,36 @@ safe default is:
 3. Require `/watch` or `/watch reset` if the behavior would otherwise be
    ambiguous.
 
-## Implementation Slices
+## Implementation Shape
 
-### Slice 1: Formal Watch Run State
+### Watch Run State
 
-Introduce a small internal watch-state object instead of growing scattered
-fields. Keep the current `/watch`, `/watch stop`, and `/watch status` grammar.
-Add explicit scope signature, last micro/digest times, digest buffer, and paused
-state.
+cc-copilot keeps a small internal watch-state object instead of scattered
+fields. The grammar stays compact: `/watch`, `/watch stop`, `/watch status`, and
+`/watch view`. State includes scope signature, last micro/digest times, digest
+buffer, pause/stop state, and per-session semantic steps.
 
-### Slice 2: Micro Narration Gate
+### Micro Narration Gate
 
-Keep the current model-backed process summary, but add cadence and coalescing:
-only narrate meaningful diffs, deduplicate equivalent activity, and always fall
-back deterministically when the model is unavailable or busy.
+Model-backed process summaries are cadence-gated and coalesced: they narrate
+meaningful diffs, deduplicate equivalent activity, and fall back deterministically
+when the model is unavailable or busy.
 
-### Slice 3: Rolling Digest
+### Rolling Digest
 
-Add digest accumulation and a digest renderer. Digests are loop-driven by event
-thresholds, elapsed cadence, phase changes, and completion. `/watch refresh` is
-a force-refresh/debug path, not the main user workflow.
+Digests accumulate in the watch loop and render inside the monitor. They are
+driven by event thresholds, elapsed cadence, phase changes, and completion.
+`/watch refresh` is a force-refresh/debug path, not the main user workflow.
 
-### Slice 4: Watch TUI Surface
+### Watch TUI Surface
 
-Add a compact watch dock under the prompt box and an in-place monitor pane.
-Do not remove the activity panel; instead, make it clear which text is raw
+The TUI has a compact watch dock under the prompt box and an in-place monitor
+pane. The activity panel stays visible; the UI makes it clear which text is raw
 activity and which text is copilot interpretation.
 
-### Slice 5: Configurable Modes
+### Configurable Modes
 
-Add explicit modes only after defaults are validated:
+Explicit modes should be added only after defaults are validated:
 
 - `/watch quiet`: alerts and digests only.
 - `/watch normal`: default micro + digest + alerts.
@@ -334,7 +336,7 @@ Add explicit modes only after defaults are validated:
 
 ## Release Bar
 
-Before shipping the long-watch version:
+For further watch changes:
 
 - Unit tests cover opt-in start/stop/status.
 - Unit tests cover scope-change pause/reset behavior.
