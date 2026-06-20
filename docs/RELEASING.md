@@ -52,14 +52,21 @@ builds and validates but does **not** run the test matrix.
    `pyproject.toml` reads it dynamically, so there's nothing else to edit. The
    workflow fails if the tag doesn't match the built wheel's version.
 2. Add a `CHANGELOG.md` entry.
-3. Commit, then tag and push:
+3. Sync project docs before the release commit:
+   - update `README.md` for any new or changed user-facing behavior;
+   - update relevant files in `docs/` for design, architecture, or workflow
+     changes;
+   - remove stale descriptions of old behavior, especially for TUI flows,
+     slash commands, release/install instructions, and safety/tool-access
+     guarantees.
+4. Commit, then tag and push:
    ```bash
    git tag -a v0.13.2 -F /tmp/notes.md
    git push origin v0.13.2
    ```
-4. The `publish` workflow builds, validates, and pushes to PyPI. Within a minute
+5. The `publish` workflow builds, validates, and pushes to PyPI. Within a minute
    `uv tool install "cc-copilot[tui]"` installs the new version.
-5. (Optional) create the GitHub Release: `gh release create v0.13.2 -F /tmp/notes.md`.
+6. (Optional) create the GitHub Release: `gh release create v0.13.2 -F /tmp/notes.md`.
 
 ## Verifying a build locally (no publish)
 
