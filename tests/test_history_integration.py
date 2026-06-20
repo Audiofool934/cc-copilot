@@ -150,6 +150,21 @@ class TestRestore(_StateHome):
         fresh = C.ChatSession(a, alerts=False)
         self.assertEqual([t for r, t in fresh.history if r == "user"], ["q0"])
 
+    def test_rewind_undo_restores_truncated_history(self):
+        a = _tx("sess-A")
+        s = C.ChatSession(a, alerts=False)
+        s.answer("q0"); s.answer("q1"); s.answer("q2")
+        s.meta("/rewind 2")
+
+        out = s.meta("/rewind undo")
+
+        self.assertIn("restored", out)
+        self.assertEqual([t for r, t in s.history if r == "user"],
+                         ["q0", "q1", "q2"])
+        fresh = C.ChatSession(a, alerts=False)
+        self.assertEqual([t for r, t in fresh.history if r == "user"],
+                         ["q0", "q1", "q2"])
+
     def test_rewind_lists_without_arg(self):
         a = _tx("sess-A")
         s = C.ChatSession(a, alerts=False)

@@ -6,6 +6,7 @@
     cc-copilot sessions               list this project's sessions (newest first)
     cc-copilot brief [--latest|--session ID|PATH]   evidence-cited recap
     cc-copilot goal [...]             draft a paste-ready agent /goal
+    cc-copilot loop [...]             draft a paste-ready agent /loop
     cc-copilot chat [...]             live read-only chat pinned to a session
     cc-copilot backends               list LLM backends (claude/codex/deepseek/…)
     cc-copilot config [--init]        default backend/model/keys (~/.cc-copilot.toml)
@@ -952,6 +953,37 @@ def cmd_goal(args) -> int:
     return 0
 
 
+def cmd_loop(args) -> int:
+    """Draft a paste-ready `/loop` command for the observed coding agent."""
+    from . import chat as C, narrate as N
+    if not getattr(args, "raw", False):
+        _maybe_first_run_nudge()
+    path = _resolve_or_die(args)
+    if getattr(args, "path", False):
+        sys.stderr.write(f"# transcript: {path}\n")
+    instruction = " ".join(getattr(args, "instruction", []) or []).strip()
+    try:
+        session = C.ChatSession(
+            path,
+            model=getattr(args, "model", None),
+            backend=getattr(args, "backend", None),
+            alerts=False,
+            persist=False,
+            scope=getattr(args, "scope", SC.SESSION),
+            scope_sessions=getattr(args, "scope_sessions", ""),
+        )
+    except ValueError as e:
+        sys.stderr.write(f"cc-copilot: {e}\n")
+        return 2
+    be = getattr(args, "backend", None)
+    if getattr(args, "raw", False) or not N.available(be):
+        print(session._loop(instruction, raw=True))
+        return 0
+    sys.stderr.write(f"# drafting loop via {N.backend_name(be)} …\n")
+    print(session._loop(instruction))
+    return 0
+
+
 def cmd_handoff(args) -> int:
     from . import handoff as HO, lastlook as LL, since as SI
     path = _resolve_or_die(args)
@@ -1107,6 +1139,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--backend",
                     help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…; see `backends`)")
     sp.set_defaults(func=cmd_goal)
+
+    sp = sub.add_parser("loop",
+                        help="draft a paste-ready agent /loop from agent + project context "
+                             "(LLM; --raw = deterministic draft)")
+    common(sp)
+    sp.add_argument("instruction", nargs="*",
+                    help="optional steering for the loop draft, e.g. 'check CI every 5m'")
+    sp.add_argument("--session", help="session id, id-prefix, or transcript path "
+                                      "(default: most recent, excluding the current)")
+    sp.add_argument("--latest", action="store_true",
+                    help="explicitly target the most recent session")
+    sp.add_argument("--path", action="store_true",
+                    help="also print the resolved transcript path to stderr")
+    scope_arg(sp)
+    sp.add_argument("--raw", action="store_true",
+                    help="deterministic loop draft only — no LLM refinement")
+    sp.add_argument("--model", help="model for the loop draft (passed to the backend)")
+    sp.add_argument("--backend",
+                    help="LLM backend (claude/codex/deepseek/ollama/ollama-cloud/…; see `backends`)")
+    sp.set_defaults(func=cmd_loop)
 
     sp = sub.add_parser("ask", help="ask a question grounded in the session state")
     common(sp)

@@ -56,9 +56,11 @@ class TestChokepoint(unittest.TestCase):
             lambda r: N.chat_brief(BRIEF, [], "what changed?", backend=r),
             lambda r: N.recap_since(BRIEF, backend=r),
             lambda r: N.next_step_brief(BRIEF, backend=r),
+            lambda r: N.loop_brief(BRIEF, backend=r),
             lambda r: _drain(N.run_brief_stream(BRIEF, "task", backend=r)),
             lambda r: _drain(N.narrate_brief_stream(BRIEF, backend=r)),
             lambda r: _drain(N.next_step_brief_stream(BRIEF, backend=r)),
+            lambda r: _drain(N.loop_brief_stream(BRIEF, backend=r)),
             lambda r: _drain(N.ask_brief_stream(BRIEF, "q", backend=r)),
             lambda r: _drain(N.chat_brief_stream(BRIEF, [], "q", backend=r)),
         ]

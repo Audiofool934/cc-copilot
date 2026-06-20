@@ -83,6 +83,24 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("question 0", ctx.text)
         self.assertIn("answer 9", ctx.text)
 
+    def test_recent_cockpit_question_guides_followup_raw_retrieval(self):
+        p = write([
+            user("start analysis", 120),
+            asst("buried topic: zebra-stripe allocator returned score 17", 115),
+            *[asst(f"unrelated filler {i}", 110 - i) for i in range(18)],
+        ])
+        st = S.build(T.parse(p))
+        history = [
+            ("user", "what did the agent say about the zebra-stripe allocator?"),
+            ("assistant", "It mentioned score 17."),
+        ]
+
+        ctx = EC.build(p, st, "session", question="what about that?",
+                       history=history, project_context=False)
+
+        self.assertIn("zebra-stripe allocator returned score 17", ctx.text)
+        self.assertIn("keyword match", ctx.text)
+
     def test_context_stats_drive_hud_lines(self):
         stats = EC.ContextStats(
             estimated_tokens=82000,
@@ -141,6 +159,26 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("[src/metrics.txt:L2] keeper yield: 73.2%", ctx.text)
         self.assertIn("`src/metrics.txt`  [tree]", ctx.text)
         self.assertNotIn("unrelated implementation detail", ctx.text)
+
+    def test_recent_cockpit_question_guides_followup_project_excerpt(self):
+        cwd = tempfile.mkdtemp(prefix="ccctx-project-followup-")
+        os.makedirs(os.path.join(cwd, "src"))
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Demo Project\n")
+        with open(os.path.join(cwd, "src", "onboard.txt"), "w", encoding="utf-8") as f:
+            f.write("ollama cloud onboarding uses hosted model credentials\n")
+        p = write([user("inspect project", 60, sessionId="testsess", cwd=cwd),
+                   asst("done", 5)])
+        st = S.build(T.parse(p))
+        history = [
+            ("user", "look at ollama cloud onboarding support"),
+            ("assistant", "The relevant area is the onboarding model path."),
+        ]
+
+        ctx = EC.build(p, st, "session", question="那这个怎么处理?",
+                       history=history, project_context=True)
+
+        self.assertIn("[src/onboard.txt:L1] ollama cloud onboarding", ctx.text)
 
     def test_project_context_excludes_common_secret_files(self):
         cwd = tempfile.mkdtemp(prefix="ccctx-project-secrets-")

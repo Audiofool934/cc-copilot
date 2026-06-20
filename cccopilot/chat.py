@@ -14,6 +14,7 @@ copilot Q&A history may be persisted under cc-copilot's own state directory.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 
@@ -47,6 +48,7 @@ _HELP = """commands (LLM-free except questions and the /since recap — /since -
   /observe          attention queue + next human decision
   /now [steer]      recommend the next step (LLM; e.g. /now in spanish; deterministic fallback)
   /goal [steer]     draft a paste-ready agent /goal from agent + project context
+  /loop [steer]     draft a paste-ready agent /loop from agent + project context
   /since [when] [steer]  recap since you last looked (30m / 2h / 1d; --raw = cited delta)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
@@ -151,6 +153,14 @@ def _extract_goal_command(text: str) -> str:
     return ""
 
 
+def _extract_loop_command(text: str) -> str:
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if line.startswith("/loop"):
+            return line
+    return ""
+
+
 def _verification_command(st) -> str:
     checks = []
     needles = ("test", "pytest", "lint", "build", "typecheck", "check", "cargo test",
@@ -233,6 +243,95 @@ def _deterministic_goal(st, instruction: str = "") -> str:
             f"/goal {objective}\n"
             "```\n\n"
             "## Why this goal\n" + "\n".join(why))
+
+
+def _loop_context_question(instruction: str = "") -> str:
+    base = ("Draft a paste-ready /loop command for the observed coding agent "
+            "using the current agent evidence and read-only project context.")
+    instruction = (instruction or "").strip()
+    if instruction:
+        base += f" Human steering for the loop draft: {instruction}"
+    return base
+
+
+def _loop_interval(instruction: str = "") -> str:
+    text = (instruction or "").strip().lower()
+    m = re.match(r"^(\d+\s*[smhd])\b", text)
+    if m:
+        return re.sub(r"\s+", "", m.group(1))
+    m = re.search(r"\bevery\s+(\d+)\s*(second|seconds|sec|secs|s|minute|minutes|min|mins|m|hour|hours|hr|hrs|h|day|days|d)\b", text)
+    if not m:
+        return ""
+    unit = m.group(2)
+    suffix = "s" if unit.startswith(("second", "sec")) or unit == "s" else \
+        "m" if unit.startswith(("minute", "min")) or unit == "m" else \
+        "h" if unit.startswith(("hour", "hr")) or unit == "h" else "d"
+    return f"{m.group(1)}{suffix}"
+
+
+def _deterministic_loop(st, instruction: str = "") -> str:
+    """Small no-model /loop draft from the folded state model."""
+    first = getattr(st, "first_intent", None)
+    latest = (getattr(st, "intents", []) or [None])[-1]
+    first_text = _clip_words(getattr(first, "text", ""), 220)
+    latest_text = _clip_words(getattr(latest, "text", ""), 220)
+    if latest_text and first_text and latest_text.lower() != first_text.lower():
+        task = f"continue the original task ({first_text}) while honoring the latest steer ({latest_text})"
+    else:
+        task = latest_text or first_text or "continue the current coding task"
+    if instruction:
+        task += f"; follow this loop steering: {_clip_words(instruction, 220)}"
+
+    interval = _loop_interval(instruction)
+    prefix = f"/loop {interval} " if interval else "/loop "
+
+    checks = _verification_command(st)
+    recent_cmd = ""
+    if getattr(st, "commands", None):
+        recent_cmd = _clip_words(st.commands[-1].cmd, 140)
+    failure = ""
+    if getattr(st, "failures", None):
+        f = st.failures[-1]
+        failure = _clip_words(f.target or f.summary, 160)
+    changed = [fc.path for fc in getattr(st, "changed_files", [])[:4]]
+    changed_note = (" Review the focused diff in " + ", ".join(f"`{p}`" for p in changed) + "."
+                    if changed else "")
+    cmd_note = f" Recent command to re-check when relevant: `{recent_cmd}`." if recent_cmd else ""
+    failure_note = f" Treat this known failure as unresolved until fixed: {failure}." if failure else ""
+
+    prompt = (
+        f"{task}. On each iteration, inspect the current transcript state, pending "
+        f"todos, recent command results, and project diff. If work remains, take the "
+        f"smallest relevant next action, then verify by {checks}.{changed_note}"
+        f"{cmd_note}{failure_note} If everything is quiet and complete, report that "
+        f"in one concise line and do not schedule another wakeup. Do not start "
+        f"unrelated initiatives, broaden scope, push, delete, or perform irreversible "
+        f"actions unless this conversation already authorized them. Stop and ask the "
+        f"human if blocked by credentials, ambiguous requirements, destructive action, "
+        f"or repeated failures."
+    )
+    prompt = _clip_words(prompt, 3600)
+
+    why = []
+    if latest is not None and getattr(latest, "line", 0):
+        why.append(f"- latest agent-facing intent is at [L{latest.line}]")
+    elif first is not None and getattr(first, "line", 0):
+        why.append(f"- original agent-facing intent is at [L{first.line}]")
+    if getattr(st, "commands", None):
+        why.append(f"- recent command evidence includes `{_clip_words(st.commands[-1].cmd, 90)}` [L{st.commands[-1].line}]")
+    if failure and getattr(st.failures[-1], "line", 0):
+        why.append(f"- latest failure evidence is at [L{st.failures[-1].line}]")
+    if changed:
+        why.append(f"- current session changed {', '.join('`' + p + '`' for p in changed[:3])}")
+    if not why:
+        why.append("- based on the currently selected live session evidence")
+
+    return ("# 🔁 agent loop\n\n"
+            "Paste this into the observed agent; cc-copilot does not inject it.\n\n"
+            "```text\n"
+            f"{prefix}{prompt}\n"
+            "```\n\n"
+            "## Why this loop\n" + "\n".join(why))
 
 
 def _fleet_rank(status, verdict):
@@ -376,6 +475,7 @@ class ChatSession:
         self._alerts = alerts
         self._persist = persist and ST.enabled()
         self.store = ST.Store.open_for(path, enabled=self._persist)
+        self._rewind_undo = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._alert_size = -1
@@ -440,6 +540,7 @@ class ChatSession:
         """Single completion site for a turn: tokens, in-memory history, and the
         durable store write. Only ever called with a COMPLETE answer — a stream
         that dies mid-way must not reach here (partials are never persisted)."""
+        self._rewind_undo = None
         self.last_usage = usage
         exact_out = getattr(usage, "exact", False) and getattr(usage, "output_tokens", 0)
         self.last_output_tokens = (usage.output_tokens if exact_out
@@ -495,6 +596,8 @@ class ChatSession:
             return self._now(cmd.strip()[4:].strip())
         if c == "/goal" or c.startswith("/goal "):
             return self._goal(cmd.strip()[5:].strip())
+        if c == "/loop" or c.startswith("/loop "):
+            return self._loop(cmd.strip()[5:].strip())
         if c == "/since" or c.startswith("/since "):
             return self._since(cmd.strip()[6:].strip())
         if c == "/handoff" or c.startswith("/handoff "):
@@ -541,25 +644,53 @@ class ChatSession:
                 return "(history is off — nothing saved to forget)"
             self.store.delete()
             self.history = []
+            self._rewind_undo = None
             return "forgot this conversation's saved history"
         if c == "/rewind" or c.startswith("/rewind "):
+            arg = c[7:].strip()
+            if arg in ("undo", "revert"):
+                return self.rewind_undo()
             qs = [t for r, t in self.history if r == "user"]
             if not qs:
+                if self._rewind_undo:
+                    return "rewind undo available: `/rewind undo`"
                 return "(nothing to rewind — no questions yet)"
-            arg = c[7:].strip()
             if not arg.isdigit():
+                undo = "  undo. restore the last rewind" if self._rewind_undo else ""
                 lines = ["rewind to which message?  `/rewind <n>` re-asks it:"]
+                if undo:
+                    lines.append(undo)
                 lines += [f"  {i}. {q[:60]}" for i, q in enumerate(qs, 1)]
                 return "\n".join(lines)
             k = int(arg) - 1
             if not (0 <= k < len(qs)):
                 return f"no message #{arg} (have 1–{len(qs)})"
             question = qs[k]
+            self._save_rewind_undo()
             self.history = self.history[:2 * k]
             self.store.truncate(k)
             return (f"rewound to before message #{k + 1}. Ask it again, edited as you like:\n"
-                    f"  {question}")
+                    f"  {question}\n"
+                    "undo: /rewind undo")
         return f"unknown command {cmd!r} — try /help"
+
+    def _save_rewind_undo(self) -> None:
+        self._rewind_undo = {
+            "history": list(self.history),
+            "snapshot": self.store.snapshot(),
+        }
+
+    def rewind_undo(self) -> str:
+        undo = self._rewind_undo
+        if not undo:
+            return "(nothing to undo — no reversible rewind is pending)"
+        hist = list(undo.get("history") or [])
+        snap = undo.get("snapshot")
+        if snap is not None and not self.store.restore_snapshot(snap):
+            return "(could not restore the previous rewind snapshot)"
+        self.history = hist
+        self._rewind_undo = None
+        return "restored the conversation to before the last rewind"
 
     def _scope_groups_text(self) -> str:
         groups = SG.list_groups()
@@ -834,6 +965,34 @@ class ChatSession:
             body += f"\n\n---\n_deterministic fallback:_\n\n```text\n{fallback}\n```"
         return body
 
+    # ---- /loop: draft a recurring agent prompt ------------------------------
+    def _loop(self, instruction: str = "", raw: bool = False) -> str:
+        """Draft a paste-ready agent ``/loop`` command from observable session
+        evidence plus read-only project context. The cockpit remains read-only:
+        this never schedules or injects anything into the observed agent."""
+        if self.st is None:
+            return "(no live session — transcript gone; nothing to turn into a loop)"
+        det = _deterministic_loop(self.st, instruction)
+        if raw or not N.available(self.backend):
+            return det
+        question = _loop_context_question(instruction)
+        try:
+            ctx = self.answer_context(question, history=self.history)
+            self.last_context_stats = ctx.stats
+            rec = N.loop_brief(ctx.text, model=self.model, backend=self.backend,
+                               instruction=instruction)
+        except Exception as e:
+            return det + f"\n\n> _loop draft unavailable ({e}); deterministic draft above._"
+        return self._compose_loop(rec, det)
+
+    @staticmethod
+    def _compose_loop(rec: str, det: str) -> str:
+        body = f"# 🔁 agent loop\n\n{rec.strip()}"
+        fallback = _extract_loop_command(det)
+        if fallback:
+            body += f"\n\n---\n_deterministic fallback:_\n\n```text\n{fallback}\n```"
+        return body
+
     def _handoff(self, arg: str):
         if self.st is None:
             return "(no live session — transcript gone; nothing to hand off)"
@@ -929,6 +1088,7 @@ class ChatSession:
 
     def switch_path(self, path):
         """Change the evidence target while keeping this Cockpit session."""
+        self._rewind_undo = None
         self._attach(path, load_store=False)
         self._persist_state()
 
@@ -965,6 +1125,7 @@ class ChatSession:
     def attach_conv(self, header) -> bool:
         """Attach by a stored conversation header (from /history). Returns True
         for a live re-attach, False when the transcript is gone (history-only)."""
+        self._rewind_undo = None
         self.store = ST.Store(header.conv_id, enabled=self._persist)
         self.store.apply_header(header)
         if header.transcript and os.path.isfile(header.transcript):
@@ -999,6 +1160,7 @@ class ChatSession:
     def new_cockpit(self) -> str:
         self.store = ST.Store.new_for(self.path, enabled=self._persist, tr=getattr(self.st, "tr", None))
         self.history = []
+        self._rewind_undo = None
         self._persist_state()
         return f"new cockpit session → {self.store.conv_id}\n{self.banner()}"
 

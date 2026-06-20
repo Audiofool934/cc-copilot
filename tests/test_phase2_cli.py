@@ -113,6 +113,14 @@ class TestSinceHandoffCli(unittest.TestCase):
         self.assertIn("prefer tests", out)
         self.assertIn("cc-copilot does not inject", out)
 
+    def test_loop_raw_drafts_paste_ready_agent_loop(self):
+        p = self._session()
+        rc, out = self._run(["loop", "--raw", "--session", p, "every", "5m", "check", "build"])
+        self.assertEqual(rc, 0)
+        self.assertIn("/loop 5m ", out)
+        self.assertIn("check build", out)
+        self.assertIn("cc-copilot does not inject", out)
+
     def test_since_shows_diff_against_marker_and_advances(self):
         p = self._session()
         tr = SRC.parse(p)

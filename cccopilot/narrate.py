@@ -16,12 +16,82 @@ available, callers fall back to the deterministic brief.
 from __future__ import annotations
 
 import os
+import time
 
 from .brief import render
 from .backends import resolve, Backend, BackendError
 from .redact import redact
 
 _HISTORY_CHARS = 16000
+
+
+def _retry_attempts() -> int:
+    """Total backend attempts for transient model failures.
+
+    ``CC_COPILOT_MODEL_RETRIES`` is extra retries, not total attempts. The default
+    is two retries because the common failure mode here is a flaky API connection,
+    not a bad prompt.
+    """
+    raw = os.environ.get("CC_COPILOT_MODEL_RETRIES", "2").strip()
+    try:
+        retries = int(raw)
+    except ValueError:
+        retries = 2
+    return max(1, min(6, 1 + max(0, retries)))
+
+
+def _retry_delay(attempt: int) -> float:
+    return min(4.0, 0.35 * (2 ** max(0, attempt)))
+
+
+def _retryable_error(exc: Exception) -> bool:
+    if not isinstance(exc, BackendError):
+        return False
+    msg = str(exc).lower()
+    if any(code in msg for code in ("http 400", "http 401", "http 403",
+                                    "http 404", "http 422")):
+        return False
+    needles = (
+        "connection error", "request failed", "timed out", "timeout",
+        "stream stalled", "remote end closed", "temporarily unavailable",
+        "overloaded", "rate limit", "http 429", "http 500", "http 502",
+        "http 503", "http 504", "http 529", "econnreset", "connection reset",
+    )
+    return any(n in msg for n in needles)
+
+
+def _complete_with_retries(be: Backend, prompt: str, model: str = None,
+                           timeout: int = 180) -> str:
+    attempts = _retry_attempts()
+    last = None
+    for i in range(attempts):
+        try:
+            return be.complete(prompt, model=model, timeout=timeout)
+        except Exception as e:
+            last = e
+            if i >= attempts - 1 or not _retryable_error(e):
+                raise
+            time.sleep(_retry_delay(i))
+    raise last
+
+
+def _stream_with_retries(be: Backend, prompt: str, model: str = None,
+                         timeout: int = 180):
+    attempts = _retry_attempts()
+    last = None
+    for i in range(attempts):
+        got = False
+        try:
+            for chunk in be.stream(prompt, model=model, timeout=timeout):
+                got = True
+                yield chunk
+            return
+        except Exception as e:
+            last = e
+            if got or i >= attempts - 1 or not _retryable_error(e):
+                raise
+            time.sleep(_retry_delay(i))
+    raise last
 
 _PREAMBLE = """You are cc-copilot, a read-only cockpit agent for supervising \
 coding agents. Below is an EVIDENCE CONTEXT PACK assembled from observable \
@@ -129,7 +199,8 @@ def run_brief(brief_text: str, task: str, model: str = None,
     if not be.available():
         raise RuntimeError(f"backend '{be.name}' unavailable — {be.reason()}. "
                            f"Try `cc-copilot backends` to see your options.")
-    return be.complete(_prompt(brief_text, task), model=model, timeout=timeout)
+    return _complete_with_retries(be, _prompt(brief_text, task),
+                                  model=model, timeout=timeout)
 
 
 class StreamHandle:
@@ -195,9 +266,10 @@ def run_brief_stream(brief_text: str, task: str, model: str = None,
     prompt = _prompt(brief_text, task)
     if not stream_enabled():
         def _one():
-            yield be.complete(prompt, model=model, timeout=timeout)
+            yield _complete_with_retries(be, prompt, model=model, timeout=timeout)
         return StreamHandle(be, _one())
-    return StreamHandle(be, be.stream(prompt, model=model, timeout=timeout))
+    return StreamHandle(be, _stream_with_retries(be, prompt, model=model,
+                                                 timeout=timeout))
 
 
 def narrate_brief_stream(brief_text: str, model: str = None, backend=None) -> StreamHandle:
@@ -381,6 +453,41 @@ def goal_brief_stream(brief_text: str, model: str = None, backend=None,
                       instruction: str = "") -> StreamHandle:
     """Streaming sibling of :func:`goal_brief` — identical grounding."""
     return run_brief_stream(brief_text, _with_instruction(_GOAL_DRAFT_TASK, instruction),
+                            model=model, backend=backend)
+
+
+_LOOP_DRAFT_TASK = (
+    "The evidence below combines the observed coding-agent session, cockpit "
+    "conversation context, and bounded read-only project facts. Draft ONE "
+    "paste-ready `/loop ...` command for the observed coding agent. Treat loop "
+    "engineering as designing the recurring prompt, memory/verification boundary, "
+    "cadence, and stop condition that replace repeated manual nudges. Prefer "
+    "Claude Code's self-paced shape (`/loop <prompt>`) when the task should decide "
+    "its own next wakeup from the observed state. Use a fixed interval "
+    "(`/loop 5m <prompt>`) only when the human explicitly asks for a cadence or "
+    "the evidence shows a polling task such as CI, deploy, logs, or a long command. "
+    "The loop prompt must tell the agent what to inspect each iteration, what to "
+    "do when it finds work, what to report when quiet, what not to do without "
+    "authorization, and when to stop scheduling itself or ask the human. Do not "
+    "invent files, commands, failures, URLs, PRs, or project facts. The slash "
+    "command itself should not include citations, but after the command add a "
+    "short 'Why this loop' section with cited evidence. Also state that cc-copilot "
+    "generated the command but did not inject it into the agent. Keep the `/loop` "
+    "command under 4,000 characters."
+)
+
+
+def loop_brief(brief_text: str, model: str = None, backend=None,
+               instruction: str = "") -> str:
+    """Draft a paste-ready agent ``/loop`` command from evidence context."""
+    return run_brief(brief_text, _with_instruction(_LOOP_DRAFT_TASK, instruction),
+                     model=model, backend=backend)
+
+
+def loop_brief_stream(brief_text: str, model: str = None, backend=None,
+                      instruction: str = "") -> StreamHandle:
+    """Streaming sibling of :func:`loop_brief` — identical grounding."""
+    return run_brief_stream(brief_text, _with_instruction(_LOOP_DRAFT_TASK, instruction),
                             model=model, backend=backend)
 
 

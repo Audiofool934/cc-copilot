@@ -1,7 +1,8 @@
 import unittest
+from unittest import mock
 
 from cccopilot import narrate as N
-from cccopilot.backends import Backend
+from cccopilot.backends import Backend, BackendError
 
 
 class CaptureBackend(Backend):
@@ -161,6 +162,66 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertIn("in Chinese", backend.prompts[1])
         self.assertIn("instruction for how to answer", backend.prompts[2])
         self.assertIn("in Chinese", backend.prompts[2])
+
+    def test_loop_prompt_drafts_paste_ready_loop_command(self):
+        backend = CaptureBackend()
+
+        out = N.loop_brief("# cc-copilot evidence context\nbody [L9]",
+                           backend=backend, instruction="check CI every 5m")
+
+        self.assertEqual(out, "ok")
+        prompt = backend.prompts[0]
+        self.assertIn("paste-ready `/loop ...`", prompt)
+        self.assertIn("self-paced", prompt)
+        self.assertIn("fixed interval", prompt)
+        self.assertIn("loop engineering", prompt)
+        self.assertIn("check CI every 5m", prompt)
+        self.assertIn("[L9]", prompt)
+
+    def test_transient_backend_errors_retry_complete(self):
+        class FlakyBackend(CaptureBackend):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def complete(self, prompt: str, model: str = None, timeout: int = 180) -> str:
+                self.calls += 1
+                self.prompts.append(prompt)
+                if self.calls == 1:
+                    raise BackendError("openai connection error: reset")
+                return "ok after retry"
+
+        backend = FlakyBackend()
+        with mock.patch("cccopilot.narrate.time.sleep"):
+            out = N.run_brief("# evidence\nbody [L1]", "Task", backend=backend)
+
+        self.assertEqual(out, "ok after retry")
+        self.assertEqual(backend.calls, 2)
+
+    def test_stream_retries_only_before_first_chunk(self):
+        class FlakyStreamBackend(Backend):
+            name = "flaky"
+
+            def __init__(self):
+                self.calls = 0
+
+            def available(self):
+                return True
+
+            def stream(self, prompt: str, model: str = None, timeout: int = 180):
+                self.calls += 1
+                if self.calls == 1:
+                    raise BackendError("openai connection error: reset")
+                yield "ok"
+
+        backend = FlakyStreamBackend()
+        with mock.patch.dict("os.environ", {"CC_COPILOT_STREAM": "1"}), \
+             mock.patch("cccopilot.narrate.time.sleep"):
+            h = N.run_brief_stream("# evidence\nbody [L1]", "Task", backend=backend)
+            out = "".join(h)
+
+        self.assertEqual(out, "ok")
+        self.assertEqual(backend.calls, 2)
 
     def test_watch_step_decision_prompt_is_machine_parseable(self):
         backend = CaptureBackend()

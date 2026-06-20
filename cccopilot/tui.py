@@ -58,7 +58,8 @@ from . import (sources as SRC, state as S, assess as A, narrate as N,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
                models as MODELS, scope_groups as SG, brief as BR)
 from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
-                   _deterministic_goal, _goal_context_question)
+                   _deterministic_goal, _goal_context_question,
+                   _loop_context_question)
 
 
 _WATCH_DEFAULT_MICRO_INTERVAL = 30.0
@@ -322,6 +323,7 @@ _HELP_TEXT = (
     "  /observe /brief /check  attention · recap · safety (LLM-free)\n"
     "  /now [steer]            recommend the next step (e.g. /now in spanish; LLM)\n"
     "  /goal [steer]           draft a paste-ready agent /goal from context\n"
+    "  /loop [steer]           draft a paste-ready agent /loop from context\n"
     "  /since [30m|1d] [--raw] [steer]  recap since you last looked (--raw = cited delta)\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
@@ -333,7 +335,7 @@ _HELP_TEXT = (
     "  /resume                 resume a cockpit session\n"
     "  /new                    start a new cockpit session\n"
     "  /theme                  switch cockpit palette\n"
-    "  /rewind                 fork the chat from an earlier message (Esc Esc on empty)\n"
+    "  /rewind                 fork from an earlier message; /rewind undo restores it\n"
     "  /model [name]           switch backend                     (Ctrl+T)\n"
     "  /init                   reopen the model picker (Claude / Codex / API key)\n"
     "  /stop                   interrupt answer; restore prompt for editing     (Ctrl+Z)\n"
@@ -354,6 +356,7 @@ _SLASH_CMDS = [
     ("/observe", "attention queue + next human decision", False),
     ("/now", "recommend the next step — add a steer like 'in spanish' (LLM; deterministic fallback)", False),
     ("/goal", "draft a paste-ready agent /goal from agent + project context", False),
+    ("/loop", "draft a paste-ready agent /loop from agent + project context", True),
     ("/since", "recap since you last looked (30m / 2h / 1d; --raw = cited delta; trailing text steers it)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
@@ -370,7 +373,7 @@ _SLASH_CMDS = [
     ("/theme", "switch cockpit palette", False),
     ("/model", "switch the LLM backend", True),
     ("/init", "reopen the model picker (choose Claude/Codex/an API key)", False),
-    ("/rewind", "fork from an earlier message (or Esc Esc on empty input)", False),
+    ("/rewind", "fork from an earlier message; `/rewind undo` restores it", False),
     ("/refresh", "re-read the observed session now", False),
     ("/stop", "interrupt answer and restore its prompt for editing (Ctrl+Z)", False),
     ("/forget", "delete THIS cockpit session's saved resume state", False),
@@ -1664,7 +1667,8 @@ class Cockpit(App):
         self._answer_prompt_history_added = False
         self._chat_answer_inflight = False  # a streaming chat answer is running (vs /now,/since)
         self._msg_queue = []             # chat messages typed while busy (FIFO)
-        self._prompt_history = self._prompt_history_from_session()
+        self._prompt_history = []
+        self._sync_prompt_history_from_session()
         self._prompt_history_index = None
         self._prompt_draft = ""
         self._chat_prompt_nav_index = None
@@ -1741,7 +1745,14 @@ class Cockpit(App):
                 if role == "user" and str(text or "").strip()]
 
     def _sync_prompt_history_from_session(self) -> None:
-        self._prompt_history = self._prompt_history_from_session()
+        # Composer history is an input affordance, not the persisted chat log.
+        # Restored session questions seed it, but rewinding/truncating chat must not
+        # erase prompts the user may still want to recall with ↑.
+        seen = set(self._prompt_history)
+        for text in self._prompt_history_from_session():
+            if text not in seen:
+                self._prompt_history.append(text)
+                seen.add(text)
         self._reset_prompt_history_nav()
 
     def _remember_prompt(self, text: str) -> bool:
@@ -5165,6 +5176,8 @@ class Cockpit(App):
             self.action_now(cmd.strip()[4:].strip()); return
         if low == "/goal" or low.startswith("/goal "):
             self.action_goal(cmd.strip()[5:].strip()); return
+        if low == "/loop" or low.startswith("/loop "):
+            self.action_loop(cmd.strip()[5:].strip()); return
         if low == "/brief":
             self.action_brief(); return
         if low == "/check":
@@ -5252,6 +5265,8 @@ class Cockpit(App):
             self.action_stop_answer(); return
         if low == "/forget":
             self.action_forget(); return
+        if low in ("/rewind undo", "/rewind revert"):
+            self.action_rewind_undo(); return
         if low == "/rewind":
             self.action_rewind(); return
         if low.startswith("/use"):
@@ -5474,6 +5489,58 @@ class Cockpit(App):
         self._update_status()
         self._drain_msg_queue()         # a message queued during /goal sends now
 
+    # ---- /loop: draft a paste-ready recurring prompt for the observed agent --
+    def action_loop(self, instruction=""):
+        self.session.refresh()
+        if self._no_live():
+            return
+        det = self.session._loop(instruction, raw=True)
+        title = f"/loop — {self.session.scope_label()}"
+        if instruction:
+            title += f' · "{instruction}"'
+        if not N.available(self.backend) or self._busy:
+            self._result(det)
+            self._update_status()
+            return
+        question = _loop_context_question(instruction)
+        ctx = self.session.answer_context(question, history=list(self.session.history))
+        self._ctx_stats = ctx.stats
+        self._out_tokens = 0
+        self._out_exact = False
+        self._last_cost = None
+        self.session.last_context_stats = ctx.stats
+        self.session.last_output_tokens = 0
+        self._busy = True
+        self._busy_frame = 0
+        self._chat(self._role(
+            Text("🔁 drafting an agent /loop — grounded in agent + project context…",
+                 style=_PAL["muted"]), "role-event"))
+        self._update_status()
+        self._loop_recap(title, ctx.text, det, instruction,
+                         (self._evidence_sig(), self.session.store))
+
+    @work(thread=True)
+    def _loop_recap(self, title, ctx_text, det, instruction, origin):
+        try:
+            rec = N.loop_brief(ctx_text, model=self.model, backend=self.backend,
+                               instruction=instruction)
+            out = self.session._compose_loop(rec, det)
+        except Exception as e:
+            out = det + f"\n\n> _loop draft unavailable ({e}); deterministic draft above._"
+        self.call_from_thread(self._loop_done, title, out, origin)
+
+    def _loop_done(self, title, out, origin):
+        self._busy = False
+        self._busy_frame = 0
+        sig, store = origin
+        if self._evidence_sig() == sig and self.session.store is store:
+            self._result(out)
+        else:
+            self.notify(f"dropped {title} — you switched while it ran",
+                        severity="warning")
+        self._update_status()
+        self._drain_msg_queue()         # a message queued during /loop sends now
+
     def action_check(self):
         self.session.refresh()
         if self._no_live():
@@ -5553,18 +5620,47 @@ class Cockpit(App):
     async def action_rewind(self):
         hist = self.session.history
         qs = [t for r, t in hist if r == "user"]
-        if not qs:
+        undo_available = bool(getattr(self.session, "_rewind_undo", None))
+        if not qs and not undo_available:
             self.notify("nothing to rewind — no questions yet"); return
         opts = []
+        if undo_available:
+            opts.append(("undo last rewind", "__undo__"))
         for k, q in enumerate(qs):
             ans = hist[2 * k + 1][1] if 2 * k + 1 < len(hist) else ""
             label = f"#{k + 1}  {q[:46]}" + (f"   → {ans[:26]}" if ans else "")
             opts.append((label, k))
-        opts.reverse()                                  # newest first
-        chosen = await self.push_screen_wait(
-            Picker("rewind — fork from an earlier message (re-asks it)", opts))
+        undo = opts[:1] if opts and opts[0][1] == "__undo__" else []
+        rest = opts[1:] if undo else opts
+        rest.reverse()                                  # newest first
+        opts = undo + rest
+        title = "rewind — fork from an earlier message"
+        if undo_available:
+            title += " (undo available)"
+        chosen = await self.push_screen_wait(Picker(title, opts))
         if chosen is not None:
-            self._rewind_to(chosen)
+            if chosen == "__undo__":
+                self._rewind_undo()
+            else:
+                self._rewind_to(chosen)
+
+    def action_rewind_undo(self):
+        self._rewind_undo()
+
+    def _rewind_undo(self):
+        msg = self.session.rewind_undo()
+        if msg.startswith("restored"):
+            self._rebuild_chat()
+            try:
+                comp = self.query_one("#composer", Composer)
+                comp._replace_text("")
+                comp.focus()
+            except Exception:
+                pass
+            self._refresh_scope_view()
+            self.notify(msg, severity="information")
+        else:
+            self.notify(msg, severity="warning")
 
     def _rewind_to(self, k):
         # keep turns [0, k); drop message k and everything after; re-load it for editing
@@ -5581,15 +5677,16 @@ class Cockpit(App):
             if h is not None:
                 h.cancel()
         question = qs[k]
+        self.session._save_rewind_undo()
         self.session.history = hist[:2 * k]             # turns are user/assistant pairs
         self.session.store.truncate(k)                  # persist the fork
-        self._sync_prompt_history_from_session()
+        self._reset_prompt_history_nav()
         self._rebuild_chat()
         comp = self.query_one("#composer", Composer)
         comp.text = question
         comp.move_cursor(comp.document.end)
         comp.focus()
-        self.notify(f"rewound to message #{k + 1} — edit & Enter to re-ask")
+        self.notify(f"rewound to message #{k + 1} — edit & Enter to re-ask · /rewind undo restores")
 
     @work
     async def action_model(self):

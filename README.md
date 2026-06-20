@@ -72,6 +72,8 @@ Inside the cockpit:
 /watch      core observer loop; `/watch 中文` steers output; `/watch view` monitor
 /observe    attention queue and next human decision
 /now        recommend the next step from the completed work (LLM; deterministic fallback)
+/goal       draft a paste-ready agent /goal from agent + project context
+/loop       draft a paste-ready agent /loop from agent + project context
 /since      recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
 /handoff    shareable Markdown handoff (brief + what changed)
 /brief      deterministic recap with citations
@@ -242,6 +244,9 @@ It gives you:
 - Paste-ready agent goals via `/goal`, generated from observed agent evidence
   plus read-only project context; cc-copilot shows the command, it does not
   inject it into the agent.
+- Paste-ready agent loops via `/loop`, generated from observed agent evidence
+  plus read-only project context. Use `/loop [steer]` to bias cadence, language,
+  or focus; cc-copilot still only shows the command.
 - Grounded chat over one session, selected sessions, or project evidence.
 - Context HUD showing estimated input context, output estimate, and evidence
   split across raw transcript, project facts, chat, memory, and summary index.
@@ -433,6 +438,17 @@ command from the selected evidence and project facts:
 
 Use the generated command in Claude Code or Codex when you want the agent to
 keep working toward a concrete finish line.
+
+`/loop` does the same for recurring agent work. It drafts a paste-ready loop
+prompt, defaulting to self-paced loop instructions unless you ask for a cadence:
+
+```text
+/loop <recurring inspection/action/reporting prompt>
+/loop 5m <fixed-interval polling prompt>
+```
+
+Use it when the agent should keep checking CI, a deploy, logs, a long-running
+command, or unfinished session work without you manually re-prompting each time.
 
 ## Cockpit Sessions
 

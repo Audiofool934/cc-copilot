@@ -10,4 +10,4 @@ agent: every statement in a brief points back to a concrete transcript event
 (a JSONL line number + timestamp). The deterministic core never guesses.
 """
 
-__version__ = "0.28.1"
+__version__ = "0.29.0"

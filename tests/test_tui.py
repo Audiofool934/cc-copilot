@@ -617,6 +617,33 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.goal_brief, N.available = real_goal, real_avail
 
+    async def test_cockpit_loop_renders_grounded_loop_async(self):
+        """/loop drafts a paste-ready agent loop on a worker thread and keeps the
+        deterministic fallback under it as a grounded anchor."""
+        from cccopilot import narrate as N
+        from textual.widgets import Markdown
+        real_loop, real_avail = N.loop_brief, N.available
+        N.available = lambda be=None: True
+        N.loop_brief = lambda text, model=None, backend=None, instruction="": (
+            "```text\n/loop MODEL_LOOP\n```\n\nWhy this loop\n- observed [L1]"
+        )
+        try:
+            sess = self._session("sess-A")
+            app = tui.Cockpit(sess, poll=999, alerts=False)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/loop prefer self-paced")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                srcs = "\n".join(getattr(m, "source", "")
+                                 for m in app.query_one("#chat").query(Markdown))
+                self.assertIn("# 🔁 agent loop", srcs)
+                self.assertIn("MODEL_LOOP", srcs)
+                self.assertIn("deterministic fallback", srcs)
+                self.assertFalse(app._busy)
+        finally:
+            N.loop_brief, N.available = real_loop, real_avail
+
     async def test_meta_results_render_as_inline_markdown_not_a_box(self):
         """/now (and its /since, /brief siblings) render through the Markdown
         widget — rendered headings, no collapsible box, no literal '#'/'**' left
@@ -1595,6 +1622,21 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
     async def test_rewind_forks_conversation(self):
         sess = self._session("sess-A")
+        sess.history = [("user", "q0"), ("assistant", "a0 [L1]"),
+                        ("user", "q1"), ("assistant", "a1 [L1]"),
+                        ("user", "q2"), ("assistant", "a2 [L1]")]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._rewind_to(1)                           # fork before message #2
+            await pilot.pause()
+            comp = app.query_one("#composer", tui.Composer)
+            self.assertEqual(comp.text, "q1")           # forked message reloaded
+            self.assertIn("q2", app._prompt_history)    # composer history is independent
+        self.assertEqual(sess.history, [("user", "q0"), ("assistant", "a0 [L1]")])
+
+    async def test_rewind_undo_restores_conversation(self):
+        sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -1602,13 +1644,15 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app._answer_done(f"q{i}", f"a{i} [L1]", True,
                                  app.session.st, app.session.store)
                 await pilot.pause()
-            app._rewind_to(1)                           # fork before message #2
+            app._rewind_to(1)
             await pilot.pause()
-            comp = app.query_one("#composer", tui.Composer)
-            self.assertEqual(comp.text, "q1")           # forked message reloaded
-        self.assertEqual(sess.history, [("user", "q0"), ("assistant", "a0 [L1]")])
-        self.assertEqual(sess.store.load_history(),
-                         [("user", "q0"), ("assistant", "a0 [L1]")])
+            app._rewind_undo()
+            await pilot.pause()
+            self.assertEqual([t for r, t in sess.history if r == "user"],
+                             ["q0", "q1", "q2"])
+            self.assertEqual(app.query_one("#composer", tui.Composer).text, "")
+        self.assertEqual([t for r, t in sess.store.load_history() if r == "user"],
+                         ["q0", "q1", "q2"])
 
     async def test_prompt_history_up_down_restores_draft(self):
         sess = self._session("sess-A")

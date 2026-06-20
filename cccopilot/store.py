@@ -409,6 +409,49 @@ class Store:
             return []
         return out
 
+    def snapshot(self):
+        """Raw turns log snapshot for a reversible in-session rewind."""
+        if not self.enabled or not os.path.isfile(self.turns_path):
+            return None
+        try:
+            with self._dir_locked():
+                with open(self.turns_path, "r", encoding="utf-8",
+                          errors="replace", newline="") as fh:
+                    return fh.read()
+        except OSError:
+            return None
+
+    def restore_snapshot(self, text) -> bool:
+        """Restore a raw turns log snapshot and rebuild the derived meta cache."""
+        if not self.enabled or text is None:
+            return False
+        try:
+            with self._dir_locked():
+                os.makedirs(self.dir, mode=0o700, exist_ok=True)
+                _chmod(self.dir, 0o700)
+                _chmod(_conv_root(), 0o700)
+                _chmod(state_home(), 0o700)
+                tmp = self.turns_path + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(str(text or ""))
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, self.turns_path)
+                _fsync_dir(self.dir)
+                n, last = 0, {}
+                for line in str(text or "").splitlines():
+                    obj = _parse(line)
+                    if obj is not None and obj.get("kind") == "turn":
+                        n += 1
+                        last = obj
+                self._write_meta(n, last.get("q", ""), last.get("a", ""),
+                                 last.get("backend"), last.get("model"))
+                self._delete_memory()
+            return True
+        except (OSError, ValueError):
+            return False
+
     def load_memory(self) -> str:
         """Durable structured memory for older cockpit turns, if present."""
         if not self.enabled:

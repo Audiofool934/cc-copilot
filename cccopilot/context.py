@@ -26,6 +26,8 @@ PER_RECORD_CHARS = 24000
 PROJECT_CONTEXT_CHARS = 36000
 PROJECT_EXCERPT_LINES = 80
 PROJECT_INDEX_FILES = 120
+CONVERSATION_TERM_TURNS = 3
+CONVERSATION_TERM_LIMIT = 32
 
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "did",
@@ -37,6 +39,7 @@ _STOPWORDS = {
 
 _CITATION = re.compile(r"\[(?:(?P<sid>[A-Za-z0-9_.-]+):)?L(?P<line>\d+)[^\]]*\]")
 _BARE_LINE = re.compile(r"\bL(?P<line>\d+)\b")
+_PATHISH = re.compile(r"(?:[\w.-]+/)+[\w./:-]+", re.UNICODE)
 
 
 @dataclass
@@ -147,7 +150,7 @@ def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
     max_chars = max_tokens * 4
     sources = _sources(path, st, sc, sessions)
     selectors = SC.parse_selectors(sessions)
-    terms = _terms(question)
+    terms = _conversation_terms(question, history)
 
     selected = _select_records(sources, question, history, terms)
     raw_text = _render_raw_records(selected)
@@ -249,6 +252,60 @@ def _terms(question: str) -> list:
             seen.add(term)
             out.append(term)
     return out[:24]
+
+
+def _conversation_terms(question: str, history: list) -> list:
+    """Current-question terms plus a small continuity tail from recent cockpit turns.
+
+    Prior user asks are intentional retrieval hints for follow-ups like "that" or
+    "continue this". Assistant answers contribute only citations/path-like tokens,
+    not their full prose, so an earlier synthesis does not become fresh evidence.
+    """
+    out, seen = [], set()
+
+    def add_from(text: str) -> None:
+        for term in _terms(text):
+            if term not in seen:
+                seen.add(term)
+                out.append(term)
+            if len(out) >= CONVERSATION_TERM_LIMIT:
+                return
+
+    add_from(question)
+    if len(out) >= CONVERSATION_TERM_LIMIT:
+        return out
+
+    pairs = _history_pairs(history)
+    for turn in pairs[-CONVERSATION_TERM_TURNS:]:
+        for role, text in turn:
+            if role == "user":
+                add_from(text)
+            else:
+                add_from(" ".join(_assistant_continuity_hints(text)))
+            if len(out) >= CONVERSATION_TERM_LIMIT:
+                return out
+    return out
+
+
+def _history_pairs(history: list) -> list:
+    pairs, current = [], []
+    for role, text in list(history or []):
+        current.append((role, text))
+        if len(current) == 2:
+            pairs.append(current)
+            current = []
+    if current:
+        pairs.append(current)
+    return pairs
+
+
+def _assistant_continuity_hints(text: str) -> list:
+    text = str(text or "")
+    hints = []
+    for sid, line in _line_refs(text):
+        hints.append(f"{sid}:L{line}" if sid else f"L{line}")
+    hints.extend(m.group(0) for m in _PATHISH.finditer(text))
+    return hints[:24]
 
 
 def _select_records(sources: list, question: str, history: list, terms: list) -> dict:

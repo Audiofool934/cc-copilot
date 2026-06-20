@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.29.0 — 2026-06-20
+
+**`/loop` drafts paste-ready agent loops from session + project context.**
+Cockpit, REPL, and `cc-copilot loop` now generate a grounded `/loop ...`
+command for the observed agent, with optional steering via `/loop [instruct]`.
+The draft follows Claude Code's current loop shape: self-paced by default,
+fixed-interval only when the human or evidence calls for polling.
+
+**Multi-turn cockpit chat now carries retrieval intent forward.** Follow-up
+questions use the recent cockpit conversation as bounded retrieval hints, so
+"that/this/continue" can still pull the files, transcript records, and project
+excerpts introduced in the previous turn. Earlier assistant answers only
+contribute citations and path-like hints; old prose is not treated as new
+evidence.
+
+**Rewind is reversible.** `/rewind` now saves a one-step snapshot before
+truncating cockpit history. `/rewind undo` restores the pre-rewind conversation
+in memory and on disk until you continue with a new turn.
+
+**Composer history no longer depends on rewind.** Restored cockpit turns seed
+the prompt box history, but rewinding the chat no longer erases prompts from the
+composer's `↑` / `↓` recall list.
+
+**Model calls retry transient backend failures.** The narration chokepoint now
+retries connection resets, timeouts, rate limits, overloads, and 5xx-class model
+errors before surfacing a failure. Streaming calls retry only before any output
+has been shown, so partial answers are never duplicated.
+
 ## 0.28.1 — 2026-06-19
 
 **Watch monitor cards are less noisy and more informative.** Routine command
