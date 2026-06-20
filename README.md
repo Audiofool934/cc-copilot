@@ -261,8 +261,8 @@ It gives you:
   and stays read-only. In multi-session/project scope it watches the selected
   live transcripts and labels updates by session. The monitor keeps separate
   session views, with `Tab` switching sessions and `←` / `→` browsing steps
-  inside the selected session. Watch process updates are pruned from chat on
-  stop, leaving a compact end summary and the full step record in the monitor.
+  inside the selected session. Watch process updates stay out of the main chat;
+  `/watch stop` keeps the monitor record available until the next watch run.
 - Background alerts when the agent stalls, errors, or goes off track.
 - Checkbox session picker with `[ ]` / `[x]` multi-select.
 - Resumable Cockpit Sessions via `/resume`.

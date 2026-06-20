@@ -198,6 +198,26 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertEqual(out, "ok after retry")
         self.assertEqual(backend.calls, 2)
 
+    def test_exhausted_transient_error_reports_attempt_count(self):
+        class DownBackend(CaptureBackend):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def complete(self, prompt: str, model: str = None, timeout: int = 180) -> str:
+                self.calls += 1
+                raise BackendError(
+                    "deepseek connection error: [Errno 104] Connection reset by peer")
+
+        backend = DownBackend()
+        with mock.patch.dict("os.environ", {"CC_COPILOT_MODEL_RETRIES": "1"}), \
+             mock.patch("cccopilot.narrate.time.sleep"):
+            with self.assertRaises(BackendError) as ctx:
+                N.run_brief("# evidence\nbody [L1]", "Task", backend=backend)
+
+        self.assertEqual(backend.calls, 2)
+        self.assertIn("after 2 attempts", str(ctx.exception))
+
     def test_stream_retries_only_before_first_chunk(self):
         class FlakyStreamBackend(Backend):
             name = "flaky"

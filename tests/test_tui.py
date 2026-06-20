@@ -613,6 +613,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("# 🎯 agent goal", srcs)
                 self.assertIn("MODEL_GOAL", srcs)
                 self.assertIn("deterministic fallback", srcs)
+                self.assertIn(("user", "/goal prefer tests"), sess.history)
+                self.assertTrue(any(role == "assistant" and "MODEL_GOAL" in text
+                                    for role, text in sess.history))
                 self.assertFalse(app._busy)
         finally:
             N.goal_brief, N.available = real_goal, real_avail
@@ -640,6 +643,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("# 🔁 agent loop", srcs)
                 self.assertIn("MODEL_LOOP", srcs)
                 self.assertIn("deterministic fallback", srcs)
+                self.assertIn(("user", "/loop prefer self-paced"), sess.history)
+                self.assertTrue(any(role == "assistant" and "MODEL_LOOP" in text
+                                    for role, text in sess.history))
                 self.assertFalse(app._busy)
         finally:
             N.loop_brief, N.available = real_loop, real_avail
@@ -1941,12 +1947,16 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             dock = str(app.query_one("#watch-dock", Static).content)
             chat = "\n".join(str(getattr(s, "content", "") or "")
                              for s in app.query("#chat Static"))
+            app._meta("/watch view")
+            await pilot.pause()
+            recent = str(app.query_one("#watch-monitor-recent", Static).content)
 
         self.assertTrue(app._watch_mode)
         self.assertNotIn("watch:on", hud)
         self.assertIn("watch", dock)
         self.assertIn("on", dock)
-        self.assertIn("Night gathers, and now my watch begins.", chat)
+        self.assertNotIn("Night gathers, and now my watch begins.", chat)
+        self.assertIn("Night gathers, and now my watch begins.", recent)
 
     async def test_watch_stop_clears_hud_marker(self):
         from textual.widgets import Static
@@ -1966,7 +1976,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("watch", dock)
         self.assertIn("off", dock)
 
-    async def test_watch_stop_prunes_process_updates_from_chat(self):
+    async def test_watch_updates_stay_out_of_main_chat(self):
         from cccopilot import narrate as N
         real_avail = N.available
         N.available = lambda be=None: False
@@ -1985,6 +1995,9 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app._on_watch(st, tui.S.diff(old, st))
                 await pilot.pause()
                 running = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
+                app._meta("/watch view")
+                await pilot.pause()
+                monitor = str(app.query_one("#watch-monitor-now").content)
 
                 app._meta("/watch stop")
                 await pilot.pause()
@@ -1992,11 +2005,12 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.available = real_avail
 
-        self.assertIn("Night gathers, and now my watch begins.", running)
-        self.assertIn("watch · progress", running)
+        self.assertNotIn("Night gathers, and now my watch begins.", running)
+        self.assertNotIn("watch · progress", running)
+        self.assertIn("Bash running: pytest", monitor)
         self.assertIn("ordinary chat marker", stopped)
-        self.assertIn("watch · stopped", stopped)
-        self.assertIn("/watch view to review", stopped)
+        self.assertNotIn("watch · stopped", stopped)
+        self.assertNotIn("/watch view to review", stopped)
         self.assertNotIn("Night gathers, and now my watch begins.", stopped)
         self.assertNotIn("watch · progress", stopped)
         self.assertNotIn("watch · digest", stopped)
@@ -2019,9 +2033,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 st = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st, tui.S.diff(old, st))
                 await pilot.pause()
-                alerts = [w for w in app.query_one("#chat").children
-                          if "role-alert" in w.classes]
-                rendered = "\n".join(str(w.render()) for w in alerts)
+                rendered = app._watch_run.last_alert_text
         finally:
             N.available = real_avail
 
@@ -2067,13 +2079,11 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                     fh.write(json.dumps(tool("Bash", {"command": "pytest"}, "t1", 4)) + "\n")
                 st = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st, tui.S.diff(old, st))
-                rendered = ""
                 for _ in range(10):
                     await pilot.pause()
-                    rendered = "\n".join(str(w.render())
-                                         for w in app.query_one("#chat").children)
-                    if "watch · copilot" in rendered:
+                    if "still running pytest" in app._watch_run.last_now_text:
                         break
+                rendered = app._watch_run.last_now_text
         finally:
             N.available = real_avail
             N.watch_flow_update = real_flow
@@ -2084,7 +2094,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("baseline before watch started", event_flow)
         self.assertIn("previous now", event_flow)
         self.assertIn("in-flight tool", event_flow)
-        self.assertIn("watch · copilot", rendered)
         self.assertIn("still running pytest", rendered)
 
     async def test_watch_accepts_language_preset_like_now_instruction(self):
@@ -2223,6 +2232,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
     async def test_watch_auto_digest_uses_copilot_step_closure_summary(self):
         from cccopilot import narrate as N
+        from textual.widgets import Static
         real_avail = N.available
         real_digest = N.watch_digest_brief
         real_flow = N.watch_flow_update
@@ -2286,10 +2296,11 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 rendered = ""
                 for _ in range(10):
                     await pilot.pause()
-                    rendered = "\n".join(str(w.render())
-                                         for w in app.query_one("#chat").children)
-                    if "watch · digest" in rendered:
+                    if "previous watch step closed" in app._watch_run.last_digest_text:
                         break
+                app._meta("/watch view")
+                await pilot.pause()
+                rendered = str(app.query_one("#watch-monitor-digest", Static).content)
         finally:
             N.available = real_avail
             N.watch_digest_brief = real_digest
@@ -2299,13 +2310,13 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("watch digest buffer", captured[0][0])
         self.assertIn("in-flight `Bash`", captured[0][0])
         self.assertIn("step boundary", captured[0][0])
-        self.assertIn("watch · digest", rendered)
         self.assertIn("previous watch step closed", rendered)
         self.assertEqual(app._watch_run.events_since_digest, 0)
         self.assertTrue(app._watch_run.digest_buffer)
 
-    async def test_watch_digest_waits_while_copilot_is_busy_then_auto_emits(self):
+    async def test_watch_digest_runs_independently_while_copilot_is_busy(self):
         from cccopilot import narrate as N
+        from textual.widgets import Static
         real_avail = N.available
         real_digest = N.watch_digest_brief
         real_flow = N.watch_flow_update
@@ -2342,19 +2353,14 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 st = tui.S.build(tui.SRC.parse(sess.path))
                 app._on_watch(st, tui.S.diff(old, st))
                 app._meta("/watch refresh")
-                await pilot.pause()
-                self.assertFalse(captured)
-                self.assertTrue(app._watch_run.pending_digest_reason)
-
-                app._busy = False
-                app._tick_refresh()
                 rendered = ""
                 for _ in range(10):
                     await pilot.pause()
-                    rendered = "\n".join(str(w.render())
-                                         for w in app.query_one("#chat").children)
-                    if "watch · digest" in rendered:
+                    if captured:
                         break
+                app._meta("/watch view")
+                await pilot.pause()
+                rendered = str(app.query_one("#watch-monitor-digest", Static).content)
         finally:
             N.available = real_avail
             N.watch_digest_brief = real_digest
@@ -2362,7 +2368,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(captured)
         self.assertIn("digest trigger", captured[0][0])
-        self.assertIn("watch · digest", rendered)
         self.assertIn("queued watch digest", rendered)
 
     async def test_watch_view_replaces_chat_but_keeps_activity_timeline(self):
@@ -2515,8 +2520,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             N.available = real_avail
 
         self.assertIs(app.session.st, anchor_state)
-        self.assertIn("watch · progress", rendered)
-        self.assertIn(sid_b[:8], rendered)
+        self.assertNotIn("watch · progress", rendered)
+        self.assertNotIn(sid_b[:8], rendered)
         self.assertIn("2 sessions", dock)
         self.assertIn(sid_b[:8], app._watch_run.last_micro_text)
         self.assertIn("session", title_b)
@@ -2587,7 +2592,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         finally:
             N.available = real_avail
 
-        self.assertGreaterEqual(first_count, 1)
+        self.assertEqual(first_count, 0)
         self.assertEqual(second.count("watch · progress"), first_count)
         self.assertFalse(app._watch_run.last_digest_text)
         self.assertTrue(app._watch_run.digest_buffer)
@@ -2613,7 +2618,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app._watch_run.paused)
         self.assertNotIn("watch:paused", hud)
         self.assertIn("paused", dock)
-        self.assertIn("watch · paused", rendered)
+        self.assertNotIn("watch · paused", rendered)
 
     async def test_busy_tick_advances_only_while_busy(self):
         sess = self._session("sess-A")
@@ -3311,6 +3316,114 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
             self.assertIn("not saved", str(alerts[-1].render()))
         self.assertEqual(sess.history, [])               # partial never recorded
         self.assertEqual(sess.store._load_turns(), [])
+
+    async def test_prestream_backend_error_is_rewindable_but_not_persisted(self):
+        from cccopilot import backends as BK, narrate as N
+
+        class _Stub:
+            last_usage = None
+
+        def gen():
+            raise BK.BackendError(
+                "deepseek connection error: [Errno 104] Connection reset by peer "
+                "(after 3 attempts)")
+            yield "never"
+
+        N.chat_brief_stream = lambda brief, hist, q, model=None, backend=None: (
+            N.StreamHandle(_Stub(), gen()))
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        prompt = "OK, 现在说啥"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._on_submit(tui.Composer.Submitted(prompt))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            rendered = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
+            self.assertIn("after 3 attempts", rendered)
+            self.assertEqual(sess.history[0], ("user", prompt))
+            self.assertEqual(sess.history[1][0], "error")
+            app._rewind_to(0)
+            await pilot.pause()
+            comp_text = app.query_one("#composer", tui.Composer).text
+
+        self.assertEqual(sess.history, [])
+        self.assertEqual(sess.store._load_turns(), [])
+        self.assertEqual(comp_text, prompt)
+
+    async def test_prestream_error_after_cockpit_switch_restores_on_resume(self):
+        from cccopilot import store as ST
+
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        prompt = "will this retry?"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            origin_store = sess.store
+            origin_st = sess.st
+            origin_header = origin_store.header()
+            origin = app._answer_origin(origin_st, origin_store)
+            origin["history"] = list(sess.history)
+
+            sess.new_cockpit()
+            app._rebuild_chat()
+            await pilot.pause()
+            app._answer_done(prompt, "# error: connection reset", False,
+                             origin_st, origin_store, origin=origin)
+            await pilot.pause()
+            self.assertEqual(sess.history, [])             # current cockpit untouched
+
+            sess.attach_conv(origin_header)
+            app._rebuild_chat()
+            await pilot.pause()
+            rendered = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
+            app._rewind_to(0)
+            await pilot.pause()
+            comp_text = app.query_one("#composer", tui.Composer).text
+
+        self.assertEqual(ST.Store(origin_store.conv_id, enabled=True)._load_turns(), [])
+        self.assertIn("# error: connection reset", rendered)
+        self.assertEqual(comp_text, prompt)
+
+    async def test_error_turns_do_not_blank_timestamps_for_successful_turns(self):
+        sess = self._session()
+        sess.store.record_turn("ok?", "ok [L1]", st=sess.st)
+        sess.history = [
+            ("user", "failed?"),
+            ("error", "# error: connection reset"),
+            ("user", "ok?"),
+            ("assistant", "ok [L1]"),
+        ]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+
+        times = app._history_times(sess.history)
+
+        self.assertEqual(times[:2], ["", ""])
+        self.assertTrue(times[2])
+        self.assertEqual(times[2], times[3])
+
+    async def test_rewind_truncates_store_by_successful_turns_when_errors_exist(self):
+        sess = self._session()
+        sess.store.record_turn("q1", "a1 [L1]", st=sess.st)
+        sess.store.record_turn("q3", "a3 [L1]", st=sess.st)
+        sess.history = [
+            ("user", "q1"), ("assistant", "a1 [L1]"),
+            ("user", "q2"), ("error", "# error: connection reset"),
+            ("user", "q3"), ("assistant", "a3 [L1]"),
+        ]
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._rewind_to(2)
+            await pilot.pause()
+            comp_text = app.query_one("#composer", tui.Composer).text
+
+        self.assertEqual(comp_text, "q3")
+        self.assertEqual(sess.history, [
+            ("user", "q1"), ("assistant", "a1 [L1]"),
+            ("user", "q2"), ("error", "# error: connection reset"),
+        ])
+        self.assertEqual([t["q"] for t in sess.store._load_turns()], ["q1"])
 
     async def test_chunks_for_switched_store_buffer_but_do_not_paint(self):
         from textual.widgets import Markdown

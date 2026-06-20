@@ -125,6 +125,9 @@ class TestReplMetaCommands(unittest.TestCase):
         self.assertIn("/goal ", out)
         self.assertIn("focus verification", out)
         self.assertIn("cc-copilot does not inject", out)
+        self.assertIn(("user", "/goal focus verification"), s.history)
+        self.assertTrue(any(role == "assistant" and "focus verification" in text
+                            for role, text in s.history))
 
     def test_goal_with_backend_uses_goal_narration_and_fallback_anchor(self):
         from cccopilot import narrate as N
@@ -141,6 +144,53 @@ class TestReplMetaCommands(unittest.TestCase):
         self.assertIn("MODEL_GOAL", out)
         self.assertIn("deterministic fallback", out)
         self.assertIn("/goal ", out)
+
+    def test_loop_output_is_available_to_the_next_question_context(self):
+        from cccopilot import narrate as N
+        real_avail, real_chat = N.available, N.chat_brief
+        captured = {}
+
+        def fake_chat(text, snippets, q, model=None, backend=None):
+            captured["text"] = text
+            captured["q"] = q
+            return "updated loop prompt"
+
+        N.available = lambda be=None: False
+        N.chat_brief = fake_chat
+        try:
+            s = self._sess()
+            out = s.meta("/loop add checkpoints")
+            ans = s.answer("修改一下，加一点重试")
+        finally:
+            N.available, N.chat_brief = real_avail, real_chat
+        self.assertIn("/loop ", out)
+        self.assertEqual(ans, "updated loop prompt")
+        self.assertIn(("user", "/loop add checkpoints"), s.history)
+        self.assertIn("/loop add checkpoints", captured["text"])
+        self.assertIn("add checkpoints", captured["text"])
+        self.assertIn("/loop ", captured["text"])
+
+    def test_failed_model_error_is_not_treated_as_assistant_context(self):
+        s = self._sess()
+        s.history = [
+            ("user", "上一句失败的问题"),
+            ("error", "# error: deepseek connection error: [Errno 104] Connection reset by peer"),
+        ]
+
+        ctx = s.answer_context("再试一次").text
+
+        self.assertIn("上一句失败的问题", ctx)
+        self.assertNotIn("Connection reset by peer", ctx)
+
+    def test_repl_error_turn_is_rewindable_but_not_persisted(self):
+        s = self._sess()
+        s.record_error_turn("will this retry?", "# error: connection reset")
+
+        out = s.meta("/rewind 1")
+
+        self.assertIn("will this retry?", out)
+        self.assertEqual(s.history, [])
+        self.assertEqual(s.store._load_turns(), [])
 
 
 if __name__ == "__main__":

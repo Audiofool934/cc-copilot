@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.29.1 — 2026-06-20
+
+**Watch is isolated from the main cockpit chat.** Automatic watch updates now stay
+in the watch dock/monitor, so the ordinary chat history remains user/copilot
+conversation only. `/watch stop` leaves monitor history available until the next
+watch run instead of adding a stopped summary to chat.
+
+**Model failures are easier to recover from.** Pre-stream TUI backend failures are
+kept as rewindable in-memory error turns without persisting them as successful
+assistant answers, and transient backend errors report the exhausted attempt
+count. `/goal` and `/loop` drafts now remain available as context for follow-up
+edits like "make that shorter" or "add retries".
+
 ## 0.29.0 — 2026-06-20
 
 **`/loop` drafts paste-ready agent loops from session + project context.**

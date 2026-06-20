@@ -45,8 +45,6 @@ def _retry_delay(attempt: int) -> float:
 
 
 def _retryable_error(exc: Exception) -> bool:
-    if not isinstance(exc, BackendError):
-        return False
     msg = str(exc).lower()
     if any(code in msg for code in ("http 400", "http 401", "http 403",
                                     "http 404", "http 422")):
@@ -56,8 +54,20 @@ def _retryable_error(exc: Exception) -> bool:
         "stream stalled", "remote end closed", "temporarily unavailable",
         "overloaded", "rate limit", "http 429", "http 500", "http 502",
         "http 503", "http 504", "http 529", "econnreset", "connection reset",
+        "reset by peer", "errno 104", "remote disconnected", "bad status line",
+        "service unavailable", "gateway timeout",
     )
+    if not isinstance(exc, BackendError):
+        # Raw socket/protocol exceptions occasionally escape a backend wrapper.
+        # Retry only when their message still matches a known transient shape.
+        return any(n in msg for n in needles)
     return any(n in msg for n in needles)
+
+
+def _raise_retry_exhausted(exc: Exception, attempts: int):
+    if attempts > 1 and _retryable_error(exc):
+        raise BackendError(f"{exc} (after {attempts} attempts)") from exc
+    raise exc
 
 
 def _complete_with_retries(be: Backend, prompt: str, model: str = None,
@@ -70,7 +80,7 @@ def _complete_with_retries(be: Backend, prompt: str, model: str = None,
         except Exception as e:
             last = e
             if i >= attempts - 1 or not _retryable_error(e):
-                raise
+                _raise_retry_exhausted(e, attempts)
             time.sleep(_retry_delay(i))
     raise last
 
@@ -88,8 +98,10 @@ def _stream_with_retries(be: Backend, prompt: str, model: str = None,
             return
         except Exception as e:
             last = e
-            if got or i >= attempts - 1 or not _retryable_error(e):
+            if got:
                 raise
+            if i >= attempts - 1 or not _retryable_error(e):
+                _raise_retry_exhausted(e, attempts)
             time.sleep(_retry_delay(i))
     raise last
 

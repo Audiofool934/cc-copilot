@@ -525,8 +525,59 @@ class ChatSession:
                                   self.scope, sessions=self.scope_sessions,
                                   project_context=True)
 
+    @staticmethod
+    def context_history(history) -> list:
+        """History safe to include in model context.
+
+        Failed model calls are tracked in UI history as ``("error", "...")`` so
+        rewind can remove them, but their backend error text must not become a
+        normal cc-copilot answer. If the latest turn failed, keep its user prompt
+        as an unanswered prior request so "try again" still has an antecedent.
+        Older failed turns are UI bookkeeping and are omitted from context.
+        """
+        hist = list(history or [])
+        out = []
+        i = 0
+        while i < len(hist):
+            role, text = hist[i]
+            if role != "user":
+                if role == "assistant":
+                    out.append((role, text))
+                i += 1
+                continue
+            nxt = hist[i + 1] if i + 1 < len(hist) else None
+            if nxt and nxt[0] == "error":
+                if i + 2 >= len(hist):
+                    out.append(("user", text))
+                i += 2
+                continue
+            out.append((role, text))
+            if nxt and nxt[0] == "assistant":
+                out.append(nxt)
+                i += 2
+            else:
+                i += 1
+        return out
+
+    @staticmethod
+    def stored_turn_count_before(history, message_index: int) -> int:
+        """How many durable successful turns precede a UI message index.
+
+        UI history may contain failed ``user/error`` pairs that are intentionally
+        not persisted as store turns. Rewind truncation must count only
+        successful ``user/assistant`` pairs before the selected message.
+        """
+        hist = list(history or [])
+        limit = max(0, int(message_index or 0))
+        count = 0
+        for k in range(limit):
+            j = 2 * k + 1
+            if j < len(hist) and hist[j][0] == "assistant":
+                count += 1
+        return count
+
     def answer_context(self, q: str, history=None, st=None):
-        hist = self.history if history is None else list(history)
+        hist = self.context_history(self.history if history is None else history)
         memory_text = ""
         if self.store.enabled:
             memory_text, hist = self.store.compact_memory(
@@ -553,6 +604,32 @@ class ChatSession:
         self.store.record_turn(q, txt, st=self.st, backend=self.backend,
                                model=self.model,
                                usage=(usage.as_dict() if usage else None))
+
+    def record_error_turn(self, q: str, err: str) -> None:
+        """Keep a failed prompt rewindable without treating the backend error as
+        a successful assistant answer or writing it to durable history."""
+        q = str(q or "").strip()
+        err = str(err or "").strip()
+        if not q or not err:
+            return
+        self._rewind_undo = None
+        self.last_usage = None
+        self.last_output_tokens = 0
+        self.history.append(("user", q))
+        self.history.append(("error", err))
+
+    def record_generated_turn(self, q: str, txt: str, usage=None) -> None:
+        """Record a generated command result as conversation context.
+
+        Commands like /goal and /loop produce artifacts the next normal question
+        may reasonably revise ("make that shorter", "add retries"). Observational
+        commands stay out of chat continuity; this helper is intentionally opt-in.
+        """
+        q = str(q or "").strip()
+        txt = str(txt or "")
+        if not q or not txt or self.st is None:
+            return
+        self._finalize_turn(q, txt, usage=usage)
 
     def answer(self, q: str) -> str:
         self.refresh()
@@ -595,9 +672,13 @@ class ChatSession:
         if c == "/now" or c.startswith("/now "):
             return self._now(cmd.strip()[4:].strip())
         if c == "/goal" or c.startswith("/goal "):
-            return self._goal(cmd.strip()[5:].strip())
+            out = self._goal(cmd.strip()[5:].strip())
+            self.record_generated_turn(cmd.strip(), out)
+            return out
         if c == "/loop" or c.startswith("/loop "):
-            return self._loop(cmd.strip()[5:].strip())
+            out = self._loop(cmd.strip()[5:].strip())
+            self.record_generated_turn(cmd.strip(), out)
+            return out
         if c == "/since" or c.startswith("/since "):
             return self._since(cmd.strip()[6:].strip())
         if c == "/handoff" or c.startswith("/handoff "):
@@ -627,8 +708,10 @@ class ChatSession:
             if not arg:
                 if not self.history:
                     return "(no turns yet — `/resume` lists resumable cockpit sessions)"
-                return "\n".join(("you> " if r == "user" else "cc > ") + t[:200]
-                                 for r, t in self.history)
+                return "\n".join(
+                    ("you> " if r == "user" else "err> " if r == "error" else "cc > ")
+                    + t[:200]
+                    for r, t in self.history)
             if arg in ("all", "*", "this", "project"):
                 if not self.store.enabled:
                     return "(history is off — --no-persist or [history] enabled=false)"
@@ -668,7 +751,7 @@ class ChatSession:
             question = qs[k]
             self._save_rewind_undo()
             self.history = self.history[:2 * k]
-            self.store.truncate(k)
+            self.store.truncate(self.stored_turn_count_before(self._rewind_undo["history"], k))
             return (f"rewound to before message #{k + 1}. Ask it again, edited as you like:\n"
                     f"  {question}\n"
                     "undo: /rewind undo")
@@ -1258,6 +1341,8 @@ class ChatSession:
                             sys.stdout.write("\n\n")
                             sys.stdout.flush()
                 except Exception as e:
+                    if not got_any:
+                        self.record_error_turn(line, f"# error: {e}")
                     with self._lock:
                         print(("\n" if got_any else "") + f"# error: {e}\n")
                     continue

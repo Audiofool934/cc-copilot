@@ -1667,6 +1667,7 @@ class Cockpit(App):
         self._answer_prompt_history_added = False
         self._chat_answer_inflight = False  # a streaming chat answer is running (vs /now,/since)
         self._msg_queue = []             # chat messages typed while busy (FIFO)
+        self._transient_histories = {}    # conv_id -> in-memory history incl. errors
         self._prompt_history = []
         self._sync_prompt_history_from_session()
         self._prompt_history_index = None
@@ -2430,13 +2431,68 @@ class Cockpit(App):
         self._update_chat_pin()
         chat.scroll_end(animate=False)
 
+    @staticmethod
+    def _successful_history(history) -> list:
+        out = []
+        hist = list(history or [])
+        i = 0
+        while i < len(hist):
+            role, text = hist[i]
+            nxt = hist[i + 1] if i + 1 < len(hist) else None
+            if role == "user" and nxt and nxt[0] == "assistant":
+                out.append((role, text))
+                out.append(nxt)
+                i += 2
+            else:
+                i += 1
+        return out
+
+    def _remember_transient_history(self, store, history) -> None:
+        cid = getattr(store, "conv_id", None)
+        if not cid:
+            return
+        hist = list(history or [])
+        if any(role == "error" for role, _ in hist):
+            self._transient_histories[cid] = hist
+        else:
+            self._transient_histories.pop(cid, None)
+
+    def _restore_transient_history(self) -> None:
+        cid = getattr(self.session.store, "conv_id", None)
+        hist = self._transient_histories.get(cid)
+        if not hist:
+            return
+        durable = list(self.session.history or [])
+        if self._successful_history(hist) == durable:
+            self.session.history = list(hist)
+
+    def _history_times(self, hist) -> list:
+        times = self.session.store.load_turn_times()
+        if len(times) == len(hist):
+            return times
+        aligned = [""] * len(hist)
+        j = 0
+        i = 0
+        while i < len(hist):
+            role, _text = hist[i]
+            nxt = hist[i + 1] if i + 1 < len(hist) else None
+            if role == "user" and nxt and nxt[0] == "assistant" and j + 1 < len(times):
+                aligned[i] = times[j]
+                aligned[i + 1] = times[j + 1]
+                j += 2
+                i += 2
+            elif role == "user" and nxt and nxt[0] == "error":
+                i += 2
+            else:
+                i += 1
+        return aligned
+
     def _watch_chat(self, widget):
-        try:
-            widget._cc_watch_ephemeral = True
-        except Exception:
-            pass
-        self._watch_chat_widgets.append(widget)
-        self._chat(widget)
+        # Watch is its own monitor surface. Automatic watch updates must not
+        # pollute the main cockpit conversation; keep the main pane as the
+        # user's chat and leave watch details in the dock/monitor state.
+        self._update_watch_dock()
+        self._update_watch_monitor()
 
     def _clear_watch_chat_ephemeral(self) -> None:
         kept = []
@@ -2668,6 +2724,7 @@ class Cockpit(App):
             chat.remove_children()
         self._msg_queue.clear()         # queued messages belong to the old context
         self._chat_prompt_nav_index = None
+        self._restore_transient_history()
         hist = self.session.history
         if hist:
             n = len(hist) // 2
@@ -2676,13 +2733,13 @@ class Cockpit(App):
                 "role-event"))
             # per-turn stamps from the store, aligned 1:1 with history; fall back
             # to no time if the store is off or the two ever drift out of length.
-            times = self.session.store.load_turn_times()
-            if len(times) != len(hist):
-                times = [""] * len(hist)
+            times = self._history_times(hist)
             for i, (role, txt) in enumerate(hist):
                 hhmm = times[i]
                 if role == "user":
                     chat.mount(self._prompt_widget(txt, hhmm))
+                elif role == "error":
+                    chat.mount(self._role(Text(txt, style=_PAL["error"]), "role-alert"))
                 else:
                     chat.mount(self._assistant_head(hhmm))
                     chat.mount(Markdown(txt, classes="role-assistant"))
@@ -3378,6 +3435,7 @@ class Cockpit(App):
         self.session.last_context_stats = ctx.stats
         self.session.last_output_tokens = 0
         origin = self._answer_origin(self.session.st, self.session.store)
+        origin["history"] = list(self.session.history)
         self._busy = True
         self._busy_frame = 0
         self._chat_answer_inflight = True   # interruptible by /stop even pre-handle
@@ -3705,6 +3763,7 @@ class Cockpit(App):
                 # render nothing so no lone header is stranded; the turn is
                 # persisted and reappears on the next rebuild.
                 self._restore_current_store_meta()
+                self._remember_transient_history(self.session.store, self.session.history)
             # if switched away: the turn is safe on disk and reappears on return,
             # so we don't render it into the now-current (different) conversation.
         elif same and stopped:
@@ -3719,6 +3778,15 @@ class Cockpit(App):
             # it. The partial is NOT recorded — only completed answers persist.
             note = " — partial answer above was not saved" if (live and buf) else ""
             self._chat(self._role(Text(ans + note, style=_PAL["error"]), "role-alert"))
+            if not buf:
+                self.session.history.append(("user", text))
+                self.session.history.append(("error", ans))
+                self._remember_transient_history(self.session.store, self.session.history)
+        elif not buf:
+            hist = list(origin.get("history") or [])
+            hist.append(("user", text))
+            hist.append(("error", ans))
+            self._remember_transient_history(store, hist)
         self._update_header()
         self._update_status()
         self._drain_msg_queue()         # send the next queued message, if any
@@ -4305,7 +4373,7 @@ class Cockpit(App):
         ])
 
     def _watch_emit_initial_now(self) -> None:
-        if (not self._watch_mode or self._watch_run.paused or self._busy
+        if (not self._watch_mode or self._watch_run.paused
                 or self._watch_narrating or not N.available(self.backend)):
             return
         self._watch_narrating = True
@@ -4596,7 +4664,7 @@ class Cockpit(App):
 
     def _watch_maybe_heartbeat(self, now=None) -> bool:
         r = self._watch_run
-        if not r.active or r.paused or self._busy:
+        if not r.active or r.paused:
             return False
         target = self._watch_pending_target()
         st = target.state if target is not None else self.session.st
@@ -4920,7 +4988,7 @@ class Cockpit(App):
                                           step_id=step_id,
                                           clear_global=clear_global)
             return False
-        if self._watch_narrating or self._busy:
+        if self._watch_narrating:
             if reason:
                 r.pending_digest_reason = reason
                 r.pending_digest_step_id = step_id
@@ -4928,7 +4996,7 @@ class Cockpit(App):
             if manual:
                 self.notify("watch refresh queued", severity="information")
             return False
-        if N.available(self.backend) and not self._busy:
+        if N.available(self.backend):
             self._watch_narrating = True
             if clear_global:
                 r.events_since_digest = 0
@@ -4982,9 +5050,9 @@ class Cockpit(App):
             self._watch_run.instruction = ""
             self._watch_run.instruction_label = ""
             self._watch_finish_current_step("stopped")
-            stop_text = self._watch_stop_text()
             self._clear_watch_chat_ephemeral()
-            self._chat(self._role(stop_text, "role-event"))
+            self.notify("watch stopped — monitor history kept until the next /watch",
+                        severity="information")
             if not self.alerts and self._watch_worker_started:
                 old_stop = self._watch_stop
                 self._watch_stop = threading.Event()
@@ -5059,7 +5127,11 @@ class Cockpit(App):
         self._watch_run.baseline_context = self._watch_baseline_context()
         self._watch_begin_step(self._watch_run.phase, trigger="start",
                                current=self._watch_current_activity(), force=True)
-        self._watch_add_recent("start", f"{self._watch_subject()} · {self._watch_current_activity()}")
+        self._watch_add_recent(
+            "start",
+            f"{self._watch_subject()} · {self._watch_current_activity()} · "
+            "Night gathers, and now my watch begins.",
+        )
         self._ensure_watch_worker()
         self._clear_watch_chat_ephemeral()
         self._watch_chat(self._role(self._watch_start_text(reset=reset), "role-event"))
@@ -5119,13 +5191,12 @@ class Cockpit(App):
                                     or d.verdict_to == "intervene")
                    else "role-event")
             emit_micro = self._watch_should_emit_micro(d)
-            use_semantic = (emit_micro and N.available(self.backend) and not self._busy
+            use_semantic = (emit_micro and N.available(self.backend)
                             and not self._watch_narrating)
             fallback = self._watch_buffer_delta(st, d, semantic=use_semantic,
                                                 target=target)
             if emit_micro:
-                if (N.available(self.backend) and not self._busy
-                        and not self._watch_narrating):
+                if N.available(self.backend) and not self._watch_narrating:
                     self._watch_narrating = True
                     self._watch_run.last_micro_at = time.monotonic()
                     delta_text = self._watch_delta_text(st, d, target=target)
@@ -5135,8 +5206,6 @@ class Cockpit(App):
                                         (self._evidence_sig(), self.session.store), cls,
                                         instruction=self._watch_run.instruction,
                                         fallback=fallback)
-                elif self._busy and cls != "role-alert":
-                    pass
                 else:
                     summary, cls = self._watch_fallback_renderable(st, d, target=target)
                     if summary is not None:
@@ -5162,6 +5231,7 @@ class Cockpit(App):
         if msg:
             sev = "error" if "INTERVENE" in msg or "STALLED" in msg else "warning"
             self.notify(msg, severity=sev, title="observed session")
+        self._update_status()
 
     # ---- meta commands (typed `/…` still works) ----
     def _meta(self, cmd):
@@ -5327,6 +5397,17 @@ class Cockpit(App):
             renderable = head
         self._chat(self._role(renderable, cls))
 
+    @staticmethod
+    def _command_text(name: str, instruction: str = "") -> str:
+        instruction = str(instruction or "").strip()
+        return f"{name} {instruction}" if instruction else name
+
+    def _record_generated_command_turn(self, command: str, out: str) -> None:
+        try:
+            self.session.record_generated_turn(command, out)
+        except Exception:
+            pass
+
     def _diff_renderable(self, d):
         if (d.new_events == 0 and not d.new_changed and not d.new_failures
                 and d.status_from == d.status_to):
@@ -5443,11 +5524,15 @@ class Cockpit(App):
         if self._no_live():
             return
         det = _deterministic_goal(self.session.st, instruction)
+        command = self._command_text("/goal", instruction)
         title = f"/goal — {self.session.scope_label()}"
         if instruction:
             title += f' · "{instruction}"'
-        if not N.available(self.backend) or self._busy:
+        backend_available = N.available(self.backend)
+        if not backend_available or self._busy:
             self._result(det)
+            if not backend_available and not self._busy:
+                self._record_generated_command_turn(command, det)
             self._update_status()
             return
         question = _goal_context_question(instruction)
@@ -5464,25 +5549,26 @@ class Cockpit(App):
             Text("🎯 drafting an agent /goal — grounded in agent + project context…",
                  style=_PAL["muted"]), "role-event"))
         self._update_status()
-        self._goal_recap(title, ctx.text, det, instruction,
+        self._goal_recap(title, command, ctx.text, det, instruction,
                          (self._evidence_sig(), self.session.store))
 
     @work(thread=True)
-    def _goal_recap(self, title, ctx_text, det, instruction, origin):
+    def _goal_recap(self, title, command, ctx_text, det, instruction, origin):
         try:
             rec = N.goal_brief(ctx_text, model=self.model, backend=self.backend,
                                instruction=instruction)
             out = self.session._compose_goal(rec, det)
         except Exception as e:
             out = det + f"\n\n> _goal draft unavailable ({e}); deterministic draft above._"
-        self.call_from_thread(self._goal_done, title, out, origin)
+        self.call_from_thread(self._goal_done, title, command, out, origin)
 
-    def _goal_done(self, title, out, origin):
+    def _goal_done(self, title, command, out, origin):
         self._busy = False
         self._busy_frame = 0
         sig, store = origin
         if self._evidence_sig() == sig and self.session.store is store:
             self._result(out)
+            self._record_generated_command_turn(command, out)
         else:
             self.notify(f"dropped {title} — you switched while it ran",
                         severity="warning")
@@ -5495,11 +5581,15 @@ class Cockpit(App):
         if self._no_live():
             return
         det = self.session._loop(instruction, raw=True)
+        command = self._command_text("/loop", instruction)
         title = f"/loop — {self.session.scope_label()}"
         if instruction:
             title += f' · "{instruction}"'
-        if not N.available(self.backend) or self._busy:
+        backend_available = N.available(self.backend)
+        if not backend_available or self._busy:
             self._result(det)
+            if not backend_available and not self._busy:
+                self._record_generated_command_turn(command, det)
             self._update_status()
             return
         question = _loop_context_question(instruction)
@@ -5516,25 +5606,26 @@ class Cockpit(App):
             Text("🔁 drafting an agent /loop — grounded in agent + project context…",
                  style=_PAL["muted"]), "role-event"))
         self._update_status()
-        self._loop_recap(title, ctx.text, det, instruction,
+        self._loop_recap(title, command, ctx.text, det, instruction,
                          (self._evidence_sig(), self.session.store))
 
     @work(thread=True)
-    def _loop_recap(self, title, ctx_text, det, instruction, origin):
+    def _loop_recap(self, title, command, ctx_text, det, instruction, origin):
         try:
             rec = N.loop_brief(ctx_text, model=self.model, backend=self.backend,
                                instruction=instruction)
             out = self.session._compose_loop(rec, det)
         except Exception as e:
             out = det + f"\n\n> _loop draft unavailable ({e}); deterministic draft above._"
-        self.call_from_thread(self._loop_done, title, out, origin)
+        self.call_from_thread(self._loop_done, title, command, out, origin)
 
-    def _loop_done(self, title, out, origin):
+    def _loop_done(self, title, command, out, origin):
         self._busy = False
         self._busy_frame = 0
         sig, store = origin
         if self._evidence_sig() == sig and self.session.store is store:
             self._result(out)
+            self._record_generated_command_turn(command, out)
         else:
             self.notify(f"dropped {title} — you switched while it ran",
                         severity="warning")
@@ -5627,8 +5718,12 @@ class Cockpit(App):
         if undo_available:
             opts.append(("undo last rewind", "__undo__"))
         for k, q in enumerate(qs):
-            ans = hist[2 * k + 1][1] if 2 * k + 1 < len(hist) else ""
-            label = f"#{k + 1}  {q[:46]}" + (f"   → {ans[:26]}" if ans else "")
+            role, ans = hist[2 * k + 1] if 2 * k + 1 < len(hist) else ("", "")
+            if role == "error":
+                suffix = f"   failed: {str(ans).replace('# error: ', '')[:24]}"
+            else:
+                suffix = f"   → {ans[:26]}" if ans else ""
+            label = f"#{k + 1}  {q[:46]}" + suffix
             opts.append((label, k))
         undo = opts[:1] if opts and opts[0][1] == "__undo__" else []
         rest = opts[1:] if undo else opts
@@ -5650,6 +5745,7 @@ class Cockpit(App):
     def _rewind_undo(self):
         msg = self.session.rewind_undo()
         if msg.startswith("restored"):
+            self._remember_transient_history(self.session.store, self.session.history)
             self._rebuild_chat()
             try:
                 comp = self.query_one("#composer", Composer)
@@ -5678,8 +5774,10 @@ class Cockpit(App):
                 h.cancel()
         question = qs[k]
         self.session._save_rewind_undo()
-        self.session.history = hist[:2 * k]             # turns are user/assistant pairs
-        self.session.store.truncate(k)                  # persist the fork
+        self.session.history = hist[:2 * k]             # turns are user/(assistant|error)
+        self.session.store.truncate(
+            self.session.stored_turn_count_before(hist, k))  # persist successful turns
+        self._remember_transient_history(self.session.store, self.session.history)
         self._reset_prompt_history_nav()
         self._rebuild_chat()
         comp = self.query_one("#composer", Composer)
@@ -5988,6 +6086,7 @@ class Cockpit(App):
                 h.cancel()
         store.delete()
         self.session.history = []
+        self._transient_histories.pop(getattr(store, "conv_id", None), None)
         self._sync_prompt_history_from_session()
         chat = self.query_one("#chat", VerticalScroll)
         chat.remove_children()
