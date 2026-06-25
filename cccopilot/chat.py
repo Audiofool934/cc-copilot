@@ -69,6 +69,52 @@ _HELP = """commands (LLM-free except questions and explicit /since --recap):
   /exit  /quit      leave  (Ctrl-D also works)
 anything else → a question answered grounded in the selected read-only evidence + project context."""
 
+_META_COMMAND_NAMES = {
+    "?", "q", "quit", "exit", "help", "brief", "observe", "now", "goal",
+    "loop", "since", "handoff", "check", "refresh", "scope", "target",
+    "status", "sessions", "here", "use", "new", "new-cockpit", "resume",
+    "history", "diff", "forget", "rewind", "clear", "cls", "stop", "cancel",
+    "model", "theme", "init", "onboard", "watch",
+}
+
+
+def _looks_like_absolute_path_input(text: str) -> bool:
+    text = (text or "").strip()
+    if not text.startswith("/") or text == "/":
+        return False
+    token = text.split(None, 1)[0]
+    body = token[1:]
+    if not body:
+        return False
+    # Absolute paths commonly contain another slash, a dotted/hidden segment, or
+    # a home-ish marker. Slash commands stay word-like and are checked before
+    # this predicate, including commands with hyphenated names.
+    if "/" in body or any(ch in body for ch in ".~"):
+        return True
+    try:
+        return os.path.isabs(token) and os.path.exists(token)
+    except (OSError, ValueError):
+        return False
+
+
+def _is_meta_command_input(text: str) -> bool:
+    """Whether a submitted slash-prefixed line should be handled as a command.
+
+    Keep typo feedback for command-shaped input like ``/session``, but let real
+    absolute paths such as ``/data-01/foo`` or ``/Users/me/file`` pass through as
+    ordinary user questions.
+    """
+    text = (text or "").strip()
+    if not text.startswith("/"):
+        return False
+    token = text.split(None, 1)[0]
+    name = token[1:].lower()
+    if name in _META_COMMAND_NAMES:
+        return True
+    if _looks_like_absolute_path_input(text):
+        return False
+    return True
+
 
 def _dur(sec):
     if sec is None:
@@ -1312,7 +1358,7 @@ class ChatSession:
                     break
                 if not line:
                     continue
-                if line.startswith("/"):
+                if _is_meta_command_input(line):
                     out = self.meta(line)
                     if out is False:
                         break
