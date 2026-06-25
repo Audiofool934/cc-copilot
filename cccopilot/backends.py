@@ -751,9 +751,11 @@ def registry() -> dict:
                              cwd=tempfile.gettempdir(), flavor="codex",
                              safety_args=_codex_safety_args),
         "gemini": CliBackend("gemini", [shutil.which("gemini") or "gemini", "-p"],
-                             model_args=lambda m: ["-m", m]),
+                             model_args=lambda m: ["-m", m],
+                             cwd=tempfile.gettempdir()),
         "llm":    CliBackend("llm", [shutil.which("llm") or "llm"],
-                             model_args=lambda m: ["-m", m]),
+                             model_args=lambda m: ["-m", m],
+                             cwd=tempfile.gettempdir()),
         # OpenAI-compatible HTTP APIs. Default models come from the curated
         # catalog (cccopilot/models.py) — one place to update when a provider's
         # lineup moves; the /model picker offers the rest of each list.
@@ -823,7 +825,7 @@ def resolve(name: str = None) -> Backend:
                 f"CC_COPILOT_LLM_CMD is not valid shell syntax: {e}")
         if not cmd:
             raise BackendError("CC_COPILOT_LLM_CMD is empty after parsing")
-        return CliBackend("custom-cli", cmd)
+        return CliBackend("custom-cli", cmd, cwd=tempfile.gettempdir())
     if "custom" in reg:
         return reg["custom"]
     return reg["codex"]   # default backend: codex via ChatGPT OAuth

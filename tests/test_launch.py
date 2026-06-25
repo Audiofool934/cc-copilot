@@ -110,13 +110,32 @@ class TestCockpitSh(unittest.TestCase):
         # Even with an older cc-copilot installed, a checkout must spawn its
         # own code in the cockpit pane — not whatever `which` finds.
         with mock.patch("shutil.which", return_value="/abs/bin/cc-copilot"), \
-             mock.patch.object(cli, "_is_source_checkout", return_value=True):
+             mock.patch.object(cli, "_is_source_checkout", return_value=True), \
+             mock.patch.object(cli, "_python_supports_safe_path", return_value=True):
             sh = cli._cockpit_sh("/tmp/p")
         # `env` prefix: tmux runs this via the default-shell, which may be
         # fish/tcsh — bare VAR=… prefixes are POSIX-only syntax there.
         self.assertTrue(sh.startswith("env PYTHONPATH="))
-        self.assertIn("-m cccopilot cockpit --next", sh)
+        self.assertIn("-P -m cccopilot cockpit --next", sh)
         self.assertNotIn("/abs/bin/cc-copilot", sh)
+
+    def test_source_checkout_relaunch_omits_safe_path_for_older_python(self):
+        with mock.patch("shutil.which", return_value="/abs/bin/cc-copilot"), \
+             mock.patch.object(cli, "_is_source_checkout", return_value=True), \
+             mock.patch.object(cli, "_python_supports_safe_path", return_value=False):
+            sh = cli._cockpit_sh("/tmp/p")
+        self.assertIn(" -c ", sh)
+        self.assertIn("from cccopilot.cli import main", sh)
+        self.assertIn(" cockpit --next", sh)
+        self.assertNotIn("-P -m", sh)
+        self.assertNotIn("-m cccopilot", sh)
+        self.assertNotIn("/abs/bin/cc-copilot", sh)
+
+    def test_tmux_start_directory_escapes_format_expansion(self):
+        setup, _ = cli._launch_plan(["codex"], "/tmp/#(touch pwned)", "COCKPIT",
+                                    False, "cc-copilot-2")
+        self.assertIn("/tmp/##(touch pwned)", setup[0])
+        self.assertIn("/tmp/##(touch pwned)", setup[2])
 
 
 class TestCmdLaunch(unittest.TestCase):

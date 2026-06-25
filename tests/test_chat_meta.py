@@ -84,6 +84,18 @@ class TestReplMetaCommands(unittest.TestCase):
         s = self._sess()
         self.assertIn("unknown command", s.meta("/session"))
 
+    def test_absolute_paths_are_not_meta_commands(self):
+        self.assertFalse(C._is_meta_command_input("/data-01/project/file.py"))
+        self.assertFalse(C._is_meta_command_input("/Users/audiofool/project"))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(C._is_meta_command_input(d))
+
+    def test_known_and_command_shaped_slash_inputs_remain_meta_commands(self):
+        self.assertTrue(C._is_meta_command_input("/watch"))
+        self.assertTrue(C._is_meta_command_input("/watch refresh"))
+        self.assertTrue(C._is_meta_command_input("/session"))
+        self.assertTrue(C._is_meta_command_input("/watch-now"))
+
     def test_status_renders_a_fleet_board_string(self):
         s = self._sess()
         out = s.meta("/status")

@@ -1,4 +1,4 @@
-"""`/since` as a grounded LLM recap (recap-by-default, deterministic fallback)."""
+"""`/since` as deterministic evidence by default, with explicit grounded recaps."""
 
 import json
 import os
@@ -49,8 +49,15 @@ class TestSinceRecap(unittest.TestCase):
         else:
             os.environ["CC_COPILOT_STATE_DIR"] = self._saved_state
 
-    def test_recap_by_default_with_evidence_beneath(self):
+    def test_since_defaults_to_deterministic_evidence(self):
         out = self.sess._since("30m")
+        self.assertFalse(out.startswith("# 🛰  recap"))
+        self.assertIn("Commands", out)
+        self.assertIn("[L", out)
+        self.assertEqual(self.calls, [])
+
+    def test_recap_requires_explicit_flag_and_keeps_evidence_beneath(self):
+        out = self.sess._since("30m --recap")
         self.assertTrue(out.startswith("# 🛰  recap"))         # narrative heading
         self.assertIn("RECAP: the agent ran", out)             # the model's prose
         self.assertIn("evidence —", out)                       # cited delta kept beneath
@@ -58,7 +65,7 @@ class TestSinceRecap(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)                   # model was called once
 
     def test_model_sees_the_cited_delta(self):
-        self.sess._since("30m")
+        self.sess._since("30m --recap")
         self.assertIn("[L", self.calls[0])                     # evidence had citations
         self.assertIn("Commands", self.calls[0])               # the deterministic delta
 
@@ -69,7 +76,7 @@ class TestSinceRecap(unittest.TestCase):
 
     def test_no_backend_falls_back_to_deterministic(self):
         N.available = lambda be=None: False
-        out = self.sess._since("30m")
+        out = self.sess._since("30m --recap")
         self.assertFalse(out.startswith("# 🛰  recap"))
         self.assertEqual(self.calls, [])
 
@@ -83,7 +90,7 @@ class TestSinceRecap(unittest.TestCase):
         def boom(text, model=None, backend=None, instruction=""):
             raise RuntimeError("backend exploded")
         N.recap_since = boom
-        out = self.sess._since("30m")
+        out = self.sess._since("30m --recap")
         self.assertIn("recap unavailable", out)
         self.assertIn("[L", out)                               # evidence still shown
 
@@ -97,17 +104,18 @@ class TestSinceRecap(unittest.TestCase):
 
     def test_split_since_arg_separates_window_from_instruction(self):
         split = self.sess._split_since_arg
-        self.assertEqual(split("2h in spanish"), ("2h", "in spanish"))
-        self.assertEqual(split("in spanish"), ("", "in spanish"))   # no window → default
-        self.assertEqual(split("30m"), ("30m", ""))                 # window only
-        self.assertEqual(split(""), ("", ""))
+        self.assertEqual(split("2h in spanish"), ("2h", "in spanish", False))
+        self.assertEqual(split("in spanish"), ("", "in spanish", False))   # no window → default
+        self.assertEqual(split("30m"), ("30m", "", False))                 # window only
+        self.assertEqual(split(""), ("", "", False))
         self.assertEqual(split("last-look just the blocker"),
-                         ("last-look", "just the blocker"))
+                         ("last-look", "just the blocker", False))
         # --raw stays with the window half so _since_view still detects it
-        self.assertEqual(split("--raw 2h as bullets"), ("--raw 2h", "as bullets"))
+        self.assertEqual(split("--raw 2h as bullets"), ("--raw 2h", "as bullets", False))
+        self.assertEqual(split("--recap 2h as bullets"), ("2h", "as bullets", True))
 
     def test_instruction_threads_to_the_recap_model(self):
-        self.sess._since("2h in spanish")
+        self.sess._since("2h --recap in spanish")
         self.assertEqual(self.last_instruction, "in spanish")       # steer reached the model
         self.assertEqual(len(self.calls), 1)
 
@@ -117,7 +125,7 @@ class TestSinceRecap(unittest.TestCase):
         from cccopilot import lastlook as LL
         from cccopilot.chat import _now_iso
         LL.mark(self.sess._lastlook_key(), 1, "", _now_iso())
-        self.sess._since("in spanish")
+        self.sess._since("--recap in spanish")
         self.assertEqual(self.last_instruction, "in spanish")
         self.assertEqual(len(self.calls), 1)
 
@@ -140,7 +148,7 @@ class TestSinceRecap(unittest.TestCase):
         commit()
         self.assertGreater(int(LL.get(key)["line"]), 1)    # advanced once shown
 
-    def test_transition_only_delta_triggers_recap(self):
+    def test_transition_only_delta_triggers_explicit_recap(self):
         """A delta that is only a status/safety transition (e.g. a read-only Read
         flips idle → running) is non-empty — it must still get the recap, not be
         skipped as 'nothing new'."""
@@ -151,7 +159,7 @@ class TestSinceRecap(unittest.TestCase):
                     tool("Read", {"file_path": "a.py"}, "r1", 1)])
         sess = C.ChatSession(p, backend="codex", alerts=False, persist=False)
         LL.mark(sess._lastlook_key(), 2, "", _now_iso())   # mark just after "done"
-        out = sess._since("last-look")
+        out = sess._since("last-look --recap")
         self.assertEqual(len(self.calls), 1)               # recap WAS called
         self.assertIn("RECAP", out)
 

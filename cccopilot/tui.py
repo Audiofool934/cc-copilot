@@ -53,13 +53,13 @@ except ImportError:
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
         "(or: pip install 'cc-copilot[tui]')")
 
-from . import (sources as SRC, state as S, assess as A, narrate as N,
+from . import (sources as SRC, state as S, assess as A, git_safe as GIT, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
                models as MODELS, scope_groups as SG, brief as BR)
 from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
                    _deterministic_goal, _goal_context_question,
-                   _loop_context_question)
+                   _loop_context_question, _is_meta_command_input)
 
 
 _WATCH_DEFAULT_MICRO_INTERVAL = 30.0
@@ -324,7 +324,7 @@ _HELP_TEXT = (
     "  /now [steer]            recommend the next step (e.g. /now in spanish; LLM)\n"
     "  /goal [steer]           draft a paste-ready agent /goal from context\n"
     "  /loop [steer]           draft a paste-ready agent /loop from context\n"
-    "  /since [30m|1d] [--raw] [steer]  recap since you last looked (--raw = cited delta)\n"
+    "  /since [30m|1d] [--recap] [steer]  cited delta since last look\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /status                 fleet board — every session, neediest first\n"
@@ -357,7 +357,7 @@ _SLASH_CMDS = [
     ("/now", "recommend the next step — add a steer like 'in spanish' (LLM; deterministic fallback)", False),
     ("/goal", "draft a paste-ready agent /goal from agent + project context", False),
     ("/loop", "draft a paste-ready agent /loop from agent + project context", True),
-    ("/since", "recap since you last looked (30m / 2h / 1d; --raw = cited delta; trailing text steers it)", True),
+    ("/since", "cited delta since you last looked (30m / 2h / 1d; --recap = LLM; trailing text steers it)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
@@ -398,6 +398,32 @@ def _osc52_sequence(text: str) -> str:
 def _tmux_passthrough(seq: str) -> str:
     # tmux DCS passthrough: ESC P tmux; <inner escapes doubled> ESC \
     return "\x1bPtmux;" + str(seq or "").replace("\x1b", "\x1b\x1b") + "\x1b\\"
+
+
+def _path_under(parent: str, path: str) -> bool:
+    try:
+        parent = os.path.realpath(parent)
+        path = os.path.realpath(path)
+        return os.path.commonpath([parent, path]) == parent
+    except (OSError, ValueError):
+        return False
+
+
+def _trusted_path_command(name: str, cwd: str = None) -> str:
+    import shutil
+    cwd = os.path.realpath(cwd or os.getcwd())
+    safe_entries = []
+    for entry in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        if not entry:
+            continue
+        real = os.path.realpath(entry)
+        if real == cwd or _path_under(cwd, real):
+            continue
+        safe_entries.append(entry)
+    found = shutil.which(name, path=os.pathsep.join(safe_entries))
+    if not found or _path_under(cwd, found):
+        return ""
+    return found
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 
 # Rotating feature tips shown subtly in the composer chrome (see _rotate_tip).
@@ -641,8 +667,9 @@ def _git(root: str, *args: str) -> str:
     if not root or not os.path.isdir(root):
         return ""
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=1)
+        p = subprocess.run(GIT.argv(root, *args), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=1,
+                           env=GIT.env())
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -944,12 +971,7 @@ class Composer(TextArea):
 
         if event.key in ("tab", "shift+tab") and not self.text:
             delta = -1 if event.key == "shift+tab" else 1
-            nav = getattr(app, "_watch_monitor_target_nav", None)
-            if callable(nav) and nav(delta):
-                event.prevent_default()
-                event.stop()
-                return
-            nav = getattr(app, "_activity_target_nav", None)
+            nav = getattr(app, "_surface_nav", None)
             if callable(nav) and nav(delta):
                 event.prevent_default()
                 event.stop()
@@ -1434,6 +1456,11 @@ class Cockpit(App):
         border-bottom: solid $secondary;
         background: $panel; padding: 0 1;
     }
+    #timeline-title {
+        height: 1; min-height: 1;
+        background: $boost; color: $accent; text-style: bold;
+        padding: 0 1; text-wrap: nowrap;
+    }
     #timeline {
         height: 6;
         border-bottom: solid $accent;
@@ -1441,7 +1468,6 @@ class Cockpit(App):
            edge and lines up with #chat's (which sits at the edge too). */
         background: $panel; padding: 0 0 0 1;
     }
-    #timeline-title { color: $accent; text-style: bold; height: 1; }
     #timeline-log {
         height: 1fr; background: $panel;
         overflow-x: auto;              /* long lines (wrap=False) stay scrollable… */
@@ -1491,11 +1517,7 @@ class Cockpit(App):
         background: $surface;
     }
     #composer:focus-within { border: round $primary; }
-    #watch-dock {
-        height: 1; min-height: 1;
-        background: $boost; color: $text; padding: 0 1; text-wrap: nowrap;
-    }
-    #watch-dock:hover { background: $accent 20%; }
+    #watch-dock { height: 0; min-height: 0; display: none; }
     #slash { height: auto; max-height: 7; margin: 0 1; padding: 0;
              border: round $secondary; background: $panel; }
 
@@ -1538,13 +1560,8 @@ class Cockpit(App):
     #keyprompt-actions { height: auto; align: right middle; }
     #keyprompt-actions Button { margin-left: 2; }
     #watch-monitor {
-        width: 100%; height: 1fr; background: $panel; padding: 0 0 0 1;
+        width: 100%; height: 6; background: $panel; padding: 0 0 0 1;
         scrollbar-size-vertical: 1;
-    }
-    #watch-monitor-title {
-        height: auto; min-height: 2;
-        margin: 0 0 1 0;
-        color: $accent; text-style: bold;
     }
     #watch-monitor-phase {
         height: auto; min-height: 3;
@@ -1556,11 +1573,6 @@ class Cockpit(App):
     #watch-monitor-alert {
         height: auto; min-height: 3; max-height: 8;
         margin: 0 0 1 0;
-    }
-    #watch-monitor-recent {
-        height: auto; min-height: 4;
-        margin: 0 0 1 0;
-        color: $text-muted;
     }
     #picker { width: 80; max-width: 90%; height: auto; max-height: 80%;
               background: $surface; border: round $accent; padding: 1; }
@@ -1692,6 +1704,8 @@ class Cockpit(App):
         self._watch_monitor_open = False
         self._watch_chat_widgets = []
         self._watch_monitor_render_sig = None
+        self._surface_mode = "activity"
+        self._timeline_title_cache = Text(_TIMELINE_TITLE, style=f"bold {_PAL['accent']}")
         self._scoped_timeline_rebuild_at = 0.0
         self._timeline_target_key = "all"
         self._timeline_target_order = []
@@ -1823,19 +1837,21 @@ class Cockpit(App):
         timeline_log = RichLog(id="timeline-log", markup=False, highlight=False,
                                wrap=False, auto_scroll=False, min_width=1)
         timeline_log.can_focus = False
-        timeline = Vertical(
-            Static(_TIMELINE_TITLE, id="timeline-title"), timeline_log, id="timeline")
+        surface_title = Static(_TIMELINE_TITLE, id="timeline-title")
+        timeline = Vertical(timeline_log, id="timeline")
         chat_pin = Static("", id="chat-pin")
         chat = VerticalScroll(id="chat")
         watch_monitor = VerticalScroll(id="watch-monitor")
         watch_monitor.display = False
         session_hud = Static("", id="session-hud")
         watch_dock = Static("", id="watch-dock")
+        watch_dock.display = False
         # The timeline and chat are display-only. Keep them out of the focus
         # chain so a click (or Tab) can never strand focus on a scroll pane —
         # that used to leave typed / IME (e.g. Chinese) input with no target.
         # Mouse-wheel scrolling still works without focus.
         header.can_focus = False
+        surface_title.can_focus = False
         timeline.can_focus = False
         chat_pin.can_focus = False
         chat.can_focus = False
@@ -1843,16 +1859,15 @@ class Cockpit(App):
         session_hud.can_focus = False
         watch_dock.can_focus = False
         yield header
+        yield surface_title
         yield timeline
-        yield chat_pin
-        yield chat
         with watch_monitor:
-            yield Static("", id="watch-monitor-title", classes="role-event")
             yield Static("", id="watch-monitor-phase", classes="role-event")
             yield Static("", id="watch-monitor-now", classes="role-assistant")
             yield Static("", id="watch-monitor-digest", classes="role-event")
             yield Static("", id="watch-monitor-alert", classes="role-alert")
-            yield Static("", id="watch-monitor-recent", classes="role-event")
+        yield chat_pin
+        yield chat
         yield Static("", id="status")
         yield Static("", id="tip")              # rotating feature tip (subtle)
         yield session_hud
@@ -1971,6 +1986,10 @@ class Cockpit(App):
             self.query_one("#timeline").styles.height = n
         except Exception:
             pass
+        try:
+            self.query_one("#watch-monitor").styles.height = n
+        except Exception:
+            pass
 
     def action_grow_timeline(self) -> None:
         self._apply_timeline_height(getattr(self, "_timeline_height", self.TIMELINE_DEFAULT) + 1)
@@ -2054,6 +2073,8 @@ class Cockpit(App):
         elif getattr(widget, "id", "") == "watch-dock":
             if not self._watch_mode or self._watch_run.paused:
                 self.action_watch("")
+            elif self._watch_monitor_open:
+                self._set_watch_monitor(False)
             else:
                 self.action_watch("view")
             try:
@@ -2247,7 +2268,7 @@ class Cockpit(App):
                             self.action_status)
         yield SystemCommand("Watch", "Start the core observer loop",
                             self.action_watch)
-        yield SystemCommand("Watch Monitor", "Open the in-place watch monitor",
+        yield SystemCommand("Watch Monitor", "Show watch in the activity surface",
                             lambda: self.action_watch("view"))
         yield SystemCommand("Evidence", "Choose one or more agent sessions",
                             self.action_sessions)
@@ -2314,9 +2335,6 @@ class Cockpit(App):
             pin = self.query_one("#chat-pin", Static)
         except Exception:
             return
-        if self._watch_monitor_open:
-            pin.update(self._watch_monitor_menu_text())
-            return
         prompts = self._chat_prompt_widgets()
         if not prompts:
             self._chat_pin_index = None
@@ -2360,9 +2378,6 @@ class Cockpit(App):
         return best
 
     def _sync_chat_pin_to_scroll(self) -> None:
-        if self._watch_monitor_open:
-            self._update_watch_monitor()
-            return
         prompts = self._chat_prompt_widgets()
         if not prompts:
             self._chat_pin_scroll_sig = None
@@ -2573,6 +2588,60 @@ class Cockpit(App):
             self._timeline_target_key = "all"
         return self._timeline_target_key
 
+    def _surface_title_widget(self):
+        try:
+            return self.query_one("#timeline-title", Static)
+        except Exception:
+            return None
+
+    def _update_surface_title(self) -> None:
+        title = self._surface_title_widget()
+        if title is None:
+            return
+        if self._watch_monitor_open:
+            title.update(self._watch_monitor_menu_text())
+            return
+        base = self._timeline_title_cache
+        t = base.copy() if hasattr(base, "copy") else Text(str(base))
+        if self._watch_mode:
+            t.append(" · Tab watch", style=_PAL["muted"])
+        title.update(t)
+
+    def _surface_keys(self, snap=None) -> list:
+        activity_keys = self._timeline_target_keys(snap) or ["activity"]
+        keys = list(activity_keys)
+        if self._watch_mode or self._watch_run.steps or self._watch_monitor_open:
+            keys.append("watch")
+        return keys
+
+    def _surface_current_key(self, snap=None) -> str:
+        if self._watch_monitor_open:
+            return "watch"
+        key = self._ensure_timeline_target(snap)
+        return key or "activity"
+
+    def _surface_nav(self, delta: int) -> bool:
+        snap = _scope_snapshot(self.session)
+        keys = self._surface_keys(snap)
+        if len(keys) <= 1:
+            return False
+        cur = self._surface_current_key(snap)
+        try:
+            i = keys.index(cur)
+        except ValueError:
+            i = 0
+        nxt = keys[(i + int(delta or 0)) % len(keys)]
+        if nxt == "watch":
+            self._set_watch_monitor(True)
+            return True
+        self._timeline_target_key = "all" if nxt == "activity" else nxt
+        if self._watch_monitor_open:
+            self._set_watch_monitor(False)
+        self._rebuild_timeline()
+        self._update_header()
+        self._update_status()
+        return True
+
     def _timeline_target_item(self, snap=None, key: str = ""):
         key = key or self._timeline_target_key
         by_path = {
@@ -2657,10 +2726,8 @@ class Cockpit(App):
         keep_scroll = (sig == self._timeline_sig)
         self._timeline_sig = sig
         title = self._timeline_title(snap, target_key)
-        try:
-            self.query_one("#timeline-title", Static).update(title)
-        except NoMatches:
-            pass
+        self._timeline_title_cache = title
+        self._update_surface_title()
         rl.clear()
         if self.session.scope == SC.SESSION:
             for level, line in O.timeline_lines(
@@ -2894,7 +2961,7 @@ class Cockpit(App):
             t.append(" · digest queued", style=_PAL["muted"])
         if r.last_alert_text:
             t.append(" · attention", style=_PAL["warning"])
-        t.append(" · monitor open" if self._watch_monitor_open else " · monitor",
+        t.append(" · click activity" if self._watch_monitor_open else " · click monitor",
                  style=_PAL["accent"])
         return t
 
@@ -2904,7 +2971,9 @@ class Cockpit(App):
         count = len(steps)
         idx = (self._watch_run.step_index + 1) if step is not None else 0
         t = Text()
-        t.append("watch monitor", style=f"bold {_PAL['accent']}")
+        state = "paused" if self._watch_run.paused else ("on" if self._watch_run.active else "off")
+        t.append("watch", style=f"bold {_PAL['accent']}")
+        t.append(f" · {state}", style=_PAL["warning"] if self._watch_run.paused else _PAL["accent"])
         keys = self._watch_monitor_target_keys()
         if keys:
             cur = self._watch_ensure_monitor_target()
@@ -2919,16 +2988,17 @@ class Cockpit(App):
             t.append(f" · step {idx}/{count}", style=_PAL["muted"])
             t.append(" · latest" if self._watch_run.follow_latest else " · history",
                      style=_PAL["secondary"] if self._watch_run.follow_latest else _PAL["warning"])
+        if self._watch_run.instruction_label:
+            t.append(f" · {self._watch_run.instruction_label}", style=_PAL["secondary"])
         if self._watch_run.unseen_steps and not self._watch_run.follow_latest:
             t.append(f" · {self._watch_run.unseen_steps} new", style=_PAL["warning"])
         t.append(" · ", style=_PAL["muted"])
+        t.append("Tab", style=f"bold {_PAL['primary']}")
+        t.append(" activity · ", style=_PAL["muted"])
         t.append("Esc", style=f"bold {_PAL['primary']}")
-        t.append(" return · ", style=_PAL["muted"])
+        t.append(" activity · ", style=_PAL["muted"])
         t.append("←/→", style=f"bold {_PAL['primary']}")
         t.append(" steps · ", style=_PAL["muted"])
-        if keys:
-            t.append("Tab", style=f"bold {_PAL['primary']}")
-            t.append(" sessions · ", style=_PAL["muted"])
         t.append("/watch refresh", style=_PAL["secondary"])
         t.append(" · ", style=_PAL["muted"])
         t.append("/watch stop", style=_PAL["warning"])
@@ -2946,43 +3016,12 @@ class Cockpit(App):
     def _watch_monitor_sections(self) -> dict:
         r = self._watch_run
         now = time.monotonic()
-        state = "paused" if r.active and r.paused else ("on" if r.active else "off")
-        elapsed = _dur(now - r.started_at) if r.active and r.started_at else "0s"
         step = self._watch_selected_step()
-        steps = self._watch_filtered_steps()
-        count = len(steps)
-        idx = (r.step_index + 1) if step is not None else 0
         keys = self._watch_monitor_target_keys()
-        cur_key = self._watch_ensure_monitor_target() if keys else ""
-        cur_target = self._watch_run.targets.get(cur_key) if cur_key else None
-        title = Text()
-        title.append("watch monitor", style=f"bold {_PAL['accent']}")
-        title.append(f" · {state}", style=_PAL["warning"] if r.paused else _PAL["accent"])
-        if cur_target is not None:
-            title.append(f" · session {keys.index(cur_key) + 1}/{len(keys)}",
-                         style=_PAL["secondary"])
-            title.append(" · ", style=_PAL["muted"])
-            title.append(self._watch_target_display(cur_target),
-                         style=self._watch_target_style(cur_target))
-        if step is not None:
-            title.append(f" · step {idx}/{count}", style=_PAL["secondary"])
-            title.append(" · latest" if r.follow_latest else " · history",
-                         style=_PAL["muted"])
-        if cur_target is None:
-            title.append(" · ", style=_PAL["muted"])
-            title.append(self._watch_target_display(), style=self._watch_target_style())
-            title.append(f" · {elapsed}", style=_PAL["muted"])
-        else:
-            title.append(f" · {elapsed}", style=_PAL["muted"])
-        if r.instruction_label:
-            title.append(f" · {r.instruction_label}", style=_PAL["secondary"])
-        title.append("\n")
-        title.append("read-only observer loop · session activity stays above",
-                     style=_PAL["muted"])
 
         phase = (step.phase if step is not None else "") or r.phase or self._watch_phase(self.session.st)
         if not r.active and step is None:
-            phase_body = "off · run /watch or click the dock to start"
+            phase_body = "off · run /watch to start"
         elif r.paused:
             phase_body = f"paused · {r.pause_reason or 'scope paused'}"
         elif step is not None:
@@ -3014,22 +3053,13 @@ class Cockpit(App):
         if r.pending_digest_reason:
             digest += f"\nqueued: {r.pending_digest_reason}"
 
-        if step is not None:
-            recent = (step.recent_updates + step.evidence_lines)[-_WATCH_RECENT_LIMIT:]
-        else:
-            recent = r.recent_updates[-_WATCH_RECENT_LIMIT:]
-        recent_body = "\n".join(recent) if recent else "no watch updates yet"
-
         return {
-            "watch-monitor-title": title,
             "watch-monitor-phase": self._watch_section("phase", phase_body,
                                                        body_style=_PAL["primary"]),
             "watch-monitor-now": self._watch_section("now", current),
             "watch-monitor-digest": self._watch_section("auto digest", digest),
             "watch-monitor-alert": self._watch_section(
                 "attention", alert, body_style=(_PAL["error"] if r.last_alert_text else _PAL["muted"])),
-            "watch-monitor-recent": self._watch_section("recent", recent_body,
-                                                        body_style=_PAL["muted"]),
         }
 
     def _watch_monitor_step_nav(self, delta: int) -> bool:
@@ -3104,10 +3134,7 @@ class Cockpit(App):
         if sig == self._watch_monitor_render_sig:
             return
         self._watch_monitor_render_sig = sig
-        try:
-            self.query_one("#chat-pin", Static).update(self._watch_monitor_menu_text())
-        except Exception:
-            pass
+        self._update_surface_title()
         for wid, renderable in self._watch_monitor_sections().items():
             try:
                 self.query_one(f"#{wid}", Static).update(renderable)
@@ -3116,9 +3143,10 @@ class Cockpit(App):
 
     def _set_watch_monitor(self, open_: bool) -> None:
         self._watch_monitor_open = bool(open_)
+        self._surface_mode = "watch" if self._watch_monitor_open else "activity"
         self._watch_monitor_render_sig = None
         try:
-            self.query_one("#chat", VerticalScroll).display = not self._watch_monitor_open
+            self.query_one("#timeline").display = not self._watch_monitor_open
         except Exception:
             pass
         monitor = self._watch_monitor()
@@ -3135,10 +3163,10 @@ class Cockpit(App):
                     monitor.scroll_home(animate=False)
                 except Exception:
                     pass
+        self._update_surface_title()
         if self._watch_monitor_open:
             self._update_watch_monitor()
-        else:
-            self._update_chat_pin()
+        self._update_chat_pin()
         self._update_watch_dock()
         self._focus_composer()
 
@@ -3358,17 +3386,9 @@ class Cockpit(App):
         if text.startswith("@") and self._apply_scope_mention(text):
             return
         remembered = self._remember_prompt(text)
-        if text.startswith("/"):
-            low = text.strip().lower()
-            if (self._watch_monitor_open and not (
-                    low in ("/watch view", "/watch monitor")
-                    or low.startswith("/watch refresh")
-                    or low.startswith("/watch stop"))):
-                self._set_watch_monitor(False)
+        if _is_meta_command_input(text):
             self._meta(text)
             return
-        if self._watch_monitor_open:
-            self._set_watch_monitor(False)
         if self._busy:
             # don't drop it — queue it behind the live answer and send it when the
             # current turn finishes (drained in _answer_done / _now_done /
@@ -3794,19 +3814,18 @@ class Cockpit(App):
         self._update_status()
         self._drain_msg_queue()         # send the next queued message, if any
 
-    # ---- /since: deterministic delta, narrated into a grounded recap ----
+    # ---- /since: deterministic delta; --recap opts into a grounded backend recap ----
     def _since_cmd(self, arg: str):
-        """Recap by default (grounded in the cited delta), with the deterministic
-        evidence beneath it; instant deterministic view for `--raw`, no backend,
-        nothing-new, or while busy. The model call runs off the UI thread."""
+        """Show deterministic evidence by default. ``--recap`` opts into sending
+        the cited delta to a backend for a narrated recap."""
         title = (f"/since {arg}").strip()
-        window_arg, instruction = self.session._split_since_arg(arg)
+        window_arg, instruction, recap = self.session._split_since_arg(arg)
         res = self.session._since_view(window_arg)
         if isinstance(res, str):                 # edge-case message (no mark, etc.)
             self._result(res, markdown=False, title=title)
             return
         view, raw, commit = res
-        if raw or view.nothing_new or not N.available(self.backend) or self._busy:
+        if raw or not recap or view.nothing_new or not N.available(self.backend) or self._busy:
             self._result(view.text)              # deterministic markdown, instant
             commit()                             # shown → advance the marker
             return
@@ -5054,6 +5073,8 @@ class Cockpit(App):
             self._watch_run.instruction_label = ""
             self._watch_finish_current_step("stopped")
             self._clear_watch_chat_ephemeral()
+            if self._watch_monitor_open:
+                self._set_watch_monitor(False)
             self.notify("watch stopped — monitor history kept until the next /watch",
                         severity="information")
             if not self.alerts and self._watch_worker_started:
@@ -5128,16 +5149,20 @@ class Cockpit(App):
             else self._watch_phase(self.session.st)
         )
         self._watch_run.baseline_context = self._watch_baseline_context()
+        start_current = (
+            f"{self._watch_current_activity()} · "
+            "Night gathers, and now my watch begins."
+        )
         self._watch_begin_step(self._watch_run.phase, trigger="start",
-                               current=self._watch_current_activity(), force=True)
+                               current=start_current, force=True)
         self._watch_add_recent(
             "start",
-            f"{self._watch_subject()} · {self._watch_current_activity()} · "
-            "Night gathers, and now my watch begins.",
+            f"{self._watch_subject()} · {start_current}",
         )
         self._ensure_watch_worker()
         self._clear_watch_chat_ephemeral()
         self._watch_chat(self._role(self._watch_start_text(reset=reset), "role-event"))
+        self._set_watch_monitor(True)
         self._watch_emit_initial_now()
         self._update_header()
         self._update_status()
@@ -6020,11 +6045,11 @@ class Cockpit(App):
             self.copy_to_clipboard(text)                 # OSC 52 — remote / SSH / tmux
         except Exception:
             pass
-        import shutil
         if os.environ.get("TMUX"):
-            if shutil.which("tmux"):
+            tmux = _trusted_path_command("tmux")
+            if tmux:
                 try:
-                    subprocess.run(["tmux", "load-buffer", "-w", "-"],
+                    subprocess.run([tmux, "load-buffer", "-w", "-"],
                                    input=text.encode("utf-8"), timeout=2,
                                    stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
@@ -6038,9 +6063,10 @@ class Cockpit(App):
         for argv in (["pbcopy"], ["wl-copy"],
                      ["xclip", "-selection", "clipboard"],
                      ["xsel", "--clipboard", "--input"], ["clip"]):
-            if shutil.which(argv[0]):
+            exe = _trusted_path_command(argv[0])
+            if exe:
                 try:
-                    subprocess.run(argv, input=text.encode("utf-8"), timeout=2,
+                    subprocess.run([exe, *argv[1:]], input=text.encode("utf-8"), timeout=2,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass

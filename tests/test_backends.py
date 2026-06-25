@@ -2,6 +2,7 @@ import http.server
 import http.client
 import json
 import os
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -84,6 +85,7 @@ class TestResolve(unittest.TestCase):
         os.environ["CC_COPILOT_LLM_CMD"] = 'fake-llm --system "read only"'
         be = BK.resolve()
         self.assertEqual(be.argv, ["fake-llm", "--system", "read only"])
+        self.assertEqual(be.cwd, tempfile.gettempdir())
 
     def test_custom_cli_unbalanced_quote_raises_backend_error(self):
         # shlex.split raises ValueError on unbalanced quotes; resolve() must
@@ -140,6 +142,11 @@ class TestResolve(unittest.TestCase):
         for name in ("claude", "codex"):
             self.assertIsNotNone(reg[name].safety_args,
                                  f"{name} backend missing safety_args")
+
+    def test_cli_backends_run_from_neutral_tempdir(self):
+        reg = BK.registry()
+        for name in ("claude", "codex", "gemini", "llm"):
+            self.assertEqual(reg[name].cwd, tempfile.gettempdir())
 
     def test_flag_supported_rejects_superstring_flags(self):
         # A help text that advertises only a longer flag must not enable the

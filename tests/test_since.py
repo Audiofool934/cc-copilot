@@ -193,7 +193,10 @@ class TestGitReconcile(unittest.TestCase):
         import types
         from unittest import mock
 
+        seen = []
+
         def fake_run(cmd, **kw):
+            seen.append((cmd, kw))
             is_revparse = "rev-parse" in cmd
             return types.SimpleNamespace(returncode=0 if is_revparse else 1,
                                          stdout="true" if is_revparse else "")
@@ -201,6 +204,10 @@ class TestGitReconcile(unittest.TestCase):
             is_repo, dirty = SI._git_worktree("/proj")
         self.assertFalse(is_repo)            # failed status ≠ clean tree
         self.assertEqual(dirty, set())
+        status_cmd = seen[1][0]
+        self.assertIn("core.fsmonitor=false", status_cmd)
+        self.assertIn("core.hooksPath=/dev/null", status_cmd)
+        self.assertEqual(seen[1][1]["env"]["GIT_OPTIONAL_LOCKS"], "0")
 
     def test_no_annotations_outside_a_repo(self):
         chg = [self._chg("a.py", 5)]

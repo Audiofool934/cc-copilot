@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+
+from . import git_safe as GIT
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -37,9 +39,9 @@ def _git_worktree(cwd: str):
     if not cwd:
         return False, set()
     try:
-        chk = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
+        chk = subprocess.run(GIT.argv(cwd, "rev-parse", "--is-inside-work-tree"),
                              capture_output=True, text=True, timeout=2,
-                             encoding="utf-8", errors="replace")
+                             encoding="utf-8", errors="replace", env=GIT.env())
         if chk.returncode != 0 or chk.stdout.strip() != "true":
             return False, set()
         # --untracked-files=all so a new file isn't collapsed under a `?? dir/`
@@ -47,10 +49,9 @@ def _git_worktree(cwd: str):
         # index lock. Porcelain paths are relative to the cwd git ran in (-C cwd),
         # the same base the transcript edits use — so both normalize against cwd,
         # not the repo root (cwd may be a subdir of the repo).
-        st = subprocess.run(["git", "--no-optional-locks", "-C", cwd, "status",
-                             "--short", "--untracked-files=all"],
+        st = subprocess.run(GIT.argv(cwd, "status", "--short", "--untracked-files=all"),
                             capture_output=True, text=True, timeout=2,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", env=GIT.env())
         if st.returncode != 0:               # status failed (locked index, etc.):
             return False, set()              # don't pretend the tree is clean
     except (OSError, subprocess.TimeoutExpired):

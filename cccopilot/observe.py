@@ -12,7 +12,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-from . import assess as A, locate as LOC, scope as SC, state as S, sources as SRC
+from . import assess as A, git_safe as GIT, locate as LOC, scope as SC, state as S, sources as SRC
 from .brief import _dur, _oneline
 
 
@@ -387,8 +387,9 @@ def _project_glance(root: str) -> List[str]:
 
 def _git(root: str, *args: str) -> str:
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=2)
+        p = subprocess.run(GIT.argv(root, *args), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2,
+                           env=GIT.env())
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""

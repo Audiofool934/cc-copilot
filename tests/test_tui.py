@@ -7,6 +7,7 @@ installed (see .github/workflows/ci.yml).
 
 import os
 import json
+import tempfile
 import types
 import unittest
 
@@ -555,7 +556,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app = tui.Cockpit(sess, poll=999, alerts=False)
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app._meta("/since 30m")                       # starts the recap worker
+                app._meta("/since 30m --recap")               # starts the recap worker
                 await app.workers.wait_for_complete()         # let the thread finish
                 await pilot.pause()                           # process call_from_thread
                 blob = "\n".join(str(getattr(s, "content", "") or "")
@@ -771,7 +772,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             N.recap_since = recap_then_switch
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app._meta("/since")                          # last-look path
+                app._meta("/since --recap")                  # last-look path
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 blob = "\n".join(str(getattr(s, "content", "") or "")
@@ -1404,7 +1405,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 osc, ran = [], []
                 app.copy_to_clipboard = lambda t: osc.append(t)
                 real_which, real_run = _shutil.which, tui.subprocess.run
-                _shutil.which = lambda name: "/bin/pbcopy" if name == "pbcopy" else None
+                _shutil.which = lambda name, path=None: "/bin/pbcopy" if name == "pbcopy" else None
                 tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
                 try:
                     app._put_on_clipboard("grab me")
@@ -1414,7 +1415,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             if old_tmux is not None:
                 os.environ["TMUX"] = old_tmux
         self.assertEqual(osc, ["grab me"])             # OSC 52 attempted (remote/tmux)
-        self.assertEqual(ran[0][0], ["pbcopy"])        # local command attempted…
+        self.assertEqual(ran[0][0], ["/bin/pbcopy"])   # local command attempted…
         self.assertEqual(ran[0][1], b"grab me")        # …with the text piped to stdin
 
     async def test_put_on_clipboard_uses_tmux_clipboard_paths_inside_tmux(self):
@@ -1430,7 +1431,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app.copy_to_clipboard = lambda t: osc.append(t)
                 app._write_terminal_sequence = lambda seq: writes.append(seq)
                 real_which, real_run = _shutil.which, tui.subprocess.run
-                _shutil.which = lambda name: "/bin/tmux" if name == "tmux" else None
+                _shutil.which = lambda name, path=None: "/bin/tmux" if name == "tmux" else None
                 tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
                 try:
                     app._put_on_clipboard("remote tmux")
@@ -1442,11 +1443,43 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["TMUX"] = old_tmux
         self.assertEqual(osc, ["remote tmux"])          # plain OSC 52 still attempted
-        self.assertEqual(ran[0][0], ["tmux", "load-buffer", "-w", "-"])
+        self.assertEqual(ran[0][0], ["/bin/tmux", "load-buffer", "-w", "-"])
         self.assertEqual(ran[0][1], b"remote tmux")
         self.assertEqual(len(writes), 1)
         self.assertTrue(writes[0].startswith("\x1bPtmux;\x1b\x1b]52;c;"))
         self.assertTrue(writes[0].endswith("\x1b\\"))
+
+    async def test_put_on_clipboard_rejects_project_shadowed_helper(self):
+        import shutil as _shutil
+        old_tmux = os.environ.pop("TMUX", None)
+        old_path = os.environ.get("PATH", "")
+        cwd = os.getcwd()
+        shadow_dir = tempfile.mkdtemp(prefix="ccclip-shadow-")
+        helper = os.path.join(shadow_dir, "pbcopy")
+        with open(helper, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nexit 99\n")
+        os.chmod(helper, 0o755)
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            os.chdir(shadow_dir)
+            os.environ["PATH"] = shadow_dir
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                ran = []
+                app.copy_to_clipboard = lambda _t: None
+                real_which, real_run = _shutil.which, tui.subprocess.run
+                tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
+                try:
+                    app._put_on_clipboard("do not run project helper")
+                finally:
+                    _shutil.which, tui.subprocess.run = real_which, real_run
+        finally:
+            os.chdir(cwd)
+            os.environ["PATH"] = old_path
+            if old_tmux is not None:
+                os.environ["TMUX"] = old_tmux
+        self.assertEqual(ran, [])
 
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa
@@ -1936,28 +1969,50 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app._watch_path, b)
         self.assertIs(app._watch_state, app.session.st)
 
-    async def test_watch_command_marks_dock_and_quotes_vow(self):
+    async def test_watch_command_opens_surface_and_quotes_vow(self):
+        from cccopilot import narrate as N
         from textual.widgets import Static
+        real_avail, real_flow = N.available, N.watch_flow_update
+        N.available = lambda be=None: True
+
+        def _flow(flow, model=None, backend=None, instruction=""):
+            return ("now: Night gathers, and now my watch begins.\n"
+                    "action: same\n"
+                    "title: Baseline\n"
+                    "phase: running\n"
+                    "reason: watch started\n"
+                    "attention: none")
+
+        N.watch_flow_update = _flow
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            app._meta("/watch")
-            await pilot.pause()
-            hud = str(app.query_one("#session-hud", Static).content)
-            dock = str(app.query_one("#watch-dock", Static).content)
-            chat = "\n".join(str(getattr(s, "content", "") or "")
-                             for s in app.query("#chat Static"))
-            app._meta("/watch view")
-            await pilot.pause()
-            recent = str(app.query_one("#watch-monitor-recent", Static).content)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                now = ""
+                for _ in range(10):
+                    await pilot.pause()
+                    now = str(app.query_one("#watch-monitor-now", Static).content)
+                    if "Night gathers, and now my watch begins." in now:
+                        break
+                hud = str(app.query_one("#session-hud", Static).content)
+                dock = app.query_one("#watch-dock", Static)
+                title = str(app.query_one("#timeline-title", Static).content)
+                chat = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+        finally:
+            N.available = real_avail
+            N.watch_flow_update = real_flow
 
         self.assertTrue(app._watch_mode)
+        self.assertTrue(app._watch_monitor_open)
         self.assertNotIn("watch:on", hud)
-        self.assertIn("watch", dock)
-        self.assertIn("on", dock)
+        self.assertFalse(dock.display)
+        self.assertIn("watch", title)
+        self.assertIn("on", title)
         self.assertNotIn("Night gathers, and now my watch begins.", chat)
-        self.assertIn("Night gathers, and now my watch begins.", recent)
+        self.assertIn("Night gathers, and now my watch begins.", now)
 
     async def test_watch_stop_clears_hud_marker(self):
         from textual.widgets import Static
@@ -1970,12 +2025,14 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._meta("/watch stop")
             await pilot.pause()
             hud = str(app.query_one("#session-hud", Static).content)
-            dock = str(app.query_one("#watch-dock", Static).content)
+            dock = app.query_one("#watch-dock", Static)
+            title = str(app.query_one("#timeline-title", Static).content)
 
         self.assertFalse(app._watch_mode)
+        self.assertFalse(app._watch_monitor_open)
         self.assertNotIn("watch:on", hud)
-        self.assertIn("watch", dock)
-        self.assertIn("off", dock)
+        self.assertFalse(dock.display)
+        self.assertIn("session activity", title)
 
     async def test_watch_updates_stay_out_of_main_chat(self):
         from cccopilot import narrate as N
@@ -2133,8 +2190,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                         break
                 app._meta("/watch view")
                 await pilot.pause()
-                title = str(app.query_one("#watch-monitor-title", Static).content)
-                dock = str(app.query_one("#watch-dock", Static).content)
+                title = str(app.query_one("#timeline-title", Static).content)
         finally:
             N.available = real_avail
             N.watch_flow_update = real_flow
@@ -2143,7 +2199,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Answer watch updates in Chinese", captured[0][1])
         self.assertIn("watch instruction: Answer watch updates in Chinese", captured[0][0])
         self.assertIn("中文", title)
-        self.assertIn("中文", dock)
 
     async def test_watch_semantic_step_decision_can_keep_phase_delta_on_same_step(self):
         from cccopilot import narrate as N
@@ -2371,7 +2426,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("digest trigger", captured[0][0])
         self.assertIn("queued watch digest", rendered)
 
-    async def test_watch_view_replaces_chat_but_keeps_activity_timeline(self):
+    async def test_watch_view_replaces_activity_surface_but_keeps_chat(self):
         from textual.widgets import Static
         from cccopilot import narrate as N
         from cccopilot import prefs as PREFS
@@ -2393,18 +2448,19 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 h0 = app._timeline_height
                 app._meta("/watch view")
                 await pilot.pause()
-                title = str(app.query_one("#watch-monitor-title", Static).content)
+                title = str(app.query_one("#timeline-title", Static).content)
                 phase = str(app.query_one("#watch-monitor-phase", Static).content)
                 digest = str(app.query_one("#watch-monitor-digest", Static).content)
-                menu = str(app.query_one("#chat-pin", Static).content)
+                pin = str(app.query_one("#chat-pin", Static).content)
                 self.assertTrue(app._watch_monitor_open)
-                self.assertFalse(app.query_one("#chat").display)
+                self.assertTrue(app.query_one("#chat").display)
                 self.assertTrue(app.query_one("#watch-monitor").display)
-                self.assertTrue(app.query_one("#timeline").display)
+                self.assertFalse(app.query_one("#timeline").display)
                 self.assertNotIn("sess-A", title)
-                self.assertNotIn("sess-A", menu)
+                self.assertNotIn("sess-A", pin)
                 self.assertIn("step 1/1", title)
                 self.assertIn("latest", title)
+                self.assertIn("prompt", pin)
                 self.assertIn("testing", phase)
                 self.assertIn("recent evidence", digest)
                 self.assertIn("phase `testing`", digest)
@@ -2412,7 +2468,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
                 await pilot.press("left")
                 await pilot.pause()
-                title_prev = str(app.query_one("#watch-monitor-title", Static).content)
+                title_prev = str(app.query_one("#timeline-title", Static).content)
                 phase_prev = str(app.query_one("#watch-monitor-phase", Static).content)
                 self.assertTrue(app._watch_run.follow_latest)
                 self.assertIn("step 1/1", title_prev)
@@ -2421,7 +2477,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
 
                 await pilot.press("right")
                 await pilot.pause()
-                title_latest = str(app.query_one("#watch-monitor-title", Static).content)
+                title_latest = str(app.query_one("#timeline-title", Static).content)
                 self.assertTrue(app._watch_run.follow_latest)
                 self.assertIn("step 1/1", title_latest)
                 self.assertIn("latest", title_latest)
@@ -2436,13 +2492,44 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app._watch_monitor_open)
                 self.assertTrue(app.query_one("#chat").display)
                 self.assertFalse(app.query_one("#watch-monitor").display)
+                self.assertTrue(app.query_one("#timeline").display)
         finally:
             N.available = real_avail
 
-        self.assertIn("watch monitor", title)
+        self.assertIn("watch", title)
         self.assertIn("PHASE", phase)
-        self.assertIn("Esc", menu)
-        self.assertIn("←/→", menu)
+        self.assertIn("Esc", title)
+        self.assertIn("activity", title)
+        self.assertIn("←/→", title)
+
+    async def test_watch_view_stays_open_when_chat_is_submitted(self):
+        from cccopilot import narrate as N
+        real_avail = N.available
+        N.available = lambda be=None: False
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                app._meta("/watch view")
+                await pilot.pause()
+                chat_calls = []
+                app._begin_chat_turn = (
+                    lambda text, prompt_history_added=False:
+                    chat_calls.append((text, prompt_history_added)) or True
+                )
+
+                app._on_submit(tui.Composer.Submitted("modify the previous prompt"))
+                await pilot.pause()
+
+                self.assertEqual(chat_calls[0][0], "modify the previous prompt")
+                self.assertTrue(app._watch_monitor_open)
+                self.assertTrue(app.query_one("#chat").display)
+                self.assertTrue(app.query_one("#watch-monitor").display)
+                self.assertFalse(app.query_one("#timeline").display)
+        finally:
+            N.available = real_avail
 
     async def test_watch_command_completion_marks_same_step_done(self):
         from cccopilot import narrate as N
@@ -2504,17 +2591,17 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app._on_watch(st, tui.S.diff(target.state, st), target)
                 await pilot.pause()
                 rendered = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
-                dock = str(app.query_one("#watch-dock", Static).content)
+                dock = app.query_one("#watch-dock", Static)
                 app._meta("/watch view")
                 await pilot.pause()
-                title_b = str(app.query_one("#watch-monitor-title", Static).content)
+                title_b = str(app.query_one("#timeline-title", Static).content)
                 phase_b = str(app.query_one("#watch-monitor-phase", Static).content)
                 now_b = str(app.query_one("#watch-monitor-now", Static).content)
-                menu_b = str(app.query_one("#chat-pin", Static).content)
+                pin_b = str(app.query_one("#chat-pin", Static).content)
 
                 app._watch_monitor_target_nav(1)
                 await pilot.pause()
-                title_a = str(app.query_one("#watch-monitor-title", Static).content)
+                title_a = str(app.query_one("#timeline-title", Static).content)
                 phase_a = str(app.query_one("#watch-monitor-phase", Static).content)
                 now_a = str(app.query_one("#watch-monitor-now", Static).content)
         finally:
@@ -2523,44 +2610,45 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIs(app.session.st, anchor_state)
         self.assertNotIn("watch · progress", rendered)
         self.assertNotIn(sid_b[:8], rendered)
-        self.assertIn("2 sessions", dock)
+        self.assertFalse(dock.display)
         self.assertIn(sid_b[:8], app._watch_run.last_micro_text)
         self.assertIn("session", title_b)
         self.assertIn("task b", title_b)
         self.assertNotIn(sid_b[:8], title_b)
         self.assertIn("testing", phase_b)
         self.assertIn("Bash running: pytest", now_b)
-        self.assertIn("Tab", menu_b)
-        self.assertNotIn(sid_b[:8], menu_b)
+        self.assertIn("prompt", pin_b)
+        self.assertNotIn(sid_b[:8], pin_b)
         self.assertNotIn(sid_a[:8], title_a)
         self.assertNotIn(sid_b[:8], title_a)
         self.assertNotIn("pytest", phase_a)
         self.assertNotIn("pytest", now_a)
 
-    async def test_watch_dock_click_starts_then_opens_monitor(self):
+    async def test_watch_surface_tab_switches_between_activity_and_watch(self):
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
 
-        class Click:
-            def __init__(self, widget):
-                self.widget = widget
-                self.stopped = False
-
-            def stop(self):
-                self.stopped = True
-
         async with app.run_test() as pilot:
             await pilot.pause()
-            dock = app.query_one("#watch-dock")
-            app.on_click(Click(dock))
+            app._meta("/watch")
             await pilot.pause()
             self.assertTrue(app._watch_mode)
+            self.assertTrue(app._watch_monitor_open)
+            self.assertTrue(app.query_one("#chat").display)
+            self.assertTrue(app.query_one("#watch-monitor").display)
+            self.assertFalse(app.query_one("#timeline").display)
 
-            app.on_click(Click(dock))
+            await pilot.press("tab")
+            await pilot.pause()
+            self.assertFalse(app._watch_monitor_open)
+            self.assertFalse(app.query_one("#watch-monitor").display)
+            self.assertTrue(app.query_one("#timeline").display)
+
+            await pilot.press("shift+tab")
             await pilot.pause()
             self.assertTrue(app._watch_monitor_open)
-            self.assertFalse(app.query_one("#chat").display)
             self.assertTrue(app.query_one("#watch-monitor").display)
+            self.assertFalse(app.query_one("#timeline").display)
 
     async def test_watch_now_cadence_suppresses_chat_without_auto_digest(self):
         from cccopilot import narrate as N
@@ -2612,13 +2700,15 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app._watch_scope_changed("attached session changed")
             await pilot.pause()
             hud = str(app.query_one("#session-hud", Static).content)
-            dock = str(app.query_one("#watch-dock", Static).content)
+            title = str(app.query_one("#timeline-title", Static).content)
+            dock = app.query_one("#watch-dock", Static)
             rendered = "\n".join(str(w.render()) for w in app.query_one("#chat").children)
 
         self.assertTrue(app._watch_mode)
         self.assertTrue(app._watch_run.paused)
         self.assertNotIn("watch:paused", hud)
-        self.assertIn("paused", dock)
+        self.assertFalse(dock.display)
+        self.assertIn("paused", title)
         self.assertNotIn("watch · paused", rendered)
 
     async def test_busy_tick_advances_only_while_busy(self):
@@ -3213,6 +3303,42 @@ class TestCockpitStreaming(unittest.IsolatedAsyncioTestCase):
 
         N.chat_brief_stream = (lambda brief, hist, q, model=None, backend=None:
                                N.StreamHandle(stub, gen()))
+
+    async def test_absolute_path_submission_starts_chat_not_meta_command(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            meta_calls = []
+            chat_calls = []
+            app._meta = lambda cmd: meta_calls.append(cmd)
+            app._begin_chat_turn = (
+                lambda text, prompt_history_added=False:
+                chat_calls.append((text, prompt_history_added)) or True
+            )
+
+            app._on_submit(tui.Composer.Submitted("/data-01/project/file.py"))
+
+            self.assertEqual(meta_calls, [])
+            self.assertEqual(chat_calls[0][0], "/data-01/project/file.py")
+
+    async def test_command_shaped_unknown_slash_submission_still_goes_to_meta(self):
+        sess = self._session()
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            meta_calls = []
+            chat_calls = []
+            app._meta = lambda cmd: meta_calls.append(cmd)
+            app._begin_chat_turn = (
+                lambda text, prompt_history_added=False:
+                chat_calls.append((text, prompt_history_added)) or True
+            )
+
+            app._on_submit(tui.Composer.Submitted("/session"))
+
+            self.assertEqual(meta_calls, ["/session"])
+            self.assertEqual(chat_calls, [])
 
     async def test_streamed_answer_finalizes_with_exact_usage(self):
         from cccopilot import backends as BK

@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import scope as SC, state as S, transcript as T, sources as SRC
+from . import git_safe as GIT, scope as SC, state as S, transcript as T, sources as SRC
 from .brief import _dur
 
 
@@ -39,7 +39,6 @@ _STOPWORDS = {
 
 _CITATION = re.compile(r"\[(?:(?P<sid>[A-Za-z0-9_.-]+):)?L(?P<line>\d+)[^\]]*\]")
 _BARE_LINE = re.compile(r"\bL(?P<line>\d+)\b")
-_PATHISH = re.compile(r"(?:[\w.-]+/)+[\w./:-]+", re.UNICODE)
 
 
 @dataclass
@@ -262,8 +261,9 @@ def _conversation_terms(question: str, history: list) -> list:
     """Current-question terms plus a small continuity tail from recent cockpit turns.
 
     Prior user asks are intentional retrieval hints for follow-ups like "that" or
-    "continue this". Assistant answers contribute only citations/path-like tokens,
-    not their full prose, so an earlier synthesis does not become fresh evidence.
+    "continue this". Assistant answers are model output and therefore only
+    contribute transcript citation anchors, not path-like strings or prose, so an
+    earlier synthesis cannot steer project-file retrieval.
     """
     out, seen = [], set()
 
@@ -308,7 +308,6 @@ def _assistant_continuity_hints(text: str) -> list:
     hints = []
     for sid, line in _line_refs(text):
         hints.append(f"{sid}:L{line}" if sid else f"L{line}")
-    hints.extend(m.group(0) for m in _PATHISH.finditer(text))
     return hints[:24]
 
 
@@ -643,8 +642,9 @@ def _project_git_facts(root: str) -> list:
 
 def _git(root: str, *args: str) -> str:
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=2)
+        p = subprocess.run(GIT.argv(root, *args), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2,
+                           env=GIT.env())
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""

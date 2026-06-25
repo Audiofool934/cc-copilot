@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -131,6 +132,32 @@ class TestSinceHandoffCli(unittest.TestCase):
         self.assertIn("since last look", out)
         self.assertIn("make build", out)             # the command after the marker
         self.assertGreater(LL.get(key)["line"], 1)   # marker advanced to the tail
+
+    def test_since_default_does_not_call_llm_backend(self):
+        p = self._session()
+        tr = SRC.parse(p)
+        key = LL.key_for(tr.session_id or "", p)
+        LL.mark(key, 1, "", "")
+        with mock.patch("cccopilot.narrate.available", return_value=True), \
+             mock.patch("cccopilot.narrate.recap_since",
+                        side_effect=AssertionError("must not call backend")):
+            rc, out = self._run(["since", "--session", p])
+        self.assertEqual(rc, 0)
+        self.assertIn("make build", out)
+
+    def test_since_recap_explicitly_calls_llm_backend(self):
+        p = self._session()
+        tr = SRC.parse(p)
+        key = LL.key_for(tr.session_id or "", p)
+        LL.mark(key, 1, "", "")
+        with mock.patch("cccopilot.narrate.available", return_value=True), \
+             mock.patch("cccopilot.narrate.backend_name", return_value="fake"), \
+             mock.patch("cccopilot.narrate.recap_since",
+                        return_value="recapped with citations [L2]") as recap:
+            rc, out = self._run(["since", "--session", p, "--recap"])
+        self.assertEqual(rc, 0)
+        self.assertIn("recapped with citations", out)
+        recap.assert_called_once()
 
     def test_since_peek_does_not_advance(self):
         p = self._session()
@@ -262,6 +289,137 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
     def test_source_checkout_detected_from_repo(self):
         # the suite runs from the cloned repo (pyproject.toml + .git present)
         self.assertTrue(cli._is_source_checkout())
+
+    def test_tui_import_probe_ignores_current_project_directory(self):
+        d = tempfile.mkdtemp(prefix="ccproject-")
+        with open(os.path.join(d, "textual.py"), "w", encoding="utf-8") as f:
+            f.write("raise RuntimeError('should not import project textual')\n")
+        old_cwd, old_path = os.getcwd(), sys.path[:]
+        seen_paths = []
+
+        def fake_find_spec(name, path):
+            self.assertEqual(name, "textual")
+            seen_paths.extend(path)
+            return None
+
+        try:
+            os.chdir(d)
+            sys.path.insert(0, "")
+            sys.path.insert(1, d)
+            with mock.patch("importlib.machinery.PathFinder.find_spec",
+                            side_effect=fake_find_spec):
+                self.assertFalse(cli._tui_importable())
+        finally:
+            os.chdir(old_cwd)
+            sys.path[:] = old_path
+        self.assertNotIn("", seen_paths)
+        self.assertNotIn(d, seen_paths)
+
+    def test_python_argv_gates_safe_path_flag_by_target_interpreter(self):
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True):
+            self.assertEqual(
+                cli._python_argv("/py", "-m", "cccopilot"),
+                ["/py", "-P", "-m", "cccopilot"],
+            )
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False):
+            self.assertEqual(
+                cli._python_argv("/py", "-m", "cccopilot"),
+                ["/py", "-m", "cccopilot"],
+            )
+
+    def test_source_checkout_python_argv_shims_older_python(self):
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False), \
+             mock.patch("cccopilot.cli._repo_root", return_value="/repo"):
+            argv = cli._source_checkout_python_argv("/py", "cockpit", "--next")
+
+        self.assertEqual(argv[0:2], ["/py", "-c"])
+        self.assertIn("sys.path[:]=[_r]", argv[2])
+        self.assertEqual(argv[3:], ["/repo", "cockpit", "--next"])
+        self.assertNotIn("-P", argv)
+        self.assertNotIn("-m", argv)
+
+    def test_tui_bootstrap_child_python_is_isolated_from_project_cwd(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vdir = os.path.join(d, ".venv", "bin")
+        os.makedirs(vdir)
+        vpy = os.path.join(vdir, "python")
+        open(vpy, "w").close()
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=0)
+
+        with mock.patch("subprocess.run", side_effect=fake_run), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(calls[0][0], [vpy, "-P", "-c", "import textual"])
+        self.assertEqual(calls[0][1]["cwd"], d)
+        self.assertNotIn("PYTHONPATH", calls[0][1]["env"])
+        self.assertNotIn("PYTHONHOME", calls[0][1]["env"])
+        self.assertEqual(calls[0][1]["env"]["PYTHONSAFEPATH"], "1")
+
+    def test_tui_bootstrap_pip_install_is_isolated_without_hiding_user_site(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vpy = os.path.join(d, ".venv", "bin", "python")
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=1 if len(calls) == 1 else 0)
+
+        with mock.patch("os.path.isfile", return_value=True), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(
+            calls[1][0],
+            [vpy, "-P", "-m", "pip", "install", "-q", "--upgrade", "textual"],
+        )
+        self.assertNotIn("-I", calls[1][0])
+        self.assertEqual(calls[1][1]["cwd"], d)
+        self.assertNotIn("PYTHONPATH", calls[1][1]["env"])
+
+    def test_tui_bootstrap_omits_safe_path_flag_for_older_python(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vpy = os.path.join(d, ".venv", "bin", "python")
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=0)
+
+        with mock.patch("os.path.isfile", return_value=True), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(calls[0][0], [vpy, "-c", "import textual"])
+        self.assertNotIn("-P", calls[0][0])
+        self.assertEqual(calls[0][1]["env"]["PYTHONSAFEPATH"], "1")
 
     def test_installed_without_textual_points_to_extra_not_bootstrap(self):
         d = tempfile.mkdtemp(prefix="ccinstall-")   # bare dir = like site-packages
