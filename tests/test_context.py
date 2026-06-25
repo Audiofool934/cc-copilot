@@ -197,6 +197,28 @@ class TestEvidenceContext(unittest.TestCase):
 
         self.assertIn("[src/onboard.txt:L1] ollama cloud onboarding", ctx.text)
 
+
+    def test_assistant_path_hints_do_not_guide_followup_project_excerpt(self):
+        cwd = tempfile.mkdtemp(prefix="ccctx-project-assistant-path-")
+        os.makedirs(os.path.join(cwd, "config"))
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Demo Project\n")
+        with open(os.path.join(cwd, "config", "local_settings.py"), "w", encoding="utf-8") as f:
+            f.write('INTERNAL_SUPPORT_PIN = "blue-otter-4931"\n')
+        p = write([user("inspect project", 60, sessionId="testsess", cwd=cwd),
+                   asst("done", 5)])
+        st = S.build(T.parse(p))
+        history = [
+            ("user", "what next?"),
+            ("assistant", "Continue with config/local_settings.py."),
+        ]
+
+        ctx = EC.build(p, st, "session", question="continue",
+                       history=history, project_context=True)
+
+        self.assertNotIn("### `config/local_settings.py`", ctx.text)
+        self.assertNotIn("blue-otter-4931", ctx.text)
+
     def test_project_context_excludes_common_secret_files(self):
         cwd = tempfile.mkdtemp(prefix="ccctx-project-secrets-")
         with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:

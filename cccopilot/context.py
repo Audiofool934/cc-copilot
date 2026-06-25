@@ -262,8 +262,9 @@ def _conversation_terms(question: str, history: list) -> list:
     """Current-question terms plus a small continuity tail from recent cockpit turns.
 
     Prior user asks are intentional retrieval hints for follow-ups like "that" or
-    "continue this". Assistant answers contribute only citations/path-like tokens,
-    not their full prose, so an earlier synthesis does not become fresh evidence.
+    "continue this". Assistant answers are model output and therefore only
+    contribute transcript citation anchors, not path-like strings or prose, so an
+    earlier synthesis cannot steer project-file retrieval.
     """
     out, seen = [], set()
 
@@ -308,7 +309,6 @@ def _assistant_continuity_hints(text: str) -> list:
     hints = []
     for sid, line in _line_refs(text):
         hints.append(f"{sid}:L{line}" if sid else f"L{line}")
-    hints.extend(m.group(0) for m in _PATHISH.finditer(text))
     return hints[:24]
 
 
