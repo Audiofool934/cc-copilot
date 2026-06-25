@@ -35,8 +35,13 @@ def _repo_root() -> str:
 
 
 def _tui_importable() -> bool:
-    import importlib.util
-    return importlib.util.find_spec("textual") is not None
+    import importlib.machinery
+    cwd = os.path.abspath(os.getcwd())
+    safe_path = [
+        p for p in sys.path
+        if p and os.path.abspath(p) != cwd
+    ]
+    return importlib.machinery.PathFinder.find_spec("textual", safe_path) is not None
 
 
 def _is_source_checkout() -> bool:
@@ -74,6 +79,20 @@ def _setup_troubleshooting() -> str:
     )
 
 
+def _safe_child_python_kwargs() -> dict:
+    """Run child Python commands away from the user's project directory.
+
+    cc-copilot is usually invoked from the repository being observed. That
+    directory is untrusted input, so bootstrap probes must not let it influence
+    child interpreter imports via cwd or Python-specific environment variables.
+    """
+    env = os.environ.copy()
+    for key in ("PYTHONPATH", "PYTHONHOME"):
+        env.pop(key, None)
+    env["PYTHONSAFEPATH"] = "1"
+    return {"cwd": _repo_root(), "env": env}
+
+
 def _ensure_tui_runtime(quiet: bool = False) -> str:
     """Return a python that has Textual — the project .venv, creating it and
     installing the [tui] extra on first use. Returns None on failure."""
@@ -83,8 +102,9 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
     vpy = os.path.join(vdir, "bin", "python")
 
     def has_textual(py):
-        return subprocess.run([py, "-c", "import textual"],
-                              capture_output=True).returncode == 0
+        return subprocess.run([py, "-I", "-c", "import textual"],
+                              capture_output=True,
+                              **_safe_child_python_kwargs()).returncode == 0
 
     if _tui_importable():
         return sys.executable
@@ -109,7 +129,8 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
             return None
     if not quiet:
         sys.stderr.write("# cc-copilot: installing the cockpit (textual), one-time …\n")
-    r = subprocess.run([vpy, "-m", "pip", "install", "-q", "--upgrade", "textual"])
+    r = subprocess.run([vpy, "-I", "-m", "pip", "install", "-q", "--upgrade", "textual"],
+                       **_safe_child_python_kwargs())
     if r.returncode != 0 or not has_textual(vpy):
         if not quiet:
             sys.stderr.write(_setup_troubleshooting())
@@ -258,8 +279,9 @@ def cmd_setup(args) -> int:
     vpy = _ensure_tui_runtime()
     if not vpy:
         return 1
-    subprocess.run([vpy, "-c",
-                    "import textual; print('cockpit ready · textual', textual.__version__)"])
+    subprocess.run([vpy, "-I", "-c",
+                    "import textual; print('cockpit ready · textual', textual.__version__)"],
+                   **_safe_child_python_kwargs())
     print("run:  cc-copilot cockpit")
     return 0
 

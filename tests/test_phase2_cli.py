@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -263,6 +264,31 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
         # the suite runs from the cloned repo (pyproject.toml + .git present)
         self.assertTrue(cli._is_source_checkout())
 
+    def test_tui_import_probe_ignores_current_project_directory(self):
+        d = tempfile.mkdtemp(prefix="ccproject-")
+        with open(os.path.join(d, "textual.py"), "w") as f:
+            f.write("raise RuntimeError('should not import project textual')\n")
+        old_cwd, old_path = os.getcwd(), sys.path[:]
+        seen_paths = []
+
+        def fake_find_spec(name, path):
+            self.assertEqual(name, "textual")
+            seen_paths.extend(path)
+            return None
+
+        try:
+            os.chdir(d)
+            sys.path.insert(0, "")
+            sys.path.insert(1, d)
+            with mock.patch("importlib.machinery.PathFinder.find_spec",
+                            side_effect=fake_find_spec):
+                self.assertFalse(cli._tui_importable())
+        finally:
+            os.chdir(old_cwd)
+            sys.path[:] = old_path
+        self.assertNotIn("", seen_paths)
+        self.assertNotIn(d, seen_paths)
+
     def test_installed_without_textual_points_to_extra_not_bootstrap(self):
         d = tempfile.mkdtemp(prefix="ccinstall-")   # bare dir = like site-packages
         orig_root, orig_imp = cli._repo_root, cli._tui_importable
@@ -277,6 +303,61 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
             self.assertFalse(os.path.isdir(os.path.join(d, ".venv")))  # nothing written
         finally:
             cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+    def test_tui_bootstrap_child_python_is_isolated_from_project_cwd(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vdir = os.path.join(d, ".venv", "bin")
+        os.makedirs(vdir)
+        vpy = os.path.join(vdir, "python")
+        open(vpy, "w").close()
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=0)
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(calls[0][0], [vpy, "-I", "-c", "import textual"])
+        self.assertEqual(calls[0][1]["cwd"], d)
+        self.assertNotIn("PYTHONPATH", calls[0][1]["env"])
+        self.assertNotIn("PYTHONHOME", calls[0][1]["env"])
+        self.assertEqual(calls[0][1]["env"]["PYTHONSAFEPATH"], "1")
+
+    def test_tui_bootstrap_pip_install_is_isolated_from_project_cwd(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vpy = os.path.join(d, ".venv", "bin", "python")
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=1 if len(calls) == 1 else 0)
+
+        with mock.patch("os.path.isfile", return_value=True), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(
+            calls[1][0],
+            [vpy, "-I", "-m", "pip", "install", "-q", "--upgrade", "textual"],
+        )
+        self.assertEqual(calls[1][1]["cwd"], d)
+        self.assertNotIn("PYTHONPATH", calls[1][1]["env"])
 
 
 class TestInitCli(unittest.TestCase):
