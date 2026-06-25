@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import asdict
@@ -64,6 +65,53 @@ def _tui_importable() -> bool:
 
 def _drop_project_import_paths(*projects) -> None:
     sys.path[:] = _without_project_import_paths(sys.path, os.getcwd(), *projects)
+
+
+_PYTHON_SAFE_PATH_SUPPORT = {}
+
+
+def _python_supports_safe_path(py: str) -> bool:
+    """Whether ``py`` accepts ``-P`` / ``PYTHONSAFEPATH`` (Python 3.11+)."""
+    try:
+        key = os.path.realpath(py)
+    except OSError:
+        key = py
+    if key in _PYTHON_SAFE_PATH_SUPPORT:
+        return _PYTHON_SAFE_PATH_SUPPORT[key]
+    try:
+        if os.path.samefile(py, sys.executable):
+            ok = sys.version_info >= (3, 11)
+        else:
+            p = subprocess.run(
+                [py, "-S", "-c",
+                 "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, **_safe_child_python_kwargs())
+            ok = p.returncode == 0
+    except Exception:
+        ok = False
+    _PYTHON_SAFE_PATH_SUPPORT[key] = ok
+    return ok
+
+
+def _python_argv(py: str, *args: str) -> list:
+    safe_path = ["-P"] if _python_supports_safe_path(py) else []
+    return [py, *safe_path, *args]
+
+
+_SOURCE_CHECKOUT_BOOTSTRAP = (
+    "import sys;"
+    "_r=sys.argv.pop(1);"
+    "sys.path[:]=[_r]+[p for p in sys.path if p and p!=_r];"
+    "from cccopilot.cli import main;"
+    "raise SystemExit(main())"
+)
+
+
+def _source_checkout_python_argv(py: str, *args: str) -> list:
+    if _python_supports_safe_path(py):
+        return _python_argv(py, "-m", "cccopilot", *args)
+    return [py, "-c", _SOURCE_CHECKOUT_BOOTSTRAP, _repo_root(), *args]
 
 
 def _safe_child_python_kwargs() -> dict:
@@ -125,7 +173,7 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
     vpy = os.path.join(vdir, "bin", "python")
 
     def has_textual(py):
-        return subprocess.run([py, "-P", "-c", "import textual"],
+        return subprocess.run(_python_argv(py, "-c", "import textual"),
                               capture_output=True,
                               **_safe_child_python_kwargs()).returncode == 0
 
@@ -152,7 +200,7 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
             return None
     if not quiet:
         sys.stderr.write("# cc-copilot: installing the cockpit (textual), one-time …\n")
-    r = subprocess.run([vpy, "-P", "-m", "pip", "install", "-q", "--upgrade", "textual"],
+    r = subprocess.run(_python_argv(vpy, "-m", "pip", "install", "-q", "--upgrade", "textual"),
                        **_safe_child_python_kwargs())
     if r.returncode != 0 or not has_textual(vpy):
         if not quiet:
@@ -298,13 +346,14 @@ def _maybe_first_run_nudge() -> None:
 
 
 def cmd_setup(args) -> int:
-    import subprocess
     vpy = _ensure_tui_runtime()
     if not vpy:
         return 1
-    subprocess.run([vpy, "-P", "-c",
-                    "import textual; print('cockpit ready · textual', textual.__version__)"],
-                   **_safe_child_python_kwargs())
+    subprocess.run(
+        _python_argv(
+            vpy, "-c",
+            "import textual; print('cockpit ready · textual', textual.__version__)"),
+        **_safe_child_python_kwargs())
     print("run:  cc-copilot cockpit")
     return 0
 
@@ -601,7 +650,7 @@ def cmd_chat(args) -> int:
             sys.stderr.write("could not set up the cockpit. Try: cc-copilot setup\n")
             return 3
         if os.path.abspath(vpy) != os.path.abspath(sys.executable):
-            os.execve(vpy, [vpy, "-P", "-m", "cccopilot", *sys.argv[1:]],
+            os.execve(vpy, _source_checkout_python_argv(vpy, *sys.argv[1:]),
                       _source_checkout_env())
             # execve replaces this process; nothing below runs
 
@@ -642,7 +691,7 @@ def _cockpit_argv(cwd: str) -> list:
     older version happens to be installed."""
     import shutil
     exe = None if _is_source_checkout() else shutil.which("cc-copilot")
-    base = [exe] if exe else [sys.executable, "-P", "-m", "cccopilot"]
+    base = [exe] if exe else _source_checkout_python_argv(sys.executable)
     return base + ["cockpit", "--next", "--cwd", cwd]
 
 

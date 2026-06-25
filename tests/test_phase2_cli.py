@@ -315,6 +315,29 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
         self.assertNotIn("", seen_paths)
         self.assertNotIn(d, seen_paths)
 
+    def test_python_argv_gates_safe_path_flag_by_target_interpreter(self):
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True):
+            self.assertEqual(
+                cli._python_argv("/py", "-m", "cccopilot"),
+                ["/py", "-P", "-m", "cccopilot"],
+            )
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False):
+            self.assertEqual(
+                cli._python_argv("/py", "-m", "cccopilot"),
+                ["/py", "-m", "cccopilot"],
+            )
+
+    def test_source_checkout_python_argv_shims_older_python(self):
+        with mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False), \
+             mock.patch("cccopilot.cli._repo_root", return_value="/repo"):
+            argv = cli._source_checkout_python_argv("/py", "cockpit", "--next")
+
+        self.assertEqual(argv[0:2], ["/py", "-c"])
+        self.assertIn("sys.path[:]=[_r]", argv[2])
+        self.assertEqual(argv[3:], ["/repo", "cockpit", "--next"])
+        self.assertNotIn("-P", argv)
+        self.assertNotIn("-m", argv)
+
     def test_tui_bootstrap_child_python_is_isolated_from_project_cwd(self):
         d = tempfile.mkdtemp(prefix="ccsource-")
         os.mkdir(os.path.join(d, ".git"))
@@ -331,7 +354,8 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
             calls.append((cmd, kwargs))
             return mock.Mock(returncode=0)
 
-        with mock.patch("subprocess.run", side_effect=fake_run):
+        with mock.patch("subprocess.run", side_effect=fake_run), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True):
             try:
                 self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
             finally:
@@ -357,6 +381,7 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
             return mock.Mock(returncode=1 if len(calls) == 1 else 0)
 
         with mock.patch("os.path.isfile", return_value=True), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=True), \
              mock.patch("subprocess.run", side_effect=fake_run):
             try:
                 self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
@@ -370,6 +395,31 @@ class TestTuiRuntimeBootstrapGate(unittest.TestCase):
         self.assertNotIn("-I", calls[1][0])
         self.assertEqual(calls[1][1]["cwd"], d)
         self.assertNotIn("PYTHONPATH", calls[1][1]["env"])
+
+    def test_tui_bootstrap_omits_safe_path_flag_for_older_python(self):
+        d = tempfile.mkdtemp(prefix="ccsource-")
+        os.mkdir(os.path.join(d, ".git"))
+        vpy = os.path.join(d, ".venv", "bin", "python")
+        orig_root, orig_imp = cli._repo_root, cli._tui_importable
+        cli._repo_root = lambda: d
+        cli._tui_importable = lambda: False
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return mock.Mock(returncode=0)
+
+        with mock.patch("os.path.isfile", return_value=True), \
+             mock.patch("cccopilot.cli._python_supports_safe_path", return_value=False), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            try:
+                self.assertEqual(cli._ensure_tui_runtime(quiet=True), vpy)
+            finally:
+                cli._repo_root, cli._tui_importable = orig_root, orig_imp
+
+        self.assertEqual(calls[0][0], [vpy, "-c", "import textual"])
+        self.assertNotIn("-P", calls[0][0])
+        self.assertEqual(calls[0][1]["env"]["PYTHONSAFEPATH"], "1")
 
     def test_installed_without_textual_points_to_extra_not_bootstrap(self):
         d = tempfile.mkdtemp(prefix="ccinstall-")   # bare dir = like site-packages
