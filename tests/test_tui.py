@@ -7,6 +7,7 @@ installed (see .github/workflows/ci.yml).
 
 import os
 import json
+import tempfile
 import types
 import unittest
 
@@ -555,7 +556,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             app = tui.Cockpit(sess, poll=999, alerts=False)
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app._meta("/since 30m")                       # starts the recap worker
+                app._meta("/since 30m --recap")               # starts the recap worker
                 await app.workers.wait_for_complete()         # let the thread finish
                 await pilot.pause()                           # process call_from_thread
                 blob = "\n".join(str(getattr(s, "content", "") or "")
@@ -771,7 +772,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             N.recap_since = recap_then_switch
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app._meta("/since")                          # last-look path
+                app._meta("/since --recap")                  # last-look path
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 blob = "\n".join(str(getattr(s, "content", "") or "")
@@ -1404,7 +1405,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 osc, ran = [], []
                 app.copy_to_clipboard = lambda t: osc.append(t)
                 real_which, real_run = _shutil.which, tui.subprocess.run
-                _shutil.which = lambda name: "/bin/pbcopy" if name == "pbcopy" else None
+                _shutil.which = lambda name, path=None: "/bin/pbcopy" if name == "pbcopy" else None
                 tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
                 try:
                     app._put_on_clipboard("grab me")
@@ -1414,7 +1415,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             if old_tmux is not None:
                 os.environ["TMUX"] = old_tmux
         self.assertEqual(osc, ["grab me"])             # OSC 52 attempted (remote/tmux)
-        self.assertEqual(ran[0][0], ["pbcopy"])        # local command attempted…
+        self.assertEqual(ran[0][0], ["/bin/pbcopy"])   # local command attempted…
         self.assertEqual(ran[0][1], b"grab me")        # …with the text piped to stdin
 
     async def test_put_on_clipboard_uses_tmux_clipboard_paths_inside_tmux(self):
@@ -1430,7 +1431,7 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 app.copy_to_clipboard = lambda t: osc.append(t)
                 app._write_terminal_sequence = lambda seq: writes.append(seq)
                 real_which, real_run = _shutil.which, tui.subprocess.run
-                _shutil.which = lambda name: "/bin/tmux" if name == "tmux" else None
+                _shutil.which = lambda name, path=None: "/bin/tmux" if name == "tmux" else None
                 tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
                 try:
                     app._put_on_clipboard("remote tmux")
@@ -1442,11 +1443,43 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["TMUX"] = old_tmux
         self.assertEqual(osc, ["remote tmux"])          # plain OSC 52 still attempted
-        self.assertEqual(ran[0][0], ["tmux", "load-buffer", "-w", "-"])
+        self.assertEqual(ran[0][0], ["/bin/tmux", "load-buffer", "-w", "-"])
         self.assertEqual(ran[0][1], b"remote tmux")
         self.assertEqual(len(writes), 1)
         self.assertTrue(writes[0].startswith("\x1bPtmux;\x1b\x1b]52;c;"))
         self.assertTrue(writes[0].endswith("\x1b\\"))
+
+    async def test_put_on_clipboard_rejects_project_shadowed_helper(self):
+        import shutil as _shutil
+        old_tmux = os.environ.pop("TMUX", None)
+        old_path = os.environ.get("PATH", "")
+        cwd = os.getcwd()
+        shadow_dir = tempfile.mkdtemp(prefix="ccclip-shadow-")
+        helper = os.path.join(shadow_dir, "pbcopy")
+        with open(helper, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nexit 99\n")
+        os.chmod(helper, 0o755)
+        sess = self._session("sess-A")
+        app = tui.Cockpit(sess, poll=999, alerts=False)
+        try:
+            os.chdir(shadow_dir)
+            os.environ["PATH"] = shadow_dir
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                ran = []
+                app.copy_to_clipboard = lambda _t: None
+                real_which, real_run = _shutil.which, tui.subprocess.run
+                tui.subprocess.run = lambda argv, **k: ran.append((argv, k.get("input")))
+                try:
+                    app._put_on_clipboard("do not run project helper")
+                finally:
+                    _shutil.which, tui.subprocess.run = real_which, real_run
+        finally:
+            os.chdir(cwd)
+            os.environ["PATH"] = old_path
+            if old_tmux is not None:
+                os.environ["TMUX"] = old_tmux
+        self.assertEqual(ran, [])
 
     async def test_status_bar_history_only_stacks_when_narrow(self):
         from cccopilot import context as EC  # noqa

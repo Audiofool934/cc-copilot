@@ -53,7 +53,7 @@ except ImportError:
         "the cockpit TUI needs Textual. Run:  cc-copilot setup\n"
         "(or: pip install 'cc-copilot[tui]')")
 
-from . import (sources as SRC, state as S, assess as A, narrate as N,
+from . import (sources as SRC, state as S, assess as A, git_safe as GIT, narrate as N,
                backends as BK, store as ST, scope as SC, locate as LOC,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
                models as MODELS, scope_groups as SG, brief as BR)
@@ -324,7 +324,7 @@ _HELP_TEXT = (
     "  /now [steer]            recommend the next step (e.g. /now in spanish; LLM)\n"
     "  /goal [steer]           draft a paste-ready agent /goal from context\n"
     "  /loop [steer]           draft a paste-ready agent /loop from context\n"
-    "  /since [30m|1d] [--raw] [steer]  recap since you last looked (--raw = cited delta)\n"
+    "  /since [30m|1d] [--recap] [steer]  cited delta since last look\n"
     "  /handoff [file]         shareable Markdown handoff\n"
     "  /diff                   changes since last turn\n"
     "  /status                 fleet board — every session, neediest first\n"
@@ -357,7 +357,7 @@ _SLASH_CMDS = [
     ("/now", "recommend the next step — add a steer like 'in spanish' (LLM; deterministic fallback)", False),
     ("/goal", "draft a paste-ready agent /goal from agent + project context", False),
     ("/loop", "draft a paste-ready agent /loop from agent + project context", True),
-    ("/since", "recap since you last looked (30m / 2h / 1d; --raw = cited delta; trailing text steers it)", True),
+    ("/since", "cited delta since you last looked (30m / 2h / 1d; --recap = LLM; trailing text steers it)", True),
     ("/handoff", "shareable Markdown handoff (brief + what changed)", True),
     ("/brief", "evidence-cited recap (LLM-free)", False),
     ("/check", "safety / off-track verdict (LLM-free)", False),
@@ -398,6 +398,32 @@ def _osc52_sequence(text: str) -> str:
 def _tmux_passthrough(seq: str) -> str:
     # tmux DCS passthrough: ESC P tmux; <inner escapes doubled> ESC \
     return "\x1bPtmux;" + str(seq or "").replace("\x1b", "\x1b\x1b") + "\x1b\\"
+
+
+def _path_under(parent: str, path: str) -> bool:
+    try:
+        parent = os.path.realpath(parent)
+        path = os.path.realpath(path)
+        return os.path.commonpath([parent, path]) == parent
+    except (OSError, ValueError):
+        return False
+
+
+def _trusted_path_command(name: str, cwd: str = None) -> str:
+    import shutil
+    cwd = os.path.realpath(cwd or os.getcwd())
+    safe_entries = []
+    for entry in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        if not entry:
+            continue
+        real = os.path.realpath(entry)
+        if real == cwd or _path_under(cwd, real):
+            continue
+        safe_entries.append(entry)
+    found = shutil.which(name, path=os.pathsep.join(safe_entries))
+    if not found or _path_under(cwd, found):
+        return ""
+    return found
 _ARG_CMDS = {c for c, _, takes in _SLASH_CMDS if takes}
 
 # Rotating feature tips shown subtly in the composer chrome (see _rotate_tip).
@@ -641,8 +667,9 @@ def _git(root: str, *args: str) -> str:
     if not root or not os.path.isdir(root):
         return ""
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=1)
+        p = subprocess.run(GIT.argv(root, *args), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=1,
+                           env=GIT.env())
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -3794,19 +3821,18 @@ class Cockpit(App):
         self._update_status()
         self._drain_msg_queue()         # send the next queued message, if any
 
-    # ---- /since: deterministic delta, narrated into a grounded recap ----
+    # ---- /since: deterministic delta; --recap opts into a grounded backend recap ----
     def _since_cmd(self, arg: str):
-        """Recap by default (grounded in the cited delta), with the deterministic
-        evidence beneath it; instant deterministic view for `--raw`, no backend,
-        nothing-new, or while busy. The model call runs off the UI thread."""
+        """Show deterministic evidence by default. ``--recap`` opts into sending
+        the cited delta to a backend for a narrated recap."""
         title = (f"/since {arg}").strip()
-        window_arg, instruction = self.session._split_since_arg(arg)
+        window_arg, instruction, recap = self.session._split_since_arg(arg)
         res = self.session._since_view(window_arg)
         if isinstance(res, str):                 # edge-case message (no mark, etc.)
             self._result(res, markdown=False, title=title)
             return
         view, raw, commit = res
-        if raw or view.nothing_new or not N.available(self.backend) or self._busy:
+        if raw or not recap or view.nothing_new or not N.available(self.backend) or self._busy:
             self._result(view.text)              # deterministic markdown, instant
             commit()                             # shown → advance the marker
             return
@@ -6020,11 +6046,11 @@ class Cockpit(App):
             self.copy_to_clipboard(text)                 # OSC 52 — remote / SSH / tmux
         except Exception:
             pass
-        import shutil
         if os.environ.get("TMUX"):
-            if shutil.which("tmux"):
+            tmux = _trusted_path_command("tmux")
+            if tmux:
                 try:
-                    subprocess.run(["tmux", "load-buffer", "-w", "-"],
+                    subprocess.run([tmux, "load-buffer", "-w", "-"],
                                    input=text.encode("utf-8"), timeout=2,
                                    stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
@@ -6038,9 +6064,10 @@ class Cockpit(App):
         for argv in (["pbcopy"], ["wl-copy"],
                      ["xclip", "-selection", "clipboard"],
                      ["xsel", "--clipboard", "--input"], ["clip"]):
-            if shutil.which(argv[0]):
+            exe = _trusted_path_command(argv[0])
+            if exe:
                 try:
-                    subprocess.run(argv, input=text.encode("utf-8"), timeout=2,
+                    subprocess.run([exe, *argv[1:]], input=text.encode("utf-8"), timeout=2,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass

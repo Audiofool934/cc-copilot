@@ -116,6 +116,28 @@ class TestScopeEvidence(_NoAmbientSession):
             self.assertNotIn(rel, brief)
             self.assertNotIn(text.strip(), brief)
 
+    def test_project_brief_does_not_follow_symlinked_files_outside_root(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks unavailable")
+        cwd, a, _b = self._project_sessions()
+        outside = tempfile.mkdtemp(prefix="ccscope-outside-")
+        with open(os.path.join(cwd, "README.md"), "w", encoding="utf-8") as f:
+            f.write("# Safe Project\n")
+        secret = os.path.join(outside, "private.txt")
+        with open(secret, "w", encoding="utf-8") as f:
+            f.write("DO_NOT_EXFILTRATE_THIS_VALUE\n")
+        try:
+            os.symlink(secret, os.path.join(cwd, "linked-notes.txt"))
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"symlinks unavailable: {e}")
+        st = S.build(T.parse(a))
+
+        brief = SC.render_evidence(a, st, "project").text
+
+        self.assertIn("Safe Project", brief)
+        self.assertNotIn("DO_NOT_EXFILTRATE_THIS_VALUE", brief)
+        self.assertNotIn("linked-notes.txt:L1", brief)
+
     def test_missing_session_selector_raises(self):
         _cwd, a, _b = self._project_sessions()
         st = S.build(T.parse(a))
@@ -166,6 +188,25 @@ class TestSkipFile(unittest.TestCase):
     def test_secret_dir_anywhere_in_path_is_skipped(self):
         self.assertTrue(SC._skip_file("config", os.path.join(".ssh", "config")))
         self.assertTrue(SC._skip_file("note.txt", os.path.join("a", ".aws", "note.txt")))
+
+    def test_filter_text_files_rejects_symlink_outside_root(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks unavailable")
+        root = tempfile.mkdtemp(prefix="ccscope-filter-root-")
+        outside = tempfile.mkdtemp(prefix="ccscope-filter-outside-")
+        with open(os.path.join(root, "safe.txt"), "w", encoding="utf-8") as f:
+            f.write("safe\n")
+        secret = os.path.join(outside, "secret.txt")
+        with open(secret, "w", encoding="utf-8") as f:
+            f.write("secret\n")
+        try:
+            os.symlink(secret, os.path.join(root, "link.txt"))
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"symlinks unavailable: {e}")
+
+        files = SC._filter_text_files(["link.txt", "safe.txt"], root, 10)
+
+        self.assertEqual(files, [("safe.txt", os.path.join(root, "safe.txt"))])
 
 
 class TestChatScope(unittest.TestCase):

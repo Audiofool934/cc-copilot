@@ -34,9 +34,51 @@ def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _without_project_import_paths(paths, *projects) -> list:
+    blocked = set()
+    for p in projects:
+        if not p:
+            continue
+        try:
+            blocked.add(os.path.realpath(p))
+        except OSError:
+            pass
+    out = []
+    for p in paths:
+        if not p:
+            continue
+        try:
+            if os.path.realpath(p) in blocked:
+                continue
+        except OSError:
+            continue
+        out.append(p)
+    return out
+
+
 def _tui_importable() -> bool:
-    import importlib.util
-    return importlib.util.find_spec("textual") is not None
+    import importlib.machinery
+    safe_path = _without_project_import_paths(sys.path, os.getcwd())
+    return importlib.machinery.PathFinder.find_spec("textual", safe_path) is not None
+
+
+def _drop_project_import_paths(*projects) -> None:
+    sys.path[:] = _without_project_import_paths(sys.path, os.getcwd(), *projects)
+
+
+def _safe_child_python_kwargs() -> dict:
+    env = os.environ.copy()
+    for key in ("PYTHONPATH", "PYTHONHOME"):
+        env.pop(key, None)
+    env["PYTHONSAFEPATH"] = "1"
+    return {"cwd": _repo_root(), "env": env}
+
+
+def _source_checkout_env() -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _repo_root()
+    env["PYTHONSAFEPATH"] = "1"
+    return env
 
 
 def _is_source_checkout() -> bool:
@@ -83,8 +125,9 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
     vpy = os.path.join(vdir, "bin", "python")
 
     def has_textual(py):
-        return subprocess.run([py, "-c", "import textual"],
-                              capture_output=True).returncode == 0
+        return subprocess.run([py, "-P", "-c", "import textual"],
+                              capture_output=True,
+                              **_safe_child_python_kwargs()).returncode == 0
 
     if _tui_importable():
         return sys.executable
@@ -109,7 +152,8 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
             return None
     if not quiet:
         sys.stderr.write("# cc-copilot: installing the cockpit (textual), one-time …\n")
-    r = subprocess.run([vpy, "-m", "pip", "install", "-q", "--upgrade", "textual"])
+    r = subprocess.run([vpy, "-P", "-m", "pip", "install", "-q", "--upgrade", "textual"],
+                       **_safe_child_python_kwargs())
     if r.returncode != 0 or not has_textual(vpy):
         if not quiet:
             sys.stderr.write(_setup_troubleshooting())
@@ -258,8 +302,9 @@ def cmd_setup(args) -> int:
     vpy = _ensure_tui_runtime()
     if not vpy:
         return 1
-    subprocess.run([vpy, "-c",
-                    "import textual; print('cockpit ready · textual', textual.__version__)"])
+    subprocess.run([vpy, "-P", "-c",
+                    "import textual; print('cockpit ready · textual', textual.__version__)"],
+                   **_safe_child_python_kwargs())
     print("run:  cc-copilot cockpit")
     return 0
 
@@ -556,8 +601,8 @@ def cmd_chat(args) -> int:
             sys.stderr.write("could not set up the cockpit. Try: cc-copilot setup\n")
             return 3
         if os.path.abspath(vpy) != os.path.abspath(sys.executable):
-            os.execve(vpy, [vpy, "-m", "cccopilot", *sys.argv[1:]],
-                      {**os.environ, "PYTHONPATH": _repo_root(), "PYTHONSAFEPATH": "1"})
+            os.execve(vpy, [vpy, "-P", "-m", "cccopilot", *sys.argv[1:]],
+                      _source_checkout_env())
             # execve replaces this process; nothing below runs
 
     if getattr(args, "next", False) and not getattr(args, "session", None):
@@ -582,6 +627,7 @@ def cmd_chat(args) -> int:
         sys.stderr.write(f"cc-copilot: {e}\n")
         return 2
     if getattr(args, "tui", False):
+        _drop_project_import_paths(args.cwd or os.getcwd())
         from . import tui
         tui.run(session, poll=getattr(args, "poll", 2),
                 alerts=not getattr(args, "no_alerts", False))
@@ -596,7 +642,7 @@ def _cockpit_argv(cwd: str) -> list:
     older version happens to be installed."""
     import shutil
     exe = None if _is_source_checkout() else shutil.which("cc-copilot")
-    base = [exe] if exe else [sys.executable, "-m", "cccopilot"]
+    base = [exe] if exe else [sys.executable, "-P", "-m", "cccopilot"]
     return base + ["cockpit", "--next", "--cwd", cwd]
 
 
@@ -610,7 +656,7 @@ def _cockpit_sh(cwd: str) -> str:
     import shlex
     argv = _cockpit_argv(cwd)
     sh = " ".join(shlex.quote(a) for a in argv)
-    if argv[1] == "-m":   # no installed entry point: running from the repo
+    if "-m" in argv[:3]:   # no installed entry point: running from the repo
         # `env`, not bare VAR=… — tmux hands this string to the user's
         # default-shell, and fish/tcsh reject POSIX assignment prefixes.
         sh = f"env PYTHONPATH={shlex.quote(_repo_root())} PYTHONSAFEPATH=1 {sh}"
@@ -618,6 +664,10 @@ def _cockpit_sh(cwd: str) -> str:
 
 
 _COCKPIT_WIDTH = "33%"   # agent : cockpit = 2 : 1 — the agent is the main act
+
+
+def _tmux_literal(value: str) -> str:
+    return str(value).replace("#", "##")
 
 
 def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
@@ -628,15 +678,16 @@ def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
     strings run by the user's shell, hence the quoting.
     """
     import shlex
+    tmux_cwd = _tmux_literal(cwd)
     if inside_tmux:
         # Split the current window; the user's pane (focus stays, -d) becomes
         # the agent via exec, so launch leaves no wrapper process behind. We
         # are a guest in the user's server here — don't touch their options.
         return ([["tmux", "split-window", "-h", "-d", "-l", _COCKPIT_WIDTH,
-                  "-c", cwd, cockpit_sh]],
+                  "-c", tmux_cwd, cockpit_sh]],
                 agent_argv)
     agent_sh = " ".join(shlex.quote(a) for a in agent_argv)
-    return ([["tmux", "new-session", "-d", "-s", session_name, "-c", cwd, agent_sh],
+    return ([["tmux", "new-session", "-d", "-s", session_name, "-c", tmux_cwd, agent_sh],
              # Our own session: stock tmux ships `mouse off`, where clicking a
              # pane does nothing — a user who doesn't live in tmux literally
              # cannot reach the cockpit pane. Click-to-focus and wheel scroll
@@ -645,7 +696,7 @@ def _launch_plan(agent_argv: list, cwd: str, cockpit_sh: str,
              # the session we just created guarantees an exact match anyway.
              ["tmux", "set-option", "-t", session_name, "mouse", "on"],
              ["tmux", "split-window", "-h", "-d", "-l", _COCKPIT_WIDTH,
-              "-t", session_name, "-c", cwd, cockpit_sh]],
+              "-t", session_name, "-c", tmux_cwd, cockpit_sh]],
             ["tmux", "attach-session", "-t", session_name])
 
 
@@ -704,8 +755,8 @@ def cmd_launch(args) -> int:
         argv = _cockpit_argv(cwd)
         argv.remove("--next")   # no agent was launched; don't wait for one
         env = os.environ
-        if argv[1] == "-m":     # source checkout: the child needs the repo on path
-            env = {**os.environ, "PYTHONPATH": _repo_root(), "PYTHONSAFEPATH": "1"}
+        if "-m" in argv[:3]:     # source checkout: the child needs the repo on path
+            env = _source_checkout_env()
         os.execvpe(argv[0], argv, env)
 
     inside = bool(os.environ.get("TMUX"))
@@ -826,7 +877,7 @@ def _now_iso() -> str:
 
 def cmd_since(args) -> int:
     from . import lastlook as LL, since as SI, narrate as N
-    if not getattr(args, "raw", False):
+    if getattr(args, "recap", False) and not getattr(args, "raw", False):
         _maybe_first_run_nudge()
     path = _resolve_or_die(args)
     if getattr(args, "path", False):
@@ -861,11 +912,12 @@ def cmd_since(args) -> int:
             return 2
         view = SI.build(tr, st, seconds=secs, label=when)
 
-    # Recap by default (LLM narration grounded in the cited delta) with the
-    # evidence kept beneath it; `--raw`, no backend, or an empty delta print the
-    # deterministic view alone.
+    # Deterministic by default. `--recap` explicitly opts into sending the cited
+    # delta to the selected backend for narration, with the evidence kept beneath
+    # it.
     be = getattr(args, "backend", None)
-    if getattr(args, "raw", False) or view.nothing_new or not N.available(be):
+    if (getattr(args, "raw", False) or not getattr(args, "recap", False)
+            or view.nothing_new or not N.available(be)):
         print(view.text)
     else:
         sys.stderr.write(f"# recapping via {N.backend_name(be)} …\n")
@@ -1239,6 +1291,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="don't advance the last-look marker after showing")
     sp.add_argument("--raw", action="store_true",
                     help="deterministic cited delta only — no LLM recap")
+    sp.add_argument("--recap", action="store_true",
+                    help="explicitly send the cited delta to the backend for an LLM recap")
     sp.add_argument("--model", help="model for the recap (passed to the backend)")
     sp.add_argument("--backend",
                     help="LLM backend for the recap (claude/codex/deepseek/ollama/…; see `backends`)")

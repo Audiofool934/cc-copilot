@@ -115,8 +115,14 @@ class TestCockpitSh(unittest.TestCase):
         # `env` prefix: tmux runs this via the default-shell, which may be
         # fish/tcsh — bare VAR=… prefixes are POSIX-only syntax there.
         self.assertTrue(sh.startswith("env PYTHONPATH="))
-        self.assertIn("-m cccopilot cockpit --next", sh)
+        self.assertIn("-P -m cccopilot cockpit --next", sh)
         self.assertNotIn("/abs/bin/cc-copilot", sh)
+
+    def test_tmux_start_directory_escapes_format_expansion(self):
+        setup, _ = cli._launch_plan(["codex"], "/tmp/#(touch pwned)", "COCKPIT",
+                                    False, "cc-copilot-2")
+        self.assertIn("/tmp/##(touch pwned)", setup[0])
+        self.assertIn("/tmp/##(touch pwned)", setup[2])
 
 
 class TestCmdLaunch(unittest.TestCase):

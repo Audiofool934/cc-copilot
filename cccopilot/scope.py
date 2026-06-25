@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from . import assess as A, brief as B, locate as LOC, state as S, sources as SRC
+from . import assess as A, brief as B, git_safe as GIT, locate as LOC, state as S, sources as SRC
 from .brief import _dur, _oneline
 
 
@@ -499,8 +499,9 @@ def _git_facts(root: str) -> list:
 
 def _git(root: str, *args: str) -> str:
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=2)
+        p = subprocess.run(GIT.argv(root, *args), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2,
+                           env=GIT.env())
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -550,9 +551,10 @@ def _git_ls(root: str, limit: int, time_budget: float, *flags: str):
     """
     try:
         p = subprocess.Popen(
-            ["git", "-C", root, "ls-files", *flags, "-z"],
+            GIT.argv(root, "ls-files", *flags, "-z"),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+            env=GIT.env())
     except OSError:
         return None
     # A watchdog kills git at the deadline even if a read() is blocked WAITING for
@@ -625,6 +627,8 @@ def _filter_text_files(names, root: str, max_files: int, seen=None,
         if _skip_file(os.path.basename(rel), rel):   # still drop secrets/blobs
             continue
         p = os.path.join(root, rel)
+        if not _path_inside_root(root, p):
+            continue
         # `git ls-files --cached` still lists tracked files deleted from the work
         # tree; _looks_text short-circuits True on a text extension without
         # stat'ing, so skip phantoms before they eat the evidence budget.
@@ -674,6 +678,15 @@ def _text_files(root: str, max_files: int, max_entries: int = _WALK_MAX_ENTRIES,
     return _walk_text_files(root, max_files, max_entries, deadline)
 
 
+def _path_inside_root(root: str, path: str) -> bool:
+    try:
+        root_real = os.path.realpath(root)
+        path_real = os.path.realpath(path)
+        return os.path.commonpath([root_real, path_real]) == root_real
+    except (OSError, ValueError):
+        return False
+
+
 def _walk_text_files(root: str, max_files: int, max_entries: int,
                      deadline=None) -> list:
     out = []
@@ -721,6 +734,8 @@ def _collect_dir_text(dir_files, root: str, out: list, max_files: int,
             return True
         rel = os.path.relpath(path, root)
         if _skip_file(name, rel):
+            continue
+        if not _path_inside_root(root, path):
             continue
         if _looks_text(path):
             out.append((rel, path))

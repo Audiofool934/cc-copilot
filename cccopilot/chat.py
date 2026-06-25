@@ -43,13 +43,13 @@ def _same_file(a: str, b: str) -> bool:
     except OSError:
         return os.path.abspath(a) == os.path.abspath(b)
 
-_HELP = """commands (LLM-free except questions and the /since recap — /since --raw stays deterministic):
+_HELP = """commands (LLM-free except questions and explicit /since --recap):
   /brief            full evidence-cited recap
   /observe          attention queue + next human decision
   /now [steer]      recommend the next step (LLM; e.g. /now in spanish; deterministic fallback)
   /goal [steer]     draft a paste-ready agent /goal from agent + project context
   /loop [steer]     draft a paste-ready agent /loop from agent + project context
-  /since [when] [steer]  recap since you last looked (30m / 2h / 1d; --raw = cited delta)
+  /since [when] [steer]  cited delta since you last looked (30m / 2h / 1d; --recap = LLM)
   /handoff [file]   shareable Markdown handoff (brief + what changed)
   /check            safety verdict + friction signals
   /diff             what changed since your last turn
@@ -904,29 +904,31 @@ class ChatSession:
     def _split_since_arg(arg: str):
         """Separate an optional leading window token (a duration like ``30m`` /
         ``2h`` / ``1d`` or a ``last-look`` keyword) from a trailing free-text
-        instruction, e.g. ``2h in spanish`` → ``("2h", "in spanish")`` and
-        ``in spanish`` → ``("", "in spanish")`` (window defaults to last-look).
-        ``--raw`` stays with the window part so :meth:`_since_view` still sees
-        it. Lets ``/since`` act on a prompt, not just a window."""
+        instruction, e.g. ``2h in spanish`` → ``("2h", "in spanish", False)`` and
+        ``in spanish`` → ``("", "in spanish", False)`` (window defaults to
+        last-look). ``--raw`` stays with the window part so :meth:`_since_view`
+        still sees it; ``--recap`` is consumed here because it controls whether a
+        backend is allowed to see the cited delta."""
         toks = [t for t in (arg or "").split() if t]
         raw = [t for t in toks if t == "--raw"]
-        rest = [t for t in toks if t != "--raw"]
+        recap = "--recap" in toks
+        rest = [t for t in toks if t not in ("--raw", "--recap")]
         window = []
         if rest and (rest[0].lower() in ("last-look", "lastlook", "last")
                      or SI.parse_duration(rest[0]) is not None):
             window = [rest.pop(0)]
-        return " ".join(raw + window).strip(), " ".join(rest).strip()
+        return " ".join(raw + window).strip(), " ".join(rest).strip(), recap
 
     def _since(self, arg: str):
         """Sync entry (REPL / CLI): the recap-or-raw result as one string. The TUI
         uses :meth:`_since_view` + :meth:`_compose_since` so the model call can run
         off the UI thread."""
-        window_arg, instruction = self._split_since_arg(arg)
+        window_arg, instruction, recap = self._split_since_arg(arg)
         res = self._since_view(window_arg)
         if isinstance(res, str):
             return res
         view, raw, commit = res
-        out = self._since_finish(view, raw, instruction)
+        out = self._since_finish(view, raw, instruction, recap=recap)
         commit()                                   # shown now → advance the marker
         return out
 
@@ -967,12 +969,11 @@ class ChatSession:
             view = SI.build(self.st.tr, self.st, seconds=secs, label=when)
         return (view, raw, commit)
 
-    def _since_finish(self, view, raw: bool, instruction: str = "") -> str:
-        """Recap-by-default: an LLM recap grounded in the delta with the cited
-        evidence kept beneath it. The deterministic delta is returned verbatim
-        when ``--raw``, when no backend is available, or when nothing changed
-        (no point spending a model call to recap an empty delta)."""
-        if raw or view.nothing_new or not N.available(self.backend):
+    def _since_finish(self, view, raw: bool, instruction: str = "",
+                      recap: bool = False) -> str:
+        """Return the deterministic delta unless ``--recap`` explicitly allows a
+        backend recap."""
+        if raw or not recap or view.nothing_new or not N.available(self.backend):
             return view.text
         try:
             recap = N.recap_since(view.text, model=self.model, backend=self.backend,

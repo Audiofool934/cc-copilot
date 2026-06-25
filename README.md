@@ -74,7 +74,7 @@ Inside the cockpit:
 /now        recommend the next step from the completed work (LLM; deterministic fallback)
 /goal       draft a paste-ready agent /goal from agent + project context
 /loop       draft a paste-ready agent /loop from agent + project context
-/since      recap since you last looked (or 30m / 2h / 1d; --raw = cited delta)
+/since      cited delta since you last looked (or 30m / 2h / 1d; --recap = LLM)
 /handoff    shareable Markdown handoff (brief + what changed)
 /brief      deterministic recap with citations
 /check      safety / off-track verdict
@@ -188,9 +188,9 @@ cc-copilot now                     # grounded LLM recommendation of the next ste
 cc-copilot now --raw               # deterministic next-step, no model call
 cc-copilot brief                   # deterministic recap with citations
 cc-copilot check                   # safety / off-track verdict
-cc-copilot since                   # grounded LLM recap since you last looked
+cc-copilot since                   # deterministic cited delta since you last looked
 cc-copilot since 30m               # …or within a time window (30m / 2h / 1d)
-cc-copilot since --raw             # the deterministic cited delta, no model call
+cc-copilot since --recap           # explicit grounded LLM recap of that delta
 cc-copilot handoff --out h.md      # shareable Markdown handoff (brief + what changed)
 cc-copilot watch --notify          # desktop alert when the agent needs you
 cc-copilot goal --raw              # paste-ready agent /goal from current evidence
@@ -284,11 +284,11 @@ first line and can be clicked to jump back to it.
 The hardest part of supervising long-running agents is *re-entry*: you stepped
 away, the agent kept working, and now you have to reconstruct what happened.
 
-- **`since`** answers "what changed since I last looked" — by default a short
-  **LLM recap narrated from** the deterministic, cited diff of new asks, agent
-  messages, commands, failures, changed files, and any status/safety transition
-  (the model sees only that cited delta and keeps its `[L…]` citations; `--raw`
-  or no backend gives the deterministic delta itself). cc-copilot remembers where
+- **`since`** answers "what changed since I last looked" with the deterministic,
+  cited diff of new asks, agent messages, commands, failures, changed files, and
+  any status/safety transition. Add `--recap` when you explicitly want an LLM
+  backend to narrate that cited delta and keep its `[L…]` citations. cc-copilot
+  remembers where
   you last looked (a
   small marker under `$CC_COPILOT_STATE_DIR`, never under `~/.claude`/`~/.codex`);
   the cockpit stamps it when you leave and greets you with "⟳ N new since you last

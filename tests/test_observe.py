@@ -66,6 +66,28 @@ class TestObserveReport(unittest.TestCase):
         self.assertEqual(args.cmd, "observe")
         self.assertEqual(args.scope, SC.PROJECT)
 
+    def test_project_glance_disables_repo_configured_git_hooks(self):
+        import types
+
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append((cmd, kw))
+            if "rev-parse" in cmd:
+                return types.SimpleNamespace(returncode=0, stdout="/repo\n")
+            if "branch" in cmd:
+                return types.SimpleNamespace(returncode=0, stdout="main\n")
+            return types.SimpleNamespace(returncode=0, stdout="")
+
+        with mock.patch("cccopilot.observe.subprocess.run", side_effect=fake_run):
+            out = O._project_glance("/repo")
+
+        self.assertIn("Project Glance", out[0])
+        status_cmd = seen[2][0]
+        self.assertIn("core.fsmonitor=false", status_cmd)
+        self.assertIn("core.hooksPath=/dev/null", status_cmd)
+        self.assertEqual(seen[2][1]["env"]["GIT_OPTIONAL_LOCKS"], "0")
+
 
 class TestNextStep(unittest.TestCase):
     """`observe.next_step` is the deterministic, LLM-free fallback behind `/now`."""
