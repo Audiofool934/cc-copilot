@@ -1970,19 +1970,40 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         self.assertIs(app._watch_state, app.session.st)
 
     async def test_watch_command_opens_surface_and_quotes_vow(self):
+        from cccopilot import narrate as N
         from textual.widgets import Static
+        real_avail, real_flow = N.available, N.watch_flow_update
+        N.available = lambda be=None: True
+
+        def _flow(flow, model=None, backend=None, instruction=""):
+            return ("now: Night gathers, and now my watch begins.\n"
+                    "action: same\n"
+                    "title: Baseline\n"
+                    "phase: running\n"
+                    "reason: watch started\n"
+                    "attention: none")
+
+        N.watch_flow_update = _flow
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            app._meta("/watch")
-            await pilot.pause()
-            hud = str(app.query_one("#session-hud", Static).content)
-            dock = app.query_one("#watch-dock", Static)
-            title = str(app.query_one("#timeline-title", Static).content)
-            now = str(app.query_one("#watch-monitor-now", Static).content)
-            chat = "\n".join(str(getattr(s, "content", "") or "")
-                             for s in app.query("#chat Static"))
+        try:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._meta("/watch")
+                now = ""
+                for _ in range(10):
+                    await pilot.pause()
+                    now = str(app.query_one("#watch-monitor-now", Static).content)
+                    if "Night gathers, and now my watch begins." in now:
+                        break
+                hud = str(app.query_one("#session-hud", Static).content)
+                dock = app.query_one("#watch-dock", Static)
+                title = str(app.query_one("#timeline-title", Static).content)
+                chat = "\n".join(str(getattr(s, "content", "") or "")
+                                 for s in app.query("#chat Static"))
+        finally:
+            N.available = real_avail
+            N.watch_flow_update = real_flow
 
         self.assertTrue(app._watch_mode)
         self.assertTrue(app._watch_monitor_open)
