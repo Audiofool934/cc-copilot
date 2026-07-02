@@ -2,12 +2,13 @@
   import { onMount } from "svelte";
   import { marked } from "marked";
   import { surfaces, type SessionRef, type State } from "$lib/jsonrpc";
+  import Chat from "$lib/Chat.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"brief" | "observe" | "since" | "state">("brief");
+  let tab = $state<"chat" | "brief" | "observe" | "since" | "state">("chat");
   let brief = $state("");
   let observe = $state("");
   let since = $state("");
@@ -119,7 +120,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["brief", "observe", "since", "state"] as t}
+    {#each ["chat", "brief", "observe", "since", "state"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -127,11 +128,13 @@
     </button>
   </nav>
 
-  <main class="content">
+  <main class="content" class:chat={tab === "chat"}>
     {#if error}
       <div class="error">⚠ {error}</div>
     {:else if !sessionPath}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
+    {:else if tab === "chat"}
+      <Chat {sessionPath} />
     {:else if tab === "state"}
       <pre class="json">{stateJson ? JSON.stringify(stateJson, null, 2) : ""}</pre>
     {:else}
@@ -191,6 +194,7 @@
   .tabs .refresh { margin-left: auto; color: var(--accent); }
 
   .content { overflow: auto; padding: 20px 28px; flex: 1; }
+  .content.chat { padding: 12px 16px 16px; overflow: hidden; display: flex; }
 
   .markdown { max-width: 880px; line-height: 1.55; }
   .markdown :global(h1) { font-size: 18px; margin: 0 0 8px; }
