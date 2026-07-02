@@ -12,9 +12,11 @@ set up isolated temp homes so they don't depend on the real ``~/.claude`` /
 ``~/.codex`` / state dirs on the runner.
 """
 
+import datetime as _dt
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from cccopilot import api as API
 from cccopilot import brief as B
@@ -25,6 +27,19 @@ from cccopilot import sources as SRC
 from cccopilot import state as S
 from cccopilot import transcript as T
 from tests.util import asst, result, tool, user, write
+
+
+# Freeze state.idle_seconds' "now" so it is stable across the two state builds
+# the parity tests compare - the facade builds its own State internally, so
+# without freezing the clock these tests flake whenever the two builds straddle
+# a second boundary. Captured per-test (not a hardcoded date) so it stays just
+# after the fixture's last activity and idle stays a small positive value.
+def _freeze_now(testcase):
+    fixed = _dt.datetime.now(_dt.timezone.utc)
+    patcher = mock.patch("cccopilot.state.datetime")
+    dt = patcher.start()
+    dt.now.return_value = fixed
+    testcase.addCleanup(patcher.stop)
 
 
 # A fixture with real activity: an ask, a command, a file edit, a closing reply.
@@ -47,6 +62,7 @@ class TestParity(unittest.TestCase):
     """facade output == the exact function chain the CLI cmd_* use."""
 
     def setUp(self):
+        _freeze_now(self)
         self.path = write(_FIXTURE)
         self.cp = API.Copilot()
 
@@ -98,6 +114,7 @@ class TestParity(unittest.TestCase):
 
 class TestStateAndTranscript(unittest.TestCase):
     def setUp(self):
+        _freeze_now(self)
         self.path = write(_FIXTURE)
         self.cp = API.Copilot()
 
@@ -120,6 +137,7 @@ class TestStateAndTranscript(unittest.TestCase):
 
 class TestCheckVerdict(unittest.TestCase):
     def setUp(self):
+        _freeze_now(self)
         self.path = write(_FIXTURE)
         self.cp = API.Copilot()
 

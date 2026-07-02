@@ -26,7 +26,6 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict
 
 from . import (__version__, locate, sources as SRC, state as S, brief as B,
                scope as SC, observe as O, context as EC)
@@ -843,41 +842,18 @@ def cmd_launch(args) -> int:
 
 
 def cmd_state(args) -> int:
-    from .assess import assess
-    _, tr, st = _load(args)
-    a = assess(st)
-    out = {
-        "assessment": {
-            "verdict": a.verdict,
-            "headline": a.headline,
-            "signals": [
-                {"kind": s.kind, "severity": s.severity,
-                 "message": s.message, "evidence": s.evidence}
-                for s in a.signals
-            ],
-        },
-        "session_id": tr.session_id,
-        "cwd": tr.cwd,
-        "git_branch": tr.git_branch,
-        "version": tr.version,
-        "permission_mode": tr.permission_mode,
-        "events": tr.raw_lines,
-        "status": st.status,
-        "idle_seconds": st.idle_seconds,
-        "duration_seconds": st.duration_seconds,
-        "tool_counts": st.tool_counts,
-        "intents": [{"line": r.line, "ts": r.raw_ts, "text": r.text} for r in st.intents],
-        "todos": st.todos,
-        "changed_files": [asdict(c) for c in st.changed_files],
-        "commands": [asdict(c) for c in st.commands],
-        "failures": [asdict(f) for f in st.failures],
-        "pending_tool": (
-            {"line": st.pending_tool.line, "tool": st.pending_tool.tool_name}
-            if st.pending_tool else None
-        ),
-    }
+    from . import serialize
+    _, _tr, st = _load(args)
+    out = serialize.state_to_dict(st)
     print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     return 0
+
+
+def cmd_serve(args) -> int:
+    """Run the local JSON-RPC server a GUI drives (localhost only)."""
+    from . import server as SV
+    agents = getattr(args, "agent", None)
+    return SV.serve(port=getattr(args, "port", 0), agents=agents)
 
 
 def cmd_watch(args) -> int:
@@ -1316,6 +1292,15 @@ def build_parser() -> argparse.ArgumentParser:
     session_args(sp)
     sp.add_argument("--json", action="store_true", help="(default output is JSON)")
     sp.set_defaults(func=cmd_state)
+
+    sp = sub.add_parser("serve",
+                        help="run the local JSON-RPC server a GUI drives (localhost only)")
+    sp.add_argument("--port", type=int, default=0,
+                    help="port to bind on 127.0.0.1 (0 = ephemeral; the bound port is printed)")
+    sp.add_argument("--agent", action="append", metavar="NAME", default=None,
+                    help="restrict to an agent's sessions (claude/codex; repeatable). "
+                         "Default: every agent with sessions on this machine.")
+    sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("watch", help="re-render the brief as the transcript grows")
     session_args(sp)
