@@ -1,7 +1,7 @@
 """Saved evidence scopes for the cockpit.
 
-These are human-named shortcuts for the read-only evidence scope:
-``session``, selected ``multi-session``, or ``project``. They live outside a
+These are human-named shortcuts for the evidence scope — ``session``,
+selected ``multi-session``, or ``project`` — gathered read-only. They live outside a
 single cockpit conversation so a useful project grouping can be reused.
 """
 

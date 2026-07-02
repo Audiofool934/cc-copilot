@@ -1,4 +1,4 @@
-"""cc-copilot — a read-only shadow-memory sidecar for Claude Code sessions.
+"""cc-copilot — a read-only-by-default shadow-memory sidecar for Claude Code sessions.
 
 Reads a Claude Code session transcript (the local JSONL ledger) and
 reconstructs, *deterministically and with evidence*, what the agent has been

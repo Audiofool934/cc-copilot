@@ -1,6 +1,6 @@
 """Persistent resumable cockpit sessions (stdlib-only).
 
-cc-copilot is a read-only observer of a Claude Code session; *this* module
+cc-copilot is a read-only-by-default observer of a Claude Code session; *this* module
 persists the SEPARATE Cockpit session: the human/copilot Q&A plus the selected
 read target. It never writes under ``~/.claude``.
 

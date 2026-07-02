@@ -109,7 +109,7 @@ def mark(key: str, line: int, ts: str = "", looked_at: str = "") -> None:
     """Record that the human has seen ``key`` up to transcript ``line``.
 
     Best-effort: any storage error is swallowed so it never breaks an answer or
-    the read-only contract.
+    the read-only contract (read-only by default).
     """
     if not key or not enabled():
         return

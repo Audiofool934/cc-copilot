@@ -9,7 +9,7 @@ Two pieces, both conservative by design (alert fatigue is the failure mode):
 - :func:`desktop_notify` delivers it: a macOS/Linux desktop notification when
   available, falling back to a terminal bell + stderr line otherwise.
 
-Read-only: notifications observe and report; they never touch the agent.
+Read-only by default: notifications observe and report; they never touch the agent.
 """
 
 from __future__ import annotations

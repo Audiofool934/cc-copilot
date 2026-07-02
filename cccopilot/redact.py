@@ -1,7 +1,7 @@
 """Content-level secret redaction for the model-bound evidence copy.
 
-cc-copilot's read-only contract includes a hard invariant: **never leak a
-project's secrets into LLM context**. :mod:`cccopilot.scope` already refuses to
+cc-copilot keeps a hard invariant independent of its read-only default:
+**never leak a project's secrets into LLM context**. :mod:`cccopilot.scope` already refuses to
 read secret-*named* files (``.env``, ``*.pem`` …) by basename — but that does
 nothing about a secret that lives *inside* otherwise-legitimate evidence: an
 inline ``AKIA…`` key in a tracked ``.py``, a ``tool_result`` echoing

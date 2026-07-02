@@ -1,7 +1,7 @@
 """Cross-session collision radar — the same file mutated by 2+ different agent
 sessions, especially on different git branches.
 
-This is the capability only a read-only, cross-agent observer can produce: an
+This is the capability only a read-only-by-default, cross-agent observer can produce: an
 in-process agent has no handle to a sibling session, and neither vendor can read
 the other's transcripts — so nothing *but* a tool that unions Claude Code and
 Codex sessions by project cwd can see one agent clobbering a file another agent

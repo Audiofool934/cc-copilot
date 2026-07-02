@@ -1,4 +1,4 @@
-"""The persistent, parallel, read-only chat sidecar (`cc-copilot chat`).
+"""The persistent, parallel, read-only-by-default chat sidecar (`cc-copilot chat`).
 
 Pin to one *other* session and hold an ongoing QA conversation while the copilot
 shares the observed session's LIVE timeline: every turn re-parses the (growing)
@@ -6,7 +6,7 @@ JSONL, so an answer can never lag the agent. A background thread watches the fil
 and pushes inline "it just stalled / went off-track" alerts so it feels parallel,
 not pull-only.
 
-Read-only with respect to the observed agent: the transcript is opened for
+Read-only by default with respect to the observed agent: the transcript is opened for
 reading only, and there is no handle to the observed agent's process. Separate
 copilot Q&A history may be persisted under cc-copilot's own state directory.
 """
@@ -67,7 +67,7 @@ _HELP = """commands (LLM-free except questions and explicit /since --recap):
   /rewind [n]       fork from an earlier message (list, or re-ask #n)
   /help             this
   /exit  /quit      leave  (Ctrl-D also works)
-anything else → a question answered grounded in the selected read-only evidence + project context."""
+anything else → a question answered grounded in the selected read-only evidence + project context (narrator read-only by default)."""
 
 _META_COMMAND_NAMES = {
     "?", "q", "quit", "exit", "help", "brief", "observe", "now", "goal",
@@ -1070,8 +1070,9 @@ class ChatSession:
     # ---- /goal: draft a persistent objective for the observed agent ---------
     def _goal(self, instruction: str = "", raw: bool = False) -> str:
         """Draft a paste-ready agent ``/goal`` command from observable session
-        evidence plus read-only project context. The cockpit remains read-only:
-        this never writes into the observed agent session."""
+        evidence plus read-only project context. The cockpit does not inject:
+        this never writes into the observed agent session (read-only by default
+        with respect to the observed agent)."""
         if self.st is None:
             return "(no live session — transcript gone; nothing to turn into a goal)"
         det = _deterministic_goal(self.st, instruction)
@@ -1098,8 +1099,9 @@ class ChatSession:
     # ---- /loop: draft a recurring agent prompt ------------------------------
     def _loop(self, instruction: str = "", raw: bool = False) -> str:
         """Draft a paste-ready agent ``/loop`` command from observable session
-        evidence plus read-only project context. The cockpit remains read-only:
-        this never schedules or injects anything into the observed agent."""
+        evidence plus read-only project context. The cockpit does not inject:
+        this never schedules or injects anything into the observed agent
+        (read-only by default with respect to the observed agent)."""
         if self.st is None:
             return "(no live session — transcript gone; nothing to turn into a loop)"
         det = _deterministic_loop(self.st, instruction)

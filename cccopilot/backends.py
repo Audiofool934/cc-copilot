@@ -36,6 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import config
 from . import models as MODELS
 
 
@@ -313,39 +314,54 @@ def _flag_supported(help_text: str, flag: str) -> bool:
 
 # The load-bearing read-only flag per narrator flavor. Every other safety flag
 # is defense-in-depth; THIS one is what actually confines the agent CLI to
-# read-only. Its absence on an installed CLI is treated as fail-closed.
+# read-only in the default posture. Its absence on an installed CLI is treated
+# as fail-closed — *unless* the user has opted the narrator out of read-only via
+# config.narrator_sandbox() == "unconfined", in which case no confinement is
+# applied (mirroring the gemini/llm/custom-CLI backends).
 _READONLY_FLAG = {"claude": "--tools", "codex": "--sandbox"}
 
 
 def _require_readonly(help_text: str, flavor: str) -> None:
-    """Fail closed before launching an agent CLI as a narrator.
+    """Fail closed before launching an agent CLI as a *read-only* narrator.
 
-    The read-only contract must not degrade silently: if the installed CLI's
+    The read-only default must not degrade silently: if the installed CLI's
     help positively does NOT advertise the load-bearing read-only flag, refuse
     to launch it rather than run it unconfined (the old behavior quietly dropped
     the flag, leaving a tool-capable agent narrating). An *empty* help_text means
     we could not probe the CLI at all — we don't hard-fail there; the caller
     still applies the flag best-effort, and a CLI that truly lacks it rejects the
     flag loudly (still fail-closed) instead of running as a free agent.
+
+    This is only reached on the read-only path. When the user opts into
+    ``[narrator].sandbox = "unconfined"`` (or $CC_COPILOT_NARRATOR_SANDBOX), the caller skips confinement entirely
+    and never calls this, so an unprobeable or flagless CLI launches unguarded
+    by the user's explicit choice.
     """
     flag = _READONLY_FLAG[flavor]
     if help_text and not _flag_supported(help_text, flag):
         raise BackendError(
             f"the `{flavor}` CLI on PATH does not advertise `{flag}`, so "
             f"cc-copilot cannot confine it to read-only as a narrator. Refusing "
-            f"to launch it unguarded — use an HTTP backend instead (e.g. "
-            f"`--backend openai`) or upgrade the CLI.")
+            f"to launch it unguarded — set `[narrator].sandbox = \"unconfined\"` "
+            f"in ~/.cc-copilot.toml (or $CC_COPILOT_NARRATOR_SANDBOX=unconfined) "
+            f"to opt out of read-only, use an HTTP backend instead (e.g. "
+            f"`--backend openai`), or upgrade the CLI.")
 
 
 def _claude_safety_args(argv) -> list:
     """Disable Claude Code's ambient agent surfaces when used as a narrator.
 
-    The prompt already instructs the model not to use tools, but cc-copilot's
-    read-only contract must not rely on prompt obedience. The load-bearing
-    ``--tools ""`` is applied unconditionally (and fail-closed: a CLI that
-    positively lacks it is refused, see :func:`_require_readonly`); the rest are
-    defense-in-depth, gated on help so older builds still run.
+    Read-only is the default narrator posture, not a permanent restriction: when
+    ``config.narrator_sandbox() == "unconfined"`` the narrator is launched with
+    no confinement (like the gemini/llm backends), so it may use its tools. On
+    the default read-only path, the prompt already instructs the model not to
+    use tools, but the confinement must not rely on prompt obedience. The
+    load-bearing ``--tools ""`` is applied unconditionally (and fail-closed: a
+    CLI that positively lacks it is refused, see :func:`_require_readonly`); the
+    rest are defense-in-depth, gated on help so older builds still run.
     """
+    if config.narrator_sandbox() == "unconfined":
+        return []
     help_text = _cli_help(argv)
     _require_readonly(help_text, "claude")
     extra = ["--tools", ""]
@@ -363,11 +379,16 @@ def _claude_safety_args(argv) -> list:
 
 
 def _codex_safety_args(argv) -> list:
-    """Keep Codex exec in a read-only, non-persistent narrator mode.
+    """Keep Codex exec in a read-only, non-persistent narrator mode by default.
 
+    Read-only is the default narrator posture, not a permanent restriction: when
+    ``config.narrator_sandbox() == "unconfined"`` the narrator is launched with
+    no confinement (like the gemini/llm backends). On the default read-only path,
     ``--sandbox read-only`` is load-bearing and applied unconditionally
     (fail-closed when the CLI positively lacks it); the rest are gated.
     """
+    if config.narrator_sandbox() == "unconfined":
+        return []
     help_text = _cli_help(argv)
     _require_readonly(help_text, "codex")
     extra = ["--sandbox", "read-only"]

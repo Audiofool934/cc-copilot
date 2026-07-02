@@ -1,8 +1,8 @@
 """Deterministic agent-observability report.
 
 The regular brief answers "what happened?" This module answers the cockpit
-question: "where should my attention go right now?" It stays fully read-only
-and evidence-cited, using only the existing transcript/project scope model.
+question: "where should my attention go right now?" It stays fully read-only by
+default and evidence-cited, using only the existing transcript/project scope model.
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ def render(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
     L.extend(_project_glance(report.root))
 
     L.append("")
-    L.append("_Observer reports are deterministic and read-only. Transcript citations "
+    L.append("_Observer reports are deterministic and read-only by default. Transcript citations "
              "point to JSONL lines; project citations come from local git reads._")
     return "\n".join(L)
 

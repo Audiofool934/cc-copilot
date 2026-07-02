@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cc-copilot"
 dynamic = ["version"]                  # single-sourced from cccopilot/__init__.__version__
-description = "A copilot for AI coding agents — read-only supervision for Claude Code & Codex: re-entry recaps, safety verdicts, grounded chat, every claim cited."
+description = "A copilot for AI coding agents — read-only-by-default supervision for Claude Code & Codex: re-entry recaps, safety verdicts, grounded chat, every claim cited."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

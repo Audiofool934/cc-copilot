@@ -60,6 +60,15 @@ enabled = true
 # the set here, or per-invocation with --agent / $CC_COPILOT_AGENTS.
 # [agents]
 # enabled = ["claude", "codex"]
+
+# How the local claude/codex narrator CLI is confined when it powers recaps,
+# chat, since, /goal, and /loop. Read-only is the current default posture, not a
+# permanent restriction - relax it when you want the narrator to use its tools.
+#   read-only  (default) = tool-disabled, fail-closed if the CLI can't be confined
+#   unconfined           = narrator may use its tools (like the gemini/llm backends)
+# Per-invocation override: $CC_COPILOT_NARRATOR_SANDBOX=unconfined
+# [narrator]
+# sandbox = "read-only"
 '''
 
 
@@ -186,6 +195,42 @@ def agents_enabled():
             names = [n for n in names if n]
         return names or None
     return None
+
+
+_VALID_SANDBOX = {"read-only", "unconfined"}
+
+
+def _narrator_sandbox_from(data: dict) -> str:
+    """Read ``[narrator].sandbox`` from an already-loaded config dict.
+
+    Returns ``""`` when unset so the caller can leave the default in place
+    rather than overwrite it. Unknown values collapse to the safe default
+    (``read-only``) so a typo never silently widens the narrator.
+    """
+    n = data.get("narrator")
+    if isinstance(n, dict):
+        v = n.get("sandbox")
+        if isinstance(v, str):
+            v = v.strip().lower()
+            return v if v in _VALID_SANDBOX else "read-only"
+    return ""
+
+
+def narrator_sandbox() -> str:
+    """The local claude/codex narrator's confinement: ``read-only`` (default) or
+    ``unconfined``.
+
+    Precedence: ``$CC_COPILOT_NARRATOR_SANDBOX`` wins, then ``[narrator].sandbox``
+    from the config file, then ``read-only``. Read-only is the current default
+    posture, not a permanent restriction - it is opt-out here. Unknown values
+    fall back to ``read-only`` so a typo never widens the narrator.
+    """
+    env = os.environ.get("CC_COPILOT_NARRATOR_SANDBOX")
+    if isinstance(env, str) and env.strip():
+        v = env.strip().lower()
+        return v if v in _VALID_SANDBOX else "read-only"
+    from_file = _narrator_sandbox_from(load())
+    return from_file or "read-only"
 
 
 def init_file() -> str:

@@ -13,7 +13,9 @@
     cc-copilot watch [...]            re-print the brief when the transcript grows
     cc-copilot state [...] --json     dump the raw state model as JSON
 
-Read-only by design: it never writes to the transcript or touches the agent.
+Read-only by default: it does not write to the observed agent's transcript or
+inject into the agent, and the narrator CLI is tool-disabled unless you opt it
+out ([narrator].sandbox = "unconfined").
 """
 
 from __future__ import annotations
@@ -210,8 +212,8 @@ def _ensure_tui_runtime(quiet: bool = False) -> str:
 
 
 _ONBOARD_INTRO = (
-    "\n  Welcome to cc-copilot — a read-only sidecar that watches your coding\n"
-    "  agents and recaps what changed while you were away.\n\n"
+    "\n  Welcome to cc-copilot — a read-only-by-default sidecar that watches\n"
+    "  your coding agents and recaps what changed while you were away.\n\n"
     "  Pick the model that powers its recaps, chat, and `since` summaries.\n"
     "  (The deterministic core — brief / check / observe — needs no model.)\n")
 
@@ -1289,7 +1291,7 @@ def build_parser() -> argparse.ArgumentParser:
         scope_arg(sp)
 
     sp = sub.add_parser("chat", aliases=["attach"],
-                        help="interactive read-only chat pinned to a session's live timeline")
+                        help="interactive chat pinned to a session's live timeline (read-only by default)")
     add_chat_args(sp)
     sp.add_argument("--tui", action="store_true",
                     help="full-screen cockpit TUI (needs the cc-copilot[tui] extra)")

@@ -16,12 +16,17 @@ multi-session workflows. That creates a new developer problem: not just
 understanding the codebase — understanding what your agents have been doing
 over time.
 
-CC-Copilot is a separate, **read-only** supervision layer for that work. Its
-primary interface is the **cockpit**, a terminal-native TUI for live agent
-supervision: shared context, grounded questions, risk signals, and next
-decisions. Ask across one session, selected sessions, or an entire project —
-without injecting supervision chatter into the main Claude Code or Codex
-workflow.
+CC-Copilot is a separate supervision layer for that work, **read-only by
+default**. Its primary interface is the **cockpit**, a terminal-native TUI for
+live agent supervision: shared context, grounded questions, risk signals, and
+next decisions. Ask across one session, selected sessions, or an entire
+project — without injecting supervision chatter into the main Claude Code or
+Codex workflow.
+
+Read-only is how cc-copilot manifests under its current requirements, not a
+hard restriction baked into the design: the narrator that powers recaps, chat,
+`since`, `/goal`, and `/loop` is confined to read-only by default and can be
+opted out of that confinement (see [Read-Only by Default](#read-only-by-default)).
 
 The working agent stays focused. You stay aligned.
 
@@ -258,7 +263,7 @@ It gives you:
 - Core `/watch` observer loop for long-running agent work: it follows transcript
   growth, runs automatic copilot summaries/digests, accepts light presets such
   as `/watch 中文`, opens the in-place semantic step monitor with `/watch view`,
-  and stays read-only. In multi-session/project scope it watches the selected
+  and stays read-only by default. In multi-session/project scope it watches the selected
   live transcripts and labels updates by session. The monitor keeps separate
   session views, with `Tab` switching sessions and `←` / `→` browsing steps
   inside the selected session. Watch process updates stay out of the main chat;
@@ -321,9 +326,10 @@ primary evidence first:
 - cockpit conversation memory
 
 Each model context also includes a compact **Target Context** card: cc-copilot's
-role as a read-only supervisor, the active scope, the target agent/session(s),
-whether bounded project facts are included, and the boundary that the copilot
-has no hidden agent context, no tool access, and does not inject prompts.
+role as a read-only-by-default supervisor, the active scope, the target
+agent/session(s), whether bounded project facts are included, and the boundary
+that the copilot has no hidden agent context, no tool access, and does not
+inject prompts.
 
 Summaries still exist, but they are navigation aids and UI surfaces, not the
 only source of truth. See [docs/evidence-context-engine.md](docs/evidence-context-engine.md).
@@ -398,7 +404,7 @@ enabled = true
 Precedence: explicit flags > environment variables > config file > built-in
 default.
 
-## Read-Only Contract
+## Read-Only by Default
 
 CC-Copilot is an observer.
 
@@ -419,6 +425,21 @@ It does not:
 - write under `~/.claude`
 - inject supervision chatter into Claude Code or Codex
 
+The observer invariant above — never writing to the watched agent's transcript,
+never injecting — is a real, permanent property of cc-copilot. The **narrator's**
+read-only confinement, by contrast, is the current default posture, not a
+permanent restriction. The local `claude`/`codex` narrator CLI is tool-disabled
+by default; opt it into an unconfined mode when you want it to use its tools:
+
+```toml
+# ~/.cc-copilot.toml
+[narrator]
+sandbox = "unconfined"   # or "read-only" (default)
+```
+
+Per invocation: `$CC_COPILOT_NARRATOR_SANDBOX=unconfined cc-copilot since`.
+HTTP and custom-CLI backends were never confined and are unaffected.
+
 Deterministic commands work without an LLM:
 
 ```bash
@@ -437,12 +458,14 @@ reaches the model — the redaction applies only to the model-bound copy, so the
 on-disk transcript, the `[L<n>]` citations, and what the cockpit shows you
 locally are untouched. cc-copilot can report observed web-search/tool records
 from an agent transcript, but it does not perform its own browsing or web search.
-Agent narrator CLIs (Claude/Codex) are launched read-only and **fail closed**: if
-the installed CLI can't be confined to read-only, cc-copilot refuses to launch it
-rather than run it unguarded.
+Agent narrator CLIs (Claude/Codex) are launched read-only by default and **fail
+closed**: if the installed CLI can't be confined to read-only, cc-copilot refuses
+to launch it rather than run it unguarded. Set `[narrator].sandbox = "unconfined"`
+in `~/.cc-copilot.toml` (or `$CC_COPILOT_NARRATOR_SANDBOX=unconfined`) to opt the
+narrator out of read-only and let it use its tools.
 
-`/goal` follows the same read-only contract. It drafts a paste-ready agent
-command from the selected evidence and project facts:
+`/goal` follows the same default. It drafts a paste-ready agent command from the
+selected evidence and project facts:
 
 ```text
 /goal <verifiable outcome, checks, constraints, and blocked stop condition>

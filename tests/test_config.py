@@ -13,14 +13,15 @@ class _Args:
 class TestConfig(unittest.TestCase):
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in
-                       ("CC_COPILOT_CONFIG", "CC_COPILOT_BACKEND", "DEEPSEEK_API_KEY")}
+                       ("CC_COPILOT_CONFIG", "CC_COPILOT_BACKEND", "DEEPSEEK_API_KEY",
+                        "CC_COPILOT_NARRATOR_SANDBOX")}
         fd, self.p = tempfile.mkstemp(suffix=".toml")
         os.close(fd)
         os.environ["CC_COPILOT_CONFIG"] = self.p
 
     def tearDown(self):
         os.unlink(self.p)
-        for k in ("CC_COPILOT_BACKEND", "DEEPSEEK_API_KEY"):
+        for k in ("CC_COPILOT_BACKEND", "DEEPSEEK_API_KEY", "CC_COPILOT_NARRATOR_SANDBOX"):
             os.environ.pop(k, None)
         for k, v in self._saved.items():
             if v is not None:
@@ -81,6 +82,28 @@ class TestConfig(unittest.TestCase):
             self.assertIsNone(CFG.agents_enabled())
         finally:
             C.load = orig
+
+    def test_narrator_sandbox_default_is_read_only(self):
+        # No env, no file entry: safe default.
+        self._write('backend = "codex"\n')
+        self.assertEqual(CFG.narrator_sandbox(), "read-only")
+
+    def test_narrator_sandbox_from_config_file(self):
+        self._write('[narrator]\nsandbox = "unconfined"\n')
+        self.assertEqual(CFG.narrator_sandbox(), "unconfined")
+
+    def test_narrator_sandbox_env_wins_over_file(self):
+        os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "read-only"
+        self._write('[narrator]\nsandbox = "unconfined"\n')
+        self.assertEqual(CFG.narrator_sandbox(), "read-only")
+
+    def test_narrator_sandbox_unknown_falls_back_to_read_only(self):
+        # A typo never silently widens the narrator.
+        os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "writemode"
+        self.assertEqual(CFG.narrator_sandbox(), "read-only")
+        self._write('[narrator]\nsandbox = "yolo"\n')
+        os.environ.pop("CC_COPILOT_NARRATOR_SANDBOX", None)
+        self.assertEqual(CFG.narrator_sandbox(), "read-only")
 
 
 if __name__ == "__main__":

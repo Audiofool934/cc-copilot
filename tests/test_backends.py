@@ -12,12 +12,19 @@ from unittest import mock
 from cccopilot import backends as BK, cli
 
 _ENV = ("CC_COPILOT_BACKEND", "CC_COPILOT_LLM_CMD", "CC_COPILOT_API_BASE",
-        "CC_COPILOT_API_KEY", "CC_COPILOT_MODEL")
+        "CC_COPILOT_API_KEY", "CC_COPILOT_MODEL", "CC_COPILOT_NARRATOR_SANDBOX",
+        "CC_COPILOT_CONFIG")
+
+# A config path that does not exist, so config.load() returns {} and the
+# narrator-sandbox default can't be made env-dependent by the developer's real
+# ~/.cc-copilot.toml (e.g. [narrator].sandbox = "unconfined").
+_NO_CONFIG = os.path.join(tempfile.gettempdir(), "cc-copilot-test-nonexistent.toml")
 
 
 class TestResolve(unittest.TestCase):
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in _ENV}
+        os.environ["CC_COPILOT_CONFIG"] = _NO_CONFIG
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -157,10 +164,38 @@ class TestResolve(unittest.TestCase):
         self.assertFalse(BK._flag_supported("--sandbox-mode foo", "--sandbox"))
         self.assertFalse(BK._flag_supported("--allowed-tools x", "--tools"))
 
+    def test_narrator_sandbox_default_is_read_only(self):
+        # With no env/config, the narrator is confined: the load-bearing
+        # read-only flag is applied for both flavors.
+        with mock.patch.object(BK, "_cli_help", return_value="--tools --sandbox"):
+            cargv = BK.registry()["claude"]._full_argv("prompt", "sonnet")
+            dargv = BK.registry()["codex"]._full_argv("prompt", None)
+        self.assertIn("--tools", cargv)
+        self.assertEqual(cargv[cargv.index("--tools") + 1], "")
+        self.assertIn("--sandbox", dargv)
+        self.assertEqual(dargv[dargv.index("--sandbox") + 1], "read-only")
+
+    def test_unconfined_narrator_skips_safety_args(self):
+        # Opt-out: with narrator_sandbox=unconfined, both narrators launch with
+        # NO confinement — mirroring the gemini/llm backends — and crucially do
+        # NOT fail closed even when the CLI positively lacks the read-only flag.
+        os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "unconfined"
+        claude_help = "usage: claude -p [--model M] [prompt]"   # no --tools
+        codex_help = "usage: codex exec [--model M]"            # no --sandbox
+        with mock.patch.object(BK, "_cli_help",
+                               side_effect=[claude_help, codex_help]):
+            cargv = BK.registry()["claude"]._full_argv("prompt", "sonnet")
+            dargv = BK.registry()["codex"]._full_argv("prompt", None)
+        self.assertNotIn("--tools", cargv)
+        self.assertNotIn("--sandbox", dargv)
+        self.assertEqual(cargv[-1], "prompt")
+        self.assertEqual(dargv[-1], "prompt")
+
 
 class TestBackendsCommand(unittest.TestCase):
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in _ENV}
+        os.environ["CC_COPILOT_CONFIG"] = _NO_CONFIG
 
     def tearDown(self):
         for k, v in self._saved.items():
