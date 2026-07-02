@@ -228,5 +228,95 @@ class TestSessionsSerialized(unittest.TestCase):
         self.assertEqual(len(r["result"]), 1)
 
 
+# ---- narration routing + SSE streaming -----------------------------------
+
+class _FakeHandle:
+    """A minimal StreamHandle stand-in for server-routing tests: yields the
+    given chunks, then reports done + the joined text. No backend involved."""
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.text = "".join(self._chunks)
+        self.done = False
+        self.usage = None
+
+    def __iter__(self):
+        for c in self._chunks:
+            yield c
+        self.done = True
+
+    def cancel(self):
+        pass
+
+
+def _parse_sse(text: str):
+    events = []
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        ev = {"event": "message"}
+        data = []
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                ev["event"] = line[len("event: "):]
+            elif line.startswith("data: "):
+                data.append(line[len("data: "):])
+        if data:
+            ev["data"] = json.loads("".join(data))
+            events.append(ev)
+    return events
+
+
+class TestServerNarration(_ServerCase):
+    """Routing of narration methods and the /stream SSE endpoint. The facade
+    narration logic is covered by test_api.TestNarration; here we stub the
+    Copilot instance's methods to verify the server routes correctly and
+    frames SSE the way the GUI will consume it."""
+
+    def _stream(self, method, params=None):
+        body = json.dumps({"method": method, "params": params or {}}).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/stream", data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.read().decode("utf-8")
+
+    def test_ask_routes_through_to_facade(self):
+        self.httpd.copilot.ask = lambda **p: f"ok:{p.get('question')}"
+        r = self._rpc("ask", {"session": self.path, "question": "did it drift?"})
+        self.assertEqual(r["result"], "ok:did it drift?")
+
+    def test_now_routes_through_to_facade(self):
+        self.httpd.copilot.now = lambda **p: "let it finish"
+        self.assertEqual(self._rpc("now", {"session": self.path})["result"],
+                         "let it finish")
+
+    def test_stream_drains_handle_as_sse(self):
+        self.httpd.copilot.ask_stream = lambda **p: _FakeHandle(["chunk1 ", "chunk2"])
+        events = _parse_sse(self._stream("ask_stream", {"session": self.path,
+                                                        "question": "go?"}))
+        chunks = [e["data"]["chunk"] for e in events if e["event"] == "message"]
+        done = [e["data"] for e in events if e["event"] == "done"]
+        self.assertEqual(chunks, ["chunk1 ", "chunk2"])
+        self.assertEqual(done, [{"text": "chunk1 chunk2", "usage": None}])
+
+    def test_stream_unknown_method_returns_jsonrpc_error(self):
+        # /stream rejects unknown methods with a JSON-RPC error (not an SSE stream)
+        body = json.dumps({"method": "nope_stream", "params": {}}).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/stream", data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            resp = json.loads(r.read().decode("utf-8"))
+        self.assertEqual(resp["error"]["code"], -32601)
+
+    def test_narration_methods_listed_on_get(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=5) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+        for m in ("ask", "chat", "now", "narrate_brief"):
+            self.assertIn(m, info["methods"])
+        self.assertIn("ask_stream", info["stream"])
+
+
 if __name__ == "__main__":
     unittest.main()

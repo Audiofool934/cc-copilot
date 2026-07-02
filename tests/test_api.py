@@ -26,6 +26,7 @@ from cccopilot import since as SI
 from cccopilot import sources as SRC
 from cccopilot import state as S
 from cccopilot import transcript as T
+from cccopilot.narrate import StreamHandle
 from tests.util import asst, result, tool, user, write
 
 
@@ -357,6 +358,109 @@ class TestResolveAndSessions(unittest.TestCase):
         self.assertIn("1 work-session transcript", only_claude)
         self.assertNotIn("codex-sibling", only_claude)
         self.assertNotIn("codex done", only_claude)
+
+
+# ---- narration (LLM) surfaces -------------------------------------------
+
+from cccopilot.backends import Backend as _Backend
+
+
+class _CaptureBackend(_Backend):
+    """A minimal in-memory backend for facade narration tests (mirrors the
+    test_narrate CaptureBackend). Captures the prompt and returns a fixed
+    string; supports both the blocking complete() path and the one-chunk
+    streaming fallback (CC_COPILOT_STREAM=0)."""
+    name = "capture"
+
+    def __init__(self):
+        self.prompts = []
+
+    def available(self):
+        return True
+
+    def reason(self):
+        return ""
+
+    def complete(self, prompt, model=None, timeout=180):
+        self.prompts.append(prompt)
+        return "ok"
+
+    def cancel(self):
+        pass
+
+
+class TestNarration(unittest.TestCase):
+    def setUp(self):
+        _freeze_now(self)
+        self.path = write(_FIXTURE)
+        self.be = _CaptureBackend()
+        self._saved_stream = os.environ.get("CC_COPILOT_STREAM")
+        os.environ["CC_COPILOT_STREAM"] = "0"   # one-chunk stream fallback
+
+    def tearDown(self):
+        os.environ.pop("CC_COPILOT_STREAM", None)
+        if self._saved_stream is not None:
+            os.environ["CC_COPILOT_STREAM"] = self._saved_stream
+        os.unlink(self.path)
+
+    def test_now_raw_is_deterministic_and_needs_no_backend(self):
+        from cccopilot import observe as O
+        st = S.build(T.parse(self.path))
+        expected = O.next_step(self.path, st, SC.SESSION, sessions="")
+        self.assertEqual(API.Copilot().now(session=self.path, raw=True), expected)
+
+    def test_ask_wires_context_question_and_backend(self):
+        out = API.Copilot().ask(session=self.path, question="did it drift?",
+                                 backend=self.be)
+        self.assertEqual(out, "ok")
+        self.assertEqual(len(self.be.prompts), 1)
+        # the composed prompt carries the question and the evidence context
+        self.assertIn("did it drift?", self.be.prompts[0])
+        self.assertIn("EVIDENCE CONTEXT", self.be.prompts[0])
+
+    def test_chat_wires_history_question_and_backend(self):
+        out = API.Copilot().chat(session=self.path,
+                                 history=[("user", "what next?"),
+                                          ("assistant", "check status")],
+                                 question="and now?", backend=self.be)
+        self.assertEqual(out, "ok")
+        self.assertIn("and now?", self.be.prompts[0])
+        # prior turns are replayed into the prompt
+        self.assertIn("check status", self.be.prompts[0])
+
+    def test_narrate_brief_wires_brief_and_backend(self):
+        out = API.Copilot().narrate_brief(session=self.path, backend=self.be)
+        self.assertEqual(out, "ok")
+        self.assertIn("EVIDENCE CONTEXT", self.be.prompts[0])
+
+    def test_now_llm_falls_back_to_deterministic_on_backend_error(self):
+        class Boom(_CaptureBackend):
+            def complete(self, prompt, model=None, timeout=180):
+                raise RuntimeError("backend exploded")
+        from cccopilot import observe as O
+        st = S.build(T.parse(self.path))
+        expected = O.next_step(self.path, st, SC.SESSION, sessions="")
+        out = API.Copilot().now(session=self.path, backend=Boom())
+        self.assertEqual(out, expected)
+
+    def test_ask_stream_returns_handle_that_drains_to_text(self):
+        h = API.Copilot().ask_stream(session=self.path, question="did it drift?",
+                                      backend=self.be)
+        self.assertIsInstance(h, StreamHandle)
+        chunks = list(h)
+        self.assertTrue(h.done)
+        self.assertEqual(h.text, "ok")
+        self.assertEqual(chunks, ["ok"])
+
+    def test_chat_stream_and_now_stream_drain(self):
+        cp = API.Copilot()
+        h1 = cp.chat_stream(session=self.path, history=[], question="go?",
+                             backend=self.be)
+        self.assertEqual(list(h1), ["ok"])
+        self.assertEqual(h1.text, "ok")
+        h2 = cp.now_stream(session=self.path, backend=self.be)
+        self.assertEqual(list(h2), ["ok"])
+        self.assertEqual(h2.text, "ok")
 
 
 if __name__ == "__main__":

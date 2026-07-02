@@ -6,9 +6,12 @@ Zero-dependency: stdlib ``http.server`` only, matching the core's
 boundary, so there is no auth. The ``serve`` entrypoint binds an ephemeral port
 by default and prints it, so the Tauri shell (and tests) can discover it.
 
-Stage 2 (Option A): request/response only. Each public facade method becomes a
-JSON-RPC method that returns its result. Live streaming / watch is a later
-stage; the facade has no streaming methods yet, so neither does the server.
+Two endpoints: ``POST /`` is JSON-RPC 2.0 request/response for the
+deterministic surfaces and the blocking narration methods; ``POST /stream``
+is an SSE (``text/event-stream``) endpoint that drains a facade
+``StreamHandle`` chunk-by-chunk for the streaming narration methods
+(``ask_stream`` / ``chat_stream`` / ``now_stream`` / ``narrate_brief_stream``).
+Live watch is a later stage.
 
 JSON-RPC 2.0 error codes:
   -32700 parse error · -32600 invalid request · -32601 method not found ·
@@ -58,6 +61,21 @@ _PUBLIC = {
     "observe": None,                           # returns str
     "since": None,                             # returns str
     "advance_since_mark": None,                # returns dict | None
+    # ---- narration (LLM), blocking request/response ----
+    "narrate_brief": None,                      # returns str
+    "ask": None,                                # returns str (params: question, ...)
+    "chat": None,                               # returns str (params: history, question, ...)
+    "now": None,                                # returns str
+}
+
+# Streaming narration methods: each returns a narrate.StreamHandle that the
+# /stream endpoint drains chunk-by-chunk as SSE. No serializer - chunks are
+# plain strings.
+_STREAM_METHODS = {
+    "narrate_brief_stream",
+    "ask_stream",
+    "chat_stream",
+    "now_stream",
 }
 
 
@@ -89,6 +107,25 @@ def _invoke(cp: API.Copilot, method: str, params: Any) -> Any:
     return ser(value)
 
 
+def _invoke_stream(cp: API.Copilot, method: str, params: Any):
+    """Resolve a streaming facade method to a StreamHandle (or raise _RpcError)."""
+    if method not in _STREAM_METHODS:
+        raise _RpcError(_ERR_METHOD_NOT_FOUND, f"stream method not found: {method}")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise _RpcError(_ERR_INVALID_PARAMS, "params must be an object")
+    fn = getattr(cp, method)
+    try:
+        return fn(**params)
+    except API.SessionNotFound as e:
+        raise _RpcError(_ERR_SESSION_NOT_FOUND, str(e))
+    except TypeError as e:
+        raise _RpcError(_ERR_INVALID_PARAMS, str(e))
+    except ValueError as e:
+        raise _RpcError(_ERR_INVALID_PARAMS, str(e))
+
+
 def _result(req_id: Any, result: Any) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}).encode("utf-8")
 
@@ -109,10 +146,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # a tiny discovery/health endpoint: the method list, for GUIs and `curl`.
-        body = json.dumps({"jsonrpc": "2.0", "methods": sorted(_PUBLIC)}).encode("utf-8")
+        body = json.dumps({
+            "jsonrpc": "2.0",
+            "methods": sorted(set(_PUBLIC) | _STREAM_METHODS),
+            "stream": sorted(_STREAM_METHODS),
+        }).encode("utf-8")
         self._send(200, body)
 
     def do_POST(self):
+        if self.path == "/stream":
+            self._handle_stream()
+            return
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
         except ValueError:
@@ -142,6 +186,76 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, _error(req_id, _ERR_SERVER, f"server error: {e}"))
             return
         self._send(200, _result(req_id, result))
+
+    def _handle_stream(self):
+        """POST /stream: run a streaming facade method and drain its
+        StreamHandle as Server-Sent Events. Body: {"method", "params"}.
+        Emits `data: {"chunk": ...}` per chunk, then `event: done` with the
+        final text, or `event: error` on failure."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else None
+        except (ValueError, UnicodeDecodeError):
+            self._send(200, _error(None, _ERR_PARSE, "parse error"))
+            return
+        if not isinstance(payload, dict):
+            self._send(200, _error(None, _ERR_INVALID_REQUEST,
+                                   "invalid request: expected {method, params}"))
+            return
+        method = payload.get("method")
+        params = payload.get("params", {})
+        req_id = payload.get("id")
+        if not isinstance(method, str):
+            self._send(200, _error(req_id, _ERR_INVALID_REQUEST, "invalid method"))
+            return
+        try:
+            handle = _invoke_stream(self.server.copilot, method, params)
+        except _RpcError as e:
+            self._send(200, _error(req_id, e.code, e.message, e.data))
+            return
+        except Exception as e:
+            self._send(200, _error(req_id, _ERR_SERVER, f"server error: {e}"))
+            return
+        # stream the handle as SSE until it drains, then close the connection.
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for chunk in handle:
+                self._sse({"chunk": chunk})
+            usage = None
+            u = getattr(handle, "usage", None)
+            if u is not None:
+                usage = getattr(u, "__dict__", None) or str(u)
+            self._sse({"text": handle.text, "usage": usage}, event="done")
+        except Exception as e:
+            try:
+                self._sse({"message": str(e)}, event="error")
+            except (BrokenPipeError, ConnectionError):
+                pass
+        finally:
+            try:
+                handle.cancel()
+            except Exception:
+                pass
+
+    def _sse(self, obj: Any, event: str = None) -> None:
+        out = ""
+        if event:
+            out += f"event: {event}\n"
+        out += "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+        try:
+            self.wfile.write(out.encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionError):
+            pass
 
     def _send(self, code: int, body: bytes) -> None:
         self.send_response(code)

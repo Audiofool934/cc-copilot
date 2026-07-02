@@ -25,13 +25,16 @@ import os
 from typing import List, Optional, Tuple
 
 from . import brief as B
+from . import context as EC
 from . import lastlook as LL
+from . import narrate as N
 from . import observe as O
 from . import scope as SC
 from . import since as SI
 from . import sources as SRC
 from . import state as S
 from .locate import SessionRef
+from .narrate import StreamHandle
 from .state import State
 from .transcript import Transcript
 
@@ -42,6 +45,17 @@ class SessionNotFound(LookupError):
 
 def _now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _drain(handle: StreamHandle) -> str:
+    """Consume a StreamHandle to completion and return its joined text.
+
+    Used by the non-streaming narration wrappers that have no blocking sibling
+    in narrate (e.g. narrate_brief, which only exposes a stream variant by
+    design - see test_narrate.test_dead_narrate_helpers_removed)."""
+    for _ in handle:
+        pass
+    return handle.text
 
 
 class Copilot:
@@ -143,7 +157,13 @@ class Copilot:
         """
         path = self._require(cwd, session, include_current)
         st = S.build(SRC.parse(path))
-        sc = SC.normalize(scope)
+        return self._brief_text(path, st, SC.normalize(scope), scope_sessions,
+                                max_files, max_cmds)
+
+    def _brief_text(self, path: str, st, sc: str, scope_sessions: str,
+                    max_files: int = 12, max_cmds: int = 6) -> str:
+        """The brief Markdown for a pre-built state. Shared by the reading
+        surface and the narration wrappers so they ground in the same evidence."""
         if sc == SC.SESSION:
             return B.render(st, max_files=max_files, max_cmds=max_cmds)
         return SC.render_evidence(path, st, sc, sessions=scope_sessions,
@@ -249,6 +269,132 @@ class Copilot:
         cur_ts = tr.records[-1].raw_ts
         LL.advance(key, cur_line, cur_ts, _now_iso())
         return LL.get(key)
+
+    # ---- narration (LLM) surfaces ------------------------------------------
+    #
+    # Wrappers over narrate.* + context.build that mirror the CLI's cmd_ask /
+    # cmd_chat / cmd_now / `brief --narrate`. Each has a streaming sibling
+    # returning a narrate.StreamHandle (for the server's SSE endpoint) and a
+    # blocking sibling returning the full string. Read-only with respect to
+    # the observed agent; the only LLM calls go to the configured backend,
+    # grounded in cited evidence. ``model``/``backend`` are passed straight to
+    # narrate (None = the default backend).
+
+    def _ctx(self, path: str, st, sc: str, scope_sessions: str,
+             question: str, history) -> str:
+        """A question-aware evidence context (what cmd_ask/chat ground in)."""
+        ctx = EC.build(path, st, sc, sessions=scope_sessions,
+                       question=question, history=list(history or []),
+                       project_context=True)
+        return ctx.text
+
+    def narrate_brief(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                      scope: str = SC.SESSION, scope_sessions: str = "",
+                      include_current: bool = False,
+                      model: str = None, backend=None) -> str:
+        """LLM narration of the deterministic brief (``brief --narrate``).
+
+        Drains the streaming sibling (narrate only exposes a stream variant by
+        design) and returns the joined text."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        text = self._brief_text(path, st, SC.normalize(scope), scope_sessions)
+        return _drain(N.narrate_brief_stream(text, model=model, backend=backend))
+
+    def narrate_brief_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                             scope: str = SC.SESSION, scope_sessions: str = "",
+                             include_current: bool = False,
+                             model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`narrate_brief`."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        text = self._brief_text(path, st, SC.normalize(scope), scope_sessions)
+        return N.narrate_brief_stream(text, model=model, backend=backend)
+
+    def ask(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+            question: str, scope: str = SC.SESSION, scope_sessions: str = "",
+            include_current: bool = False,
+            model: str = None, backend=None) -> str:
+        """Answer a question grounded in the session + project context (``ask``)."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions, question, [])
+        return N.ask_brief(ctx, question, model=model, backend=backend)
+
+    def ask_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                   question: str, scope: str = SC.SESSION, scope_sessions: str = "",
+                   include_current: bool = False,
+                   model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`ask`."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions, question, [])
+        return N.ask_brief_stream(ctx, question, model=model, backend=backend)
+
+    def chat(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+             history: list, question: str, scope: str = SC.SESSION,
+             scope_sessions: str = "", include_current: bool = False,
+             model: str = None, backend=None) -> str:
+        """One grounded chat turn with prior history (``chat``).
+
+        The GUI holds the conversation history and calls this per turn; the
+        current evidence context is the only source of new observed facts.
+        """
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions, question, history)
+        return N.chat_brief(ctx, history, question, model=model, backend=backend)
+
+    def chat_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                    history: list, question: str, scope: str = SC.SESSION,
+                    scope_sessions: str = "", include_current: bool = False,
+                    model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`chat`."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions, question, history)
+        return N.chat_brief_stream(ctx, history, question, model=model, backend=backend)
+
+    def now(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+            instruction: str = "", scope: str = SC.SESSION, scope_sessions: str = "",
+            include_current: bool = False,
+            model: str = None, backend=None, raw: bool = False) -> str:
+        """Recommend the next step (``now``).
+
+        With ``raw=True`` or no backend available, returns the deterministic
+        observer recommendation (``observe.next_step``). Otherwise returns the
+        LLM recommendation grounded in the brief, falling back to the
+        deterministic one if the backend fails.
+        """
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        det = O.next_step(path, st, sc, sessions=scope_sessions)
+        if raw or not N.available(backend):
+            return det
+        text = self._brief_text(path, st, sc, scope_sessions)
+        try:
+            return N.next_step_brief(text, model=model, backend=backend,
+                                      instruction=instruction)
+        except Exception:
+            return det
+
+    def now_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                   instruction: str = "", scope: str = SC.SESSION,
+                   scope_sessions: str = "", include_current: bool = False,
+                   model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`now` (LLM path; the caller can fall back
+        to the deterministic :meth:`now` if this raises)."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        text = self._brief_text(path, st, sc, scope_sessions)
+        return N.next_step_brief_stream(text, model=model, backend=backend,
+                                         instruction=instruction)
 
     # ---- internal ---------------------------------------------------------
 
