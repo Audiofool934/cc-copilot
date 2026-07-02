@@ -39,6 +39,46 @@ class TestNarratePrompt(unittest.TestCase):
         self.assertLess(prompt.index("body [L1]"),
                         prompt.index("Current question: what changed?"))
 
+    def test_preamble_gates_tools_on_sandbox(self):
+        import os
+        saved = os.environ.get("CC_COPILOT_NARRATOR_SANDBOX")
+        try:
+            os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "read-only"
+            ro = N._preamble()
+            self.assertIn("do not use any tools or read any files", ro)
+            self.assertNotIn("You may use your tools", ro)
+
+            os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "unconfined"
+            un = N._preamble()
+            self.assertNotIn("do not use any tools or read any files", un)
+            self.assertIn("You may use your tools to read files", un)
+            # the own-session signature locate.is_own_session matches is preserved
+            # in both, so unconfined narration transcripts are still filtered out
+            # of session lists as cc-copilot's own helper sessions.
+            self.assertIn("read-only cockpit agent for supervising coding agents", ro)
+            self.assertIn("read-only cockpit agent for supervising coding agents", un)
+        finally:
+            if saved is None:
+                os.environ.pop("CC_COPILOT_NARRATOR_SANDBOX", None)
+            else:
+                os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = saved
+
+    def test_prompt_carries_unconfined_tools_clause(self):
+        # _prompt is the chokepoint every narration call funnels through, so the
+        # gated preamble must reach the model-bound prompt, not just _preamble().
+        import os
+        saved = os.environ.get("CC_COPILOT_NARRATOR_SANDBOX")
+        try:
+            os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "unconfined"
+            prompt = N._prompt("# evidence\nbody [L1]", "Task")
+            self.assertNotIn("do not use any tools or read any files", prompt)
+            self.assertIn("You may use your tools to read files", prompt)
+        finally:
+            if saved is None:
+                os.environ.pop("CC_COPILOT_NARRATOR_SANDBOX", None)
+            else:
+                os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = saved
+
     def test_chat_prompt_avoids_brief_identity_language(self):
         backend = CaptureBackend()
 

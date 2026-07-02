@@ -72,6 +72,24 @@ class TestEvidenceContext(unittest.TestCase):
         self.assertIn("project context: not included", ctx.text)
         self.assertIn("target session: `claude` session `testsess`", ctx.text)
 
+    def test_target_boundary_reflects_unconfined_narrator(self):
+        # under [narrator].sandbox = unconfined the boundary must not claim
+        # "no tool access" - the narrator was explicitly opted into tool use.
+        p = write([user("task", 60), asst("done", 5)])
+        st = S.build(T.parse(p))
+        saved = os.environ.get("CC_COPILOT_NARRATOR_SANDBOX")
+        try:
+            os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = "unconfined"
+            ctx = EC.build(p, st, "session", question="what happened?",
+                           project_context=False)
+            self.assertIn("tool use permitted (unconfined narrator)", ctx.text)
+            self.assertNotIn("no tool access", ctx.text)
+        finally:
+            if saved is None:
+                os.environ.pop("CC_COPILOT_NARRATOR_SANDBOX", None)
+            else:
+                os.environ["CC_COPILOT_NARRATOR_SANDBOX"] = saved
+
     def test_cited_line_expansion_keeps_tool_call_and_result_together(self):
         p = write([
             user("run tests", 60),

@@ -786,12 +786,20 @@ def _target_line(src: _Source) -> str:
 
 def _render_target_context(path: str, st, scope: str, selectors: list,
                            sources: list, project_context: bool) -> list:
+    from . import config
+    unconfined = config.narrator_sandbox() == "unconfined"
+    # "no tool access" describes the narrator's own posture, so under unconfined
+    # it must not contradict the CLI flags that opted the narrator into tool use.
+    boundary = ("- target boundary: observes transcript evidence and bounded project facts; "
+                "no hidden agent context, "
+                + ("tool use permitted (unconfined narrator); " if unconfined
+                   else "no tool access, ")
+                + "no prompt injection")
     rows = ["## Target Context",
             "- copilot role: read-only supervisor; not the target agent",
             f"- target scope: `{scope}`"
             + (f" · selected sessions: {', '.join(selectors)}" if selectors else ""),
-            "- target boundary: observes transcript evidence and bounded project facts; "
-            "no hidden agent context, no tool access, no prompt injection"]
+            boundary]
     rows.append("- project context: "
                 + ("bounded read-only facts included" if project_context else "not included"))
     if sources:

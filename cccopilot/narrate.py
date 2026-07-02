@@ -105,7 +105,7 @@ def _stream_with_retries(be: Backend, prompt: str, model: str = None,
             time.sleep(_retry_delay(i))
     raise last
 
-_PREAMBLE = """You are cc-copilot, a read-only cockpit agent for supervising \
+_PREAMBLE_HEAD = """You are cc-copilot, a read-only cockpit agent for supervising \
 coding agents. Below is an EVIDENCE CONTEXT PACK assembled from observable \
 session history and bounded read-only project facts. Citations may be session \
 transcript lines (`[L<n>]` or `[session:L<n>]`), project file lines \
@@ -120,9 +120,27 @@ the cited evidence; label hypotheses as inference.
 - If evidence is insufficient, state the missing observed evidence without \
 referring to internal packet names.
 - Do not mention internal packet names unless the user asks about sources.
-- Answer in the user's language. Be concise and concrete. Prose only; do not \
-use any tools or read any files.\
-"""
+- Answer in the user's language. Be concise and concrete."""
+
+# The tools clause follows the narrator sandbox (config.narrator_sandbox()):
+# read-only (default) forbids tool use; unconfined allows it, so the prompt must
+# not contradict the CLI flags that opt the narrator into tool use. The head is
+# identical for both so locate.is_own_session still recognizes our narration
+# transcripts (signature: "read-only cockpit agent for supervising coding agents").
+_TOOLS_READONLY = " Prose only; do not use any tools or read any files."
+_TOOLS_UNCONFINED = (" You may use your tools to read files and investigate when "
+                     "the evidence context is insufficient.")
+
+
+def _preamble() -> str:
+    from . import config
+    if config.narrator_sandbox() == "unconfined":
+        return _PREAMBLE_HEAD + _TOOLS_UNCONFINED
+    return _PREAMBLE_HEAD + _TOOLS_READONLY
+
+
+# Kept for backward compatibility with anything that imported the constant.
+_PREAMBLE = _PREAMBLE_HEAD + _TOOLS_READONLY
 
 _NARRATE_TASK = (
     "Orient the returning human in 3–4 sentences: what did this agent do while "
@@ -189,7 +207,7 @@ def _prompt(brief_text: str, task: str, turn_task: str = None) -> str:
     task = str(task or "").strip()
     turn_task = str(turn_task or _DEFAULT_TURN_TASK).strip()
     return redact(
-        _PREAMBLE
+        _preamble()
         + "\n\n=== TASK (stable instructions) ===\n"
         + task
         + "\n=== END TASK ===\n"
