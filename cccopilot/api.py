@@ -63,8 +63,23 @@ class Copilot:
     # ---- session discovery -------------------------------------------------
 
     def sessions(self, cwd: str, include_current: bool = False) -> List[SessionRef]:
-        """In-scope agent sessions for ``cwd``'s project, newest first."""
-        return SRC.list_sessions(cwd, include_own=include_current, agents=self._agents)
+        """In-scope agent sessions for ``cwd``'s project, newest first.
+
+        cc-copilot's own narration/helper transcripts are always excluded -
+        they are not the coding-agent sessions a GUI observes. ``include_current``
+        controls whether the live current session appears in the list (default
+        False, matching the CLI's default resolution: a "what can I switch to"
+        list excludes the session you're already in).
+        """
+        refs = SRC.list_sessions(cwd, include_own=False, agents=self._agents)
+        if include_current:
+            return refs
+        self_ids = set(SRC.current_session_ids())
+        if not self_ids:
+            return refs
+        return [r for r in refs
+                if not any(r.session_id == sid or r.session_id.startswith(sid)
+                           or sid.startswith(r.session_id) for sid in self_ids)]
 
     def projects(self, limit: int = 8) -> List[Tuple[str, int, float]]:
         """Projects (across agents) that have real session, newest first."""
@@ -83,8 +98,27 @@ class Copilot:
                             agents=self._agents)
 
     def current_session_path(self) -> Optional[str]:
-        """Best current live transcript path across in-scope agents, or None."""
-        return SRC.current_session_path()
+        """Best current live transcript path across in-scope agents, or None.
+
+        Honors the ``agents`` filter: when set, only sources matching it are
+        considered, so a filtered facade never surfaces a live session from an
+        excluded agent. With no filter this is exactly ``sources.current_session_path()``.
+        """
+        if not self._agents:
+            return SRC.current_session_path()
+        matches = []
+        for s in SRC.enabled_sources(self._agents):
+            try:
+                p = s.current_session_path()
+            except Exception:
+                p = None
+            if not p:
+                continue
+            try:
+                matches.append((os.path.getmtime(p), p))
+            except OSError:
+                continue
+        return max(matches)[1] if matches else None
 
     # ---- low-level access (presentation-free data model) ------------------
 
@@ -112,7 +146,8 @@ class Copilot:
         sc = SC.normalize(scope)
         if sc == SC.SESSION:
             return B.render(st, max_files=max_files, max_cmds=max_cmds)
-        return SC.render_evidence(path, st, sc, sessions=scope_sessions).text
+        return SC.render_evidence(path, st, sc, sessions=scope_sessions,
+                                   agents=self._agents).text
 
     def check(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
               scope: str = SC.SESSION, scope_sessions: str = "",
@@ -123,7 +158,8 @@ class Copilot:
         sc = SC.normalize(scope)
         if sc == SC.SESSION:
             return B.render_check(st)
-        return SC.render_evidence(path, st, sc, sessions=scope_sessions).text
+        return SC.render_evidence(path, st, sc, sessions=scope_sessions,
+                                   agents=self._agents).text
 
     def check_verdict(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
                       scope: str = SC.SESSION, scope_sessions: str = "",
@@ -131,7 +167,8 @@ class Copilot:
         """Scriptable verdict: 2 intervene, 1 review, 0 clear-ish."""
         path = self._require(cwd, session, include_current)
         st = S.build(SRC.parse(path))
-        return SC.exit_code(path, st, SC.normalize(scope), sessions=scope_sessions)
+        return SC.exit_code(path, st, SC.normalize(scope), sessions=scope_sessions,
+                            agents=self._agents)
 
     def observe(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
                 scope: str = SC.SESSION, scope_sessions: str = "",
@@ -139,7 +176,8 @@ class Copilot:
         """The 'where should my attention go right now?' board (what ``cc-copilot observe`` prints)."""
         path = self._require(cwd, session, include_current)
         st = S.build(SRC.parse(path))
-        return O.render(path, st, SC.normalize(scope), sessions=scope_sessions)
+        return O.render(path, st, SC.normalize(scope), sessions=scope_sessions,
+                         agents=self._agents)
 
     def since(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
               when: str = "last-look", peek: bool = True,

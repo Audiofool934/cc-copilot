@@ -104,11 +104,17 @@ def parse_selectors(value) -> list:
 
 
 def render_evidence(path: str, st=None, scope: str = SESSION,
-                    sessions=None, project_context: bool = False) -> EvidenceBrief:
+                    sessions=None, project_context: bool = False,
+                    agents=None) -> EvidenceBrief:
     """Render the read-only evidence brief for ``scope``.
 
     ``path`` is still the cockpit's anchor session. Wider scopes use it to find
     sibling transcripts and the project cwd, but do not mutate anything.
+
+    ``agents`` (an optional agent filter list, e.g. ``["claude"]``) is forwarded
+    to the session discovery used by wider scopes so the evidence honors the
+    same in-scope agent contract as ``sources.list_sessions``. ``None`` means
+    all in-scope agents (the existing behavior).
     """
     sc = normalize(scope)
     if st is None and path and os.path.isfile(path):
@@ -120,34 +126,36 @@ def render_evidence(path: str, st=None, scope: str = SESSION,
             text += "\n\n" + render_project_facts(_project_root(path, st)) + "\n\n" + _footer(PROJECT)
         return EvidenceBrief(sc, title, text)
     if sc == MULTI:
-        text = render_multi_session(path, st, selectors=parse_selectors(sessions))
+        text = render_multi_session(path, st, selectors=parse_selectors(sessions),
+                                     agents=agents)
         if project_context:
             text += "\n\n" + render_project_facts(_project_root(path, st))
             return EvidenceBrief(sc, "multi-session project view", text + "\n\n" + _footer(PROJECT))
         return EvidenceBrief(sc, "multi-session project view", text + "\n\n" + _footer(sc))
     root = _project_root(path, st)
-    text = (render_multi_session(path, st, selectors=parse_selectors(sessions))
+    text = (render_multi_session(path, st, selectors=parse_selectors(sessions), agents=agents)
             + "\n\n" + render_project_facts(root))
     return EvidenceBrief(sc, "project view", text + "\n\n" + _footer(sc))
 
 
-def exit_code(path: str, st=None, scope: str = SESSION, sessions=None) -> int:
+def exit_code(path: str, st=None, scope: str = SESSION, sessions=None,
+              agents=None) -> int:
     """Scriptable verdict for a scope: 2 intervene, 1 review, 0 clear-ish."""
     sc = normalize(scope)
     if sc == SESSION:
         verdict = A.assess(st).verdict if st is not None else "empty"
         return {"intervene": 2, "review": 1}.get(verdict, 0)
     worst = 0
-    for _ref, _st, a in _session_items(path, st, parse_selectors(sessions)):
+    for _ref, _st, a in _session_items(path, st, parse_selectors(sessions), agents=agents):
         worst = max(worst, {"intervene": 2, "review": 1}.get(a.verdict, 0))
     return worst
 
 
 def render_multi_session(path: str, current_st=None, max_sessions: int = 12,
-                         selectors=None) -> str:
+                         selectors=None, agents=None) -> str:
     selectors = parse_selectors(selectors)
-    items = _session_items(path, current_st, selectors)
-    total = len(_candidate_refs(path)) or len(items)
+    items = _session_items(path, current_st, selectors, agents=agents)
+    total = len(_candidate_refs(path, agents=agents)) or len(items)
     cwd = _project_root(path, current_st)
     shown = items[:max_sessions]
     source = f"{len(items)} work-session transcript(s)"
@@ -250,13 +258,15 @@ def render_project_facts(root: str, max_files: int = 80,
     return "\n".join(L).rstrip()
 
 
-def resolve_session_refs(path: str, selectors=None) -> list:
+def resolve_session_refs(path: str, selectors=None, agents=None) -> list:
     """Resolve session selectors to refs in this transcript directory.
 
     Selectors may be list numbers from the session list, full ids, id prefixes,
     or transcript paths. Empty selectors mean all candidate work sessions.
+
+    ``agents`` is an optional agent filter forwarded to discovery.
     """
-    refs = _candidate_refs(path)
+    refs = _candidate_refs(path, agents=agents)
     selectors = parse_selectors(selectors)
     if not selectors:
         return refs
@@ -298,13 +308,16 @@ def resolve_session_refs(path: str, selectors=None) -> list:
     return out
 
 
-def _candidate_refs(path: str, inject_current: bool = False) -> list:
+def _candidate_refs(path: str, inject_current: bool = False, agents=None) -> list:
     """All work sessions for the anchor's project, across in-scope agents.
 
     ``inject_current`` is for *pickers* only: it adds the human's live session
     even when it belongs to another project, so ``/sessions`` can offer "observe
     my current session". Evidence callers (multi-session / project briefs) leave
     it False so a foreign session never pollutes a project-scoped view.
+
+    ``agents`` is an optional agent filter forwarded to ``SRC.list_sessions`` so
+    a caller-scoped facade can keep its in-scope contract on wider scopes.
 
     The anchor agent's own sessions are discovered the way that agent groups a
     project — Claude Code co-locates them in one directory (robust even outside
@@ -328,7 +341,7 @@ def _candidate_refs(path: str, inject_current: bool = False) -> list:
         # subdirectory. Skipping every Claude entry here would then drop a real
         # sibling that refs_in_dir(dirname(anchor)) never saw.
         seen_paths = {os.path.abspath(r.path) for r in refs}
-        for ref in SRC.list_sessions(cwd, include_own=True):
+        for ref in SRC.list_sessions(cwd, include_own=True, agents=agents):
             k = os.path.abspath(ref.path)
             if k in seen_paths:
                 continue
@@ -404,8 +417,8 @@ def _mark_current_session(refs: list, here: str, inject: bool = False) -> None:
     refs.append(ref)
 
 
-def _session_items(path: str, current_st=None, selectors=None) -> list:
-    refs = resolve_session_refs(path, selectors)
+def _session_items(path: str, current_st=None, selectors=None, agents=None) -> list:
+    refs = resolve_session_refs(path, selectors, agents=agents)
     here = os.path.abspath(path) if path else ""
     out = []
     for ref in refs:

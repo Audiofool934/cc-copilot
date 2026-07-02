@@ -233,14 +233,14 @@ class TestResolveAndSessions(unittest.TestCase):
         shutil.rmtree(self.claude_home, ignore_errors=True)
         shutil.rmtree(self.codex_home, ignore_errors=True)
 
-    def _write_session(self, name="sess.jsonl", content=None):
+    def _write_session(self, sid="api-test-1", content=None):
         from cccopilot import locate as L
         d = os.path.join(self.claude_home, "projects", L.encode_cwd(self.cwd))
         os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, name)
+        p = os.path.join(d, sid + ".jsonl")   # current_session_path looks up <sid>.jsonl
         with open(p, "w", encoding="utf-8") as f:
             for ev in (content if content is not None else [
-                {"type": "user", "cwd": self.cwd, "sessionId": "api-test-1",
+                {"type": "user", "cwd": self.cwd, "sessionId": sid,
                  "message": {"role": "user", "content": "go"}},
                 {"type": "assistant",
                  "message": {"role": "assistant", "model": "claude",
@@ -283,6 +283,62 @@ class TestResolveAndSessions(unittest.TestCase):
         refs = claude_only.sessions(self.cwd)
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0].path, p)
+
+    # ---- regression tests for the Codex review findings --------------------
+
+    def _write_codex_session(self, sid="codex-test-1", ago_mtime=3000):
+        from tests import util_codex as UX
+        sdir = os.path.join(self.codex_home, "sessions", "2026", "06", "07")
+        os.makedirs(sdir, exist_ok=True)
+        p = UX.write_rollout(
+            [UX.session_meta(cwd=self.cwd, sid=sid, big_instructions=False),
+             UX.umsg("codex work", 5), UX.amsg("codex done", 1)],
+            dir=sdir, name=f"rollout-2026-06-07T10-00-00-{sid}.jsonl")
+        os.utime(p, (ago_mtime, ago_mtime))
+        return p
+
+    def test_include_current_controls_live_session(self):
+        # include_current must control the LIVE session, not helper transcripts.
+        p = self._write_session()
+        included = self.cp.sessions(self.cwd, include_current=True)
+        self.assertEqual(len(included), 1)
+        sid = included[0].session_id
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        try:
+            self.assertEqual(self.cp.sessions(self.cwd, include_current=False), [])
+            self.assertEqual(len(self.cp.sessions(self.cwd, include_current=True)), 1)
+        finally:
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+
+    def test_current_session_path_honors_agents_filter(self):
+        p = self._write_session()
+        sid = self.cp.sessions(self.cwd, include_current=True)[0].session_id
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        try:
+            # a claude-only facade sees the live claude session...
+            self.assertEqual(API.Copilot(agents=["claude"]).current_session_path(), p)
+            # ...but a codex-only facade does not, even though a session is live
+            self.assertIsNone(API.Copilot(agents=["codex"]).current_session_path())
+        finally:
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+
+    def test_wider_scope_agents_filter_excludes_other_agent(self):
+        # a Claude and a Codex session for the same project cwd
+        from cccopilot import locate as L
+        self._write_session(sid="claude-anchor")
+        d = os.path.join(self.claude_home, "projects", L.encode_cwd(self.cwd))
+        claude_p = os.path.join(d, "claude-anchor.jsonl")
+        os.utime(claude_p, (4000, 4000))     # newest -> becomes the anchor
+        self._write_codex_session(sid="codex-sibling", ago_mtime=2000)
+        # unfiltered multi-session brief spans both agents (2 transcripts)
+        both = self.cp.brief(self.cwd, scope=SC.MULTI)
+        self.assertIn("2 work-session transcript", both)
+        # a claude-only facade must not let the Codex session leak into wider scope
+        claude_only = API.Copilot(agents=["claude"])
+        only_claude = claude_only.brief(self.cwd, scope=SC.MULTI)
+        self.assertIn("1 work-session transcript", only_claude)
+        self.assertNotIn("codex-sibling", only_claude)
+        self.assertNotIn("codex done", only_claude)
 
 
 if __name__ == "__main__":

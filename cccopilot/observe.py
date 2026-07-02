@@ -35,8 +35,13 @@ class ObservationReport:
 
 
 def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
-          sessions=None) -> ObservationReport:
-    """Build a ranked, deterministic attention model for a scope."""
+          sessions=None, agents=None) -> ObservationReport:
+    """Build a ranked, deterministic attention model for a scope.
+
+    ``agents`` is an optional agent filter forwarded to session discovery for
+    wider scopes, so the report honors the same in-scope agent contract as the
+    rest of the facade. Ignored for SESSION scope (no discovery).
+    """
     sc = SC.normalize(scope)
     if st is None and path and os.path.isfile(path):
         st = S.cached_build(path, SRC.parse)
@@ -47,8 +52,8 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
         return ObservationReport(sc, root, len(items), len(items), items)
 
     selectors = SC.parse_selectors(sessions)
-    all_refs = SC.resolve_session_refs(path, [])
-    refs = SC.resolve_session_refs(path, selectors)
+    all_refs = SC.resolve_session_refs(path, [], agents=agents)
+    refs = SC.resolve_session_refs(path, selectors, agents=agents)
     here = os.path.abspath(path) if path else ""
     items = []
     for ref in refs:
@@ -63,9 +68,9 @@ def build(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
 
 
 def render(path: str, st: Optional[S.State] = None, scope: str = SC.SESSION,
-           sessions=None, max_sessions: int = 8) -> str:
+           sessions=None, max_sessions: int = 8, agents=None) -> str:
     """Render the v0.5 observer report."""
-    report = build(path, st, scope, sessions)
+    report = build(path, st, scope, sessions, agents=agents)
     qualified = report.scope != SC.SESSION
     title = _oneline(report.root, 78)
     L = [f"# cc-copilot observe - {title}",
