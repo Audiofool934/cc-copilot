@@ -4,12 +4,15 @@
   import { surfaces, type SessionRef, type State } from "$lib/jsonrpc";
   import Chat from "$lib/Chat.svelte";
   import Timeline from "$lib/Timeline.svelte";
+  import Drafts from "$lib/Drafts.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "timeline" | "brief" | "observe" | "since" | "state">("chat");
+  let tab = $state<"chat" | "timeline" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state">("chat");
+  let fleetMd = $state("");
+  let fleetLoaded = $state(false);
   let brief = $state("");
   let observe = $state("");
   let since = $state("");
@@ -93,6 +96,19 @@
     return v === 2 ? "intervene" : v === 1 ? "review" : v === 0 ? "clear" : "—";
   }
 
+  async function loadFleet() {
+    if (!cwd || fleetLoaded) return;
+    fleetLoaded = true;
+    try { fleetMd = await surfaces.observe({ cwd, scope: "multi-session" }); }
+    catch (e) { fleetMd = ""; error = e instanceof Error ? e.message : String(e); }
+  }
+
+  // load the fleet board lazily when its tab is selected, and reload on cwd change
+  $effect(() => {
+    if (tab === "fleet") loadFleet();
+  });
+  $effect(() => { cwd; fleetLoaded = false; fleetMd = ""; });
+
   onMount(loadProjects);
 </script>
 
@@ -121,7 +137,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "timeline", "brief", "observe", "since", "state"] as t}
+    {#each ["chat", "timeline", "drafts", "fleet", "brief", "observe", "since", "state"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -129,15 +145,20 @@
     </button>
   </nav>
 
-  <main class="content" class:chat={tab === "chat" || tab === "timeline"}>
+  <main class="content" class:chat={tab === "chat" || tab === "timeline" || tab === "drafts"}>
     {#if error}
       <div class="error">⚠ {error}</div>
-    {:else if !sessionPath}
+    {:else if !sessionPath && tab !== "fleet"}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
       <Chat {sessionPath} />
     {:else if tab === "timeline"}
       <Timeline {sessionPath} />
+    {:else if tab === "drafts"}
+      <Drafts {sessionPath} />
+    {:else if tab === "fleet"}
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -- markdown from the local cc-copilot server -->
+      <div class="markdown">{@html render(fleetMd)}</div>
     {:else if tab === "state"}
       <pre class="json">{stateJson ? JSON.stringify(stateJson, null, 2) : ""}</pre>
     {:else}

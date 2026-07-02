@@ -178,4 +178,13 @@ export const surfaces = {
   transcript: (path: string) => rpc<Transcript>("transcript", { path }),
   advanceSinceMark: (params: { cwd?: string; session?: string } = {}) =>
     rpc<Record<string, unknown> | null>("advance_since_mark", params as Record<string, unknown>),
+  // ---- narration (LLM), blocking request/response ----
+  now: (params: { cwd?: string; session?: string; instruction?: string; raw?: boolean } = {}) =>
+    rpc<string>("now", params as Record<string, unknown>),
+  goal: (params: { cwd?: string; session?: string; instruction?: string; raw?: boolean } = {}) =>
+    rpc<string>("goal", params as Record<string, unknown>),
+  loop: (params: { cwd?: string; session?: string; instruction?: string; raw?: boolean } = {}) =>
+    rpc<string>("loop", params as Record<string, unknown>),
+  recapSince: (params: { cwd?: string; session?: string; when?: string; instruction?: string } = {}) =>
+    rpc<string>("recap_since", params as Record<string, unknown>),
 };
