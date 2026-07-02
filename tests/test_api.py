@@ -462,6 +462,60 @@ class TestNarration(unittest.TestCase):
         self.assertEqual(list(h2), ["ok"])
         self.assertEqual(h2.text, "ok")
 
+    def test_goal_raw_is_deterministic(self):
+        from cccopilot import chat as C
+        st = S.build(T.parse(self.path))
+        expected = C._deterministic_goal(st, "")
+        self.assertEqual(API.Copilot().goal(session=self.path, raw=True), expected)
+
+    def test_goal_llm_composes_rec_and_fallback(self):
+        out = API.Copilot().goal(session=self.path, backend=self.be)
+        self.assertIn("ok", out)                       # the LLM rec
+        self.assertIn("/goal", out)                    # deterministic fallback command
+        self.assertEqual(len(self.be.prompts), 1)
+
+    def test_loop_raw_is_deterministic(self):
+        from cccopilot import chat as C
+        st = S.build(T.parse(self.path))
+        expected = C._deterministic_loop(st, "")
+        self.assertEqual(API.Copilot().loop(session=self.path, raw=True), expected)
+
+    def test_loop_llm_composes_rec_and_fallback(self):
+        out = API.Copilot().loop(session=self.path, backend=self.be)
+        self.assertIn("ok", out)
+        self.assertIn("/loop", out)
+
+    def test_goal_stream_and_loop_stream_drain(self):
+        cp = API.Copilot()
+        h1 = cp.goal_stream(session=self.path, backend=self.be)
+        self.assertEqual(list(h1), ["ok"])
+        h2 = cp.loop_stream(session=self.path, backend=self.be)
+        self.assertEqual(list(h2), ["ok"])
+
+    def test_recap_since_duration_narrates_delta(self):
+        # a duration window yields a delta (no last-look mark needed), which
+        # recap_since narrates via the backend.
+        out = API.Copilot().recap_since(session=self.path, when="30m",
+                                         backend=self.be)
+        self.assertEqual(out, "ok")
+        self.assertEqual(len(self.be.prompts), 1)
+
+    def test_recap_since_no_mark_does_not_narrate(self):
+        # with no last-look mark and last-look tracking off, since returns the
+        # status message; recap_since must not call the backend.
+        from cccopilot import lastlook as LL
+        saved = os.environ.get("CC_COPILOT_HISTORY")
+        os.environ["CC_COPILOT_HISTORY"] = "0"   # tracking off -> "tracking is off"
+        try:
+            out = API.Copilot().recap_since(session=self.path, backend=self.be)
+            self.assertEqual(self.be.prompts, [])   # no narration
+            self.assertIn("tracking is off", out)
+        finally:
+            if saved is None:
+                os.environ.pop("CC_COPILOT_HISTORY", None)
+            else:
+                os.environ["CC_COPILOT_HISTORY"] = saved
+
 
 if __name__ == "__main__":
     unittest.main()

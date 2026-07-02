@@ -25,6 +25,7 @@ import os
 from typing import List, Optional, Tuple
 
 from . import brief as B
+from . import chat as C
 from . import context as EC
 from . import lastlook as LL
 from . import narrate as N
@@ -395,6 +396,94 @@ class Copilot:
         text = self._brief_text(path, st, sc, scope_sessions)
         return N.next_step_brief_stream(text, model=model, backend=backend,
                                          instruction=instruction)
+
+    def goal(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+             instruction: str = "", scope: str = SC.SESSION, scope_sessions: str = "",
+             include_current: bool = False,
+             model: str = None, backend=None, raw: bool = False) -> str:
+        """Draft a paste-ready agent ``/goal`` command (``goal``).
+
+        With ``raw=True`` or no backend, returns the deterministic draft
+        (``chat._deterministic_goal``). Otherwise returns the LLM draft with a
+        deterministic fallback appended, mirroring ``ChatSession._goal``.
+        """
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        det = C._deterministic_goal(st, instruction)
+        if raw or not N.available(backend):
+            return det
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions,
+                        C._goal_context_question(instruction), [])
+        try:
+            rec = N.goal_brief(ctx, model=model, backend=backend, instruction=instruction)
+        except Exception as e:
+            return det + f"\n\n> _goal draft unavailable ({e}); deterministic draft above._"
+        return C.ChatSession._compose_goal(rec, det)
+
+    def goal_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                    instruction: str = "", scope: str = SC.SESSION,
+                    scope_sessions: str = "", include_current: bool = False,
+                    model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`goal` (LLM draft only; use :meth:`goal`
+        with ``raw=True`` for the deterministic draft)."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions,
+                        C._goal_context_question(instruction), [])
+        return N.goal_brief_stream(ctx, model=model, backend=backend,
+                                    instruction=instruction)
+
+    def loop(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+             instruction: str = "", scope: str = SC.SESSION, scope_sessions: str = "",
+             include_current: bool = False,
+             model: str = None, backend=None, raw: bool = False) -> str:
+        """Draft a paste-ready agent ``/loop`` command (``loop``)."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        det = C._deterministic_loop(st, instruction)
+        if raw or not N.available(backend):
+            return det
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions,
+                        C._loop_context_question(instruction), [])
+        try:
+            rec = N.loop_brief(ctx, model=model, backend=backend, instruction=instruction)
+        except Exception as e:
+            return det + f"\n\n> _loop draft unavailable ({e}); deterministic draft above._"
+        return C.ChatSession._compose_loop(rec, det)
+
+    def loop_stream(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                    instruction: str = "", scope: str = SC.SESSION,
+                    scope_sessions: str = "", include_current: bool = False,
+                    model: str = None, backend=None) -> StreamHandle:
+        """Streaming sibling of :meth:`loop` (LLM draft only)."""
+        path = self._require(cwd, session, include_current)
+        st = S.build(SRC.parse(path))
+        sc = SC.normalize(scope)
+        ctx = self._ctx(path, st, sc, scope_sessions,
+                        C._loop_context_question(instruction), [])
+        return N.loop_brief_stream(ctx, model=model, backend=backend,
+                                     instruction=instruction)
+
+    def recap_since(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                    when: str = "last-look", instruction: str = "",
+                    include_current: bool = False,
+                    model: str = None, backend=None) -> str:
+        """Narrate the ``/since`` delta into a grounded re-entry recap
+        (``since --recap``). Advances the last-look marker (like the CLI).
+
+        If there is no last-look mark yet (or tracking is off), returns the
+        ``since`` status message without narrating.
+        """
+        since_text = self.since(cwd, session, when=when, peek=False,
+                                include_current=include_current)
+        if (since_text.startswith("No last-look mark")
+                or since_text.startswith("last-look tracking is off")):
+            return since_text
+        return N.recap_since(since_text, model=model, backend=backend,
+                              instruction=instruction)
 
     # ---- internal ---------------------------------------------------------
 

@@ -66,6 +66,9 @@ _PUBLIC = {
     "ask": None,                                # returns str (params: question, ...)
     "chat": None,                               # returns str (params: history, question, ...)
     "now": None,                                # returns str
+    "goal": None,                               # returns str (params: instruction, ...)
+    "loop": None,                               # returns str (params: instruction, ...)
+    "recap_since": None,                        # returns str (params: when, instruction, ...)
 }
 
 # Streaming narration methods: each returns a narrate.StreamHandle that the
@@ -76,6 +79,8 @@ _STREAM_METHODS = {
     "ask_stream",
     "chat_stream",
     "now_stream",
+    "goal_stream",
+    "loop_stream",
 }
 
 
