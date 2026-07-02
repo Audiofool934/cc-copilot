@@ -3,12 +3,13 @@
   import { marked } from "marked";
   import { surfaces, type SessionRef, type State } from "$lib/jsonrpc";
   import Chat from "$lib/Chat.svelte";
+  import Timeline from "$lib/Timeline.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "brief" | "observe" | "since" | "state">("chat");
+  let tab = $state<"chat" | "timeline" | "brief" | "observe" | "since" | "state">("chat");
   let brief = $state("");
   let observe = $state("");
   let since = $state("");
@@ -120,7 +121,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "brief", "observe", "since", "state"] as t}
+    {#each ["chat", "timeline", "brief", "observe", "since", "state"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -128,13 +129,15 @@
     </button>
   </nav>
 
-  <main class="content" class:chat={tab === "chat"}>
+  <main class="content" class:chat={tab === "chat" || tab === "timeline"}>
     {#if error}
       <div class="error">⚠ {error}</div>
     {:else if !sessionPath}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
       <Chat {sessionPath} />
+    {:else if tab === "timeline"}
+      <Timeline {sessionPath} />
     {:else if tab === "state"}
       <pre class="json">{stateJson ? JSON.stringify(stateJson, null, 2) : ""}</pre>
     {:else}
