@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { streamMethod } from "$lib/stream";
   import { surfaces, type TranscriptRecord } from "$lib/jsonrpc";
 
@@ -10,6 +11,9 @@
   let error = $state("");
   let follow = $state(true);
   let scrollEl = $state<HTMLElement | null>(null);
+  let playing = $state(true);
+  let interval = $state(3);
+  let timer: ReturnType<typeof setInterval> | null = null;
 
   // Cap the DOM to the most recent records; full virtualization is a later
   // perf stage. The cap is generous enough to show the whole of typical
@@ -32,10 +36,16 @@
     }
   }
 
-  // refetch when the session changes
-  $effect(() => {
-    if (sessionPath) load();
-  });
+  function startPoll() {
+    stopPoll();
+    if (playing) timer = setInterval(() => { loading = false; load(); }, Math.max(1, interval) * 1000);
+  }
+  function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
+  function togglePoll() { playing = !playing; if (playing) startPoll(); else stopPoll(); }
+
+  // (re)load + (re)start polling when the session or interval changes
+  $effect(() => { if (sessionPath) { void interval; load(); startPoll(); } });
+  onDestroy(stopPoll);
 
   async function scrollToBottom() {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -83,6 +93,9 @@
     <button class="follow" class:active={follow} onclick={() => { follow = true; scrollToBottom(); }}>
       {follow ? "following" : "follow live"}
     </button>
+    <button class="poll" class:active={playing} onclick={togglePoll} title="poll the transcript for new records">
+      {playing ? "⏸ live" : "▶ live"}
+    </button>
   </div>
   {#if error}<div class="error">⚠ {error}</div>{/if}
   <div class="feed" bind:this={scrollEl} onscroll={onScroll}>
@@ -116,6 +129,9 @@
   .follow { margin-left: auto; font-size: 12px; padding: 3px 10px; border: 1px solid var(--border);
     border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
   .follow.active { color: var(--accent); border-color: var(--accent); }
+  .poll { font-size: 12px; padding: 3px 10px; border: 1px solid var(--border);
+    border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; margin-left: 6px; }
+  .poll.active { color: var(--good); border-color: var(--good); }
   .feed { flex: 1; overflow: auto; font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; }
   .truncated { color: var(--muted); padding: 8px 0; font-style: italic; }
   .rec { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }

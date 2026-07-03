@@ -16,6 +16,22 @@
   let timer: ReturnType<typeof setInterval> | null = null;
   let prevVerdict: number | null = null;
   let transition = $state("");
+  let alerts = $state(false);
+
+  async function notify(title: string, body: string) {
+    if (!alerts || typeof Notification === "undefined") return;
+    try {
+      if (Notification.permission === "default") await Notification.requestPermission();
+      if (Notification.permission === "granted") new Notification(title, { body });
+    } catch { /* notifications unavailable - silent */ }
+  }
+
+  async function toggleAlerts() {
+    alerts = !alerts;
+    if (alerts && typeof Notification !== "undefined" && Notification.permission === "default") {
+      try { await Notification.requestPermission(); } catch { /* ignore */ }
+    }
+  }
 
   async function tick() {
     if (!sessionPath) return;
@@ -27,12 +43,15 @@
       ]);
       brief = b;
       events = st.events;
+      const prevStatus = status;
       status = st.status;
       if (prevVerdict !== null && v !== prevVerdict) {
         transition = v === 2 ? "verdict escalated to intervene"
           : v === 1 ? "verdict rose to review"
           : "verdict cleared";
       } else transition = "";
+      const escalate = v === 2 || (st.status === "stalled" && prevStatus !== "stalled");
+      if (escalate) notify("cc-copilot needs attention", transition || `status ${st.status}`);
       verdict = v;
       prevVerdict = v;
       updated = new Date().toLocaleTimeString();
@@ -69,6 +88,7 @@
     <span class="pill" style="color:{vColor(verdict)}; border-color:{vColor(verdict)}">{vLabel(verdict)}</span>
     <span class="events">{events} ev</span>
     <span class="updated">{updated}</span>
+    <button class:active={alerts} onclick={toggleAlerts} title="desktop alert when the verdict escalates">🔔 alerts</button>
     {#if transition}<span class="transition">↗ {transition}</span>{/if}
   </div>
   {#if error}<div class="error">⚠ {error}</div>{/if}

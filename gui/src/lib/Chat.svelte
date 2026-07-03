@@ -11,6 +11,7 @@
   let busy = $state(false);
   let error = $state("");
   let scrollEl = $state<HTMLElement | null>(null);
+  let abortCtrl = $state<AbortController | null>(null);
 
   // load this session's saved cockpit conversation when it changes
   $effect(() => {
@@ -34,6 +35,7 @@
     messages = [...messages, { role: "user", text: q }, ai];
     await scrollToBottom();
     busy = true;
+    abortCtrl = new AbortController();
     try {
       await streamMethod(
         "chat_stream",
@@ -43,15 +45,24 @@
           messages = [...messages]; // trigger reactivity
           scrollToBottom();
         },
+        abortCtrl.signal,
       );
       // persist the completed Q&A turn (best-effort)
       surfaces.cockpitRecord({ session: sessionPath, question: q, answer: ai.text }).catch(() => {});
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const err = e as Error;
+      if (err.name === "AbortError") {
+        // user stopped - keep the partial answer, no error toast
+      } else {
+        error = err.message || String(e);
+      }
     } finally {
       busy = false;
+      abortCtrl = null;
     }
   }
+
+  function stop() { abortCtrl?.abort(); }
 
   async function forget() {
     if (!sessionPath || busy) return;
@@ -105,6 +116,9 @@
     <button onclick={send} disabled={busy || !draft.trim() || !sessionPath}>
       {busy ? "…" : "send"}
     </button>
+    {#if busy}
+      <button class="stop" onclick={stop} title="stop the streaming answer">stop</button>
+    {/if}
     {#if messages.length}
       <button class="clear" onclick={forget} disabled={busy} title="clear this session's saved cockpit conversation">clear</button>
     {/if}
@@ -149,4 +163,5 @@
   }
   button:disabled { opacity: 0.5; cursor: default; }
   .clear { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .stop { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
 </style>
