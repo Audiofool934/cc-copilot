@@ -542,5 +542,46 @@ class TestNarration(unittest.TestCase):
                 os.environ["CC_COPILOT_HISTORY"] = saved
 
 
+# ---- cockpit session persistence ----------------------------------------
+
+class TestCockpitPersistence(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: os.environ.get(k)
+                       for k in ("CC_COPILOT_STATE_DIR", "CC_COPILOT_HISTORY")}
+        os.environ["CC_COPILOT_STATE_DIR"] = tempfile.mkdtemp(prefix="ccapi-cockpit-")
+        os.environ.pop("CC_COPILOT_HISTORY", None)
+        self.path = write(_FIXTURE)
+        self.cp = API.Copilot()
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        os.unlink(self.path)
+
+    def test_record_history_forget_roundtrip(self):
+        self.assertEqual(self.cp.cockpit_history(session=self.path), [])
+        n = self.cp.cockpit_record(session=self.path, question="hi", answer="hello back")
+        self.assertEqual(n, 1)
+        self.assertEqual(self.cp.cockpit_history(session=self.path),
+                         [["user", "hi"], ["assistant", "hello back"]])
+        self.assertTrue(self.cp.cockpit_forget(session=self.path))
+        self.assertEqual(self.cp.cockpit_history(session=self.path), [])
+
+    def test_disabled_is_noop(self):
+        os.environ["CC_COPILOT_HISTORY"] = "0"
+        self.assertEqual(self.cp.cockpit_record(session=self.path, question="x", answer="y"), 0)
+        self.assertEqual(self.cp.cockpit_history(session=self.path), [])
+        self.assertFalse(self.cp.cockpit_forget(session=self.path))
+
+    def test_sessions_lists_recorded(self):
+        self.cp.cockpit_record(session=self.path, question="q1", answer="a1")
+        sessions = self.cp.cockpit_sessions()
+        self.assertTrue(any(os.path.abspath(self.path) == s.get("transcript")
+                            for s in sessions))
+
+
 if __name__ == "__main__":
     unittest.main()

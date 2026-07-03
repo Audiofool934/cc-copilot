@@ -1,6 +1,7 @@
 <script lang="ts">
   import { marked } from "marked";
   import { streamMethod } from "$lib/stream";
+  import { surfaces } from "$lib/jsonrpc";
 
   let { sessionPath } = $props<{ sessionPath: string }>();
 
@@ -10,6 +11,18 @@
   let busy = $state(false);
   let error = $state("");
   let scrollEl = $state<HTMLElement | null>(null);
+
+  // load this session's saved cockpit conversation when it changes
+  $effect(() => {
+    if (!sessionPath) { messages = []; return; }
+    (async () => {
+      try {
+        const hist = await surfaces.cockpitHistory(sessionPath);
+        messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
+        scrollToBottom();
+      } catch { /* persistence off or no history - start fresh */ }
+    })();
+  });
 
   async function send() {
     const q = draft.trim();
@@ -31,11 +44,20 @@
           scrollToBottom();
         },
       );
+      // persist the completed Q&A turn (best-effort)
+      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: ai.text }).catch(() => {});
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
+  }
+
+  async function forget() {
+    if (!sessionPath || busy) return;
+    try { await surfaces.cockpitForget(sessionPath); } catch { /* ignore */ }
+    messages = [];
+    error = "";
   }
 
   async function scrollToBottom() {
@@ -83,6 +105,9 @@
     <button onclick={send} disabled={busy || !draft.trim() || !sessionPath}>
       {busy ? "…" : "send"}
     </button>
+    {#if messages.length}
+      <button class="clear" onclick={forget} disabled={busy} title="clear this session's saved cockpit conversation">clear</button>
+    {/if}
   </div>
 </div>
 
@@ -123,4 +148,5 @@
     background: var(--accent); color: #0f1115; border: none; border-radius: 8px;
   }
   button:disabled { opacity: 0.5; cursor: default; }
+  .clear { background: transparent; color: var(--muted); border: 1px solid var(--border); }
 </style>

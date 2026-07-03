@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime
 import os
+from dataclasses import asdict
 from typing import List, Optional, Tuple
 
 from . import brief as B
@@ -34,6 +35,7 @@ from . import scope as SC
 from . import since as SI
 from . import sources as SRC
 from . import state as S
+from . import store as ST
 from .locate import SessionRef
 from .narrate import StreamHandle
 from .serialize import since_view_to_dict
@@ -509,6 +511,68 @@ class Copilot:
         return N.recap_since(since_text, model=model, backend=backend,
                               instruction=instruction)
 
+    # ---- cockpit session persistence -------------------------------------
+    #
+    # The TUI persists every cockpit Q&A conversation (store.py) so a returning
+    # human can resume; these wrappers expose that to the GUI. Best-effort: a
+    # no-op when history persistence is disabled ([history] enabled=false /
+    # CC_COPILOT_HISTORY=0), and never raises - a storage failure degrades to
+    # in-memory-only, matching the TUI's contract.
+
+    def cockpit_sessions(self, cwd: Optional[str] = None) -> List[dict]:
+        """Resumable cockpit conversations (newest first), as JSON-safe headers."""
+        if not ST.enabled():
+            return []
+        try:
+            out = []
+            for h in ST.list_conversations(cwd):
+                d = asdict(h)
+                d["ago"] = h.ago()
+                out.append(d)
+            return out
+        except Exception:
+            return []
+
+    def cockpit_history(self, cwd: Optional[str] = None,
+                        session: Optional[str] = None) -> List[list]:
+        """This session's saved cockpit Q&A turns as ``[[role, text], ...]``."""
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return []
+        try:
+            store = ST.Store.open_for(path, enabled=ST.enabled())
+            return [[r, t] for r, t in store.load_history()]
+        except Exception:
+            return []
+
+    def cockpit_record(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                       question: str, answer: str,
+                       backend=None, model=None) -> int:
+        """Record a cockpit Q&A turn for this session. Returns the turn count
+        after the record, or 0 if persistence is disabled / the record failed."""
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return 0
+        try:
+            store = ST.Store.open_for(path, enabled=True)
+            st = S.build(SRC.parse(path))
+            store.record_turn(question, answer, st=st, backend=backend, model=model)
+            h = store.header()
+            return h.turns if h else 0
+        except Exception:
+            return 0
+
+    def cockpit_forget(self, cwd: Optional[str] = None,
+                       session: Optional[str] = None) -> bool:
+        """Delete this session's saved cockpit conversation. Returns True if deleted."""
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return False
+        try:
+            return ST.Store.open_for(path, enabled=True).delete()
+        except Exception:
+            return False
+
     # ---- internal ---------------------------------------------------------
 
     def _require(self, cwd: Optional[str], session: Optional[str],
@@ -527,3 +591,12 @@ class Copilot:
             label = f"session {session!r}" if session else f"cwd {cwd!r}"
             raise SessionNotFound(f"no cc-copilot session found for {label}")
         return path
+
+    def _path_or_none(self, cwd: Optional[str], session: Optional[str]) -> Optional[str]:
+        """Resolve a session path without raising - returns None if nothing
+        resolves. Used by the best-effort cockpit-persistence methods."""
+        if session and os.path.isfile(session):
+            return session
+        if not cwd:
+            return None
+        return self.resolve(cwd, session)

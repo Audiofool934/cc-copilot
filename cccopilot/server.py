@@ -62,6 +62,11 @@ _PUBLIC = {
     "since": None,                             # returns str
     "diff": None,                              # returns dict (structured /diff view)
     "advance_since_mark": None,                # returns dict | None
+    # ---- cockpit session persistence (best-effort) ----
+    "cockpit_sessions": None,                  # returns list[dict] (ConvHeader)
+    "cockpit_history": None,                  # returns list[[role, text]]
+    "cockpit_record": None,                    # returns int (turn count); params: question, answer, ...
+    "cockpit_forget": None,                     # returns bool
     # ---- narration (LLM), blocking request/response ----
     "narrate_brief": None,                      # returns str
     "ask": None,                                # returns str (params: question, ...)
