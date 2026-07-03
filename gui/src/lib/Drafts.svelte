@@ -12,7 +12,7 @@
   let error = $state("");
   let copied = $state(false);
 
-  type Kind = "now" | "goal" | "loop" | "recap";
+  type Kind = "now" | "goal" | "loop" | "recap" | "handoff";
   let kind = $state<Kind | "">("");
 
   async function run(k: Kind) {
@@ -25,6 +25,8 @@
     try {
       if (k === "recap") {
         result = await surfaces.recapSince({ session: sessionPath, when, instruction });
+      } else if (k === "handoff") {
+        result = await surfaces.handoff({ session: sessionPath });
       } else {
         const method = `${k}_stream`;
         await streamMethod(method, { session: sessionPath, instruction },
@@ -44,7 +46,7 @@
 
   function render(md: string): string { return marked.parse(md || "", { breaks: false }) as string; }
 
-  const LABELS: Record<Kind, string> = { now: "/now", goal: "/goal", loop: "/loop", recap: "recap since" };
+  const LABELS: Record<Kind, string> = { now: "/now", goal: "/goal", loop: "/loop", recap: "recap since", handoff: "handoff" };
 </script>
 
 <div class="drafts">
@@ -53,7 +55,7 @@
     {#if kind === "recap"}
       <input class="when" bind:value={when} placeholder="when (30m / 2h / last-look)" />
     {/if}
-    {#each ["now", "goal", "loop", "recap"] as k}
+    {#each ["now", "goal", "loop", "recap", "handoff"] as k}
       <button class:active={kind === k} onclick={() => run(k as Kind)} disabled={busy || !sessionPath}>
         {LABELS[k as Kind]}
       </button>

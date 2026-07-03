@@ -541,6 +541,12 @@ class TestNarration(unittest.TestCase):
             else:
                 os.environ["CC_COPILOT_HISTORY"] = saved
 
+    def test_handoff_renders_shareable_brief(self):
+        out = API.Copilot().handoff(session=self.path)
+        self.assertIn("# Handoff", out)
+        self.assertIn("Full brief", out)
+        self.assertIn("testsess", out)  # the session id appears in the meta
+
 
 # ---- cockpit session persistence ----------------------------------------
 

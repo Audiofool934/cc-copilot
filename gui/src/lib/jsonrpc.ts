@@ -213,6 +213,8 @@ export const surfaces = {
     rpc<string>("loop", params as Record<string, unknown>),
   recapSince: (params: { cwd?: string; session?: string; when?: string; instruction?: string } = {}) =>
     rpc<string>("recap_since", params as Record<string, unknown>),
+  handoff: (params: { cwd?: string; session?: string } = {}) =>
+    rpc<string>("handoff", params as Record<string, unknown>),
   // ---- cockpit session persistence ----
   cockpitHistory: (session: string) =>
     rpc<[string, string][]>("cockpit_history", { session }),

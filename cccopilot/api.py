@@ -28,6 +28,7 @@ from typing import List, Optional, Tuple
 from . import brief as B
 from . import chat as C
 from . import context as EC
+from . import handoff as HO
 from . import lastlook as LL
 from . import narrate as N
 from . import observe as O
@@ -510,6 +511,21 @@ class Copilot:
             return since_text
         return N.recap_since(since_text, model=model, backend=backend,
                               instruction=instruction)
+
+    def handoff(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+                include_current: bool = False) -> str:
+        """A shareable Markdown handoff brief for this session (``/handoff``):
+        identity meta, a 'while you were away' since delta (if any), and the
+        full brief, demoted under headings so it pastes cleanly."""
+        path = self._require(cwd, session, include_current)
+        tr = SRC.parse(path)
+        st = S.build(tr)
+        agent = SRC.source_for_path(path).name
+        generated_at = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+        sv = self._since_view(cwd, session, "last-look", True, include_current)
+        since_view = sv if isinstance(sv, SI.SinceView) else None
+        return HO.render(st, agent=agent, generated_at=generated_at,
+                         since_view=since_view)
 
     # ---- cockpit session persistence -------------------------------------
     #

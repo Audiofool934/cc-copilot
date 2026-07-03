@@ -75,6 +75,7 @@ _PUBLIC = {
     "goal": None,                               # returns str (params: instruction, ...)
     "loop": None,                               # returns str (params: instruction, ...)
     "recap_since": None,                        # returns str (params: when, instruction, ...)
+    "handoff": None,                            # returns str (shareable markdown brief)
 }
 
 # Streaming narration methods: each returns a narrate.StreamHandle that the
