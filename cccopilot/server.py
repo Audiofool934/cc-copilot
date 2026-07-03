@@ -71,6 +71,8 @@ _PUBLIC = {
     "backends": None,                          # returns list[dict] (availability + active)
     "models_for": None,                        # returns list[dict] (params: name)
     "set_backend": None,                        # returns str (config path); params: name, model?, key?
+    "needs_onboarding": None,                   # returns bool
+    "onboard_choices": None,                    # returns list[dict] (params: featured_only?)
     # ---- narration (LLM), blocking request/response ----
     "narrate_brief": None,                      # returns str
     "ask": None,                                # returns str (params: question, ...)

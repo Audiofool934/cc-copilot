@@ -8,12 +8,14 @@
   import Live from "$lib/Live.svelte";
   import Diff from "$lib/Diff.svelte";
   import Settings from "$lib/Settings.svelte";
+  import Welcome from "$lib/Welcome.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
   let tab = $state<"chat" | "live" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
+  let needsWelcome = $state(false);
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
   let scope = $state<"session" | "multi-session" | "project">("session");
@@ -134,7 +136,10 @@
   $effect(() => { if (sessionPath) { void scope; void scopeSessions; loadAll(); } });
   $effect(() => { if (tab === "since" && sessionPath) { void sinceWhen; loadSince(); } });
 
-  onMount(loadProjects);
+  onMount(async () => {
+    try { needsWelcome = await surfaces.needsOnboarding(); } catch { /* ignore */ }
+    loadProjects();
+  });
 </script>
 
 <div class="app">
@@ -224,6 +229,10 @@
     {/if}
   </main>
 </div>
+
+{#if needsWelcome}
+  <Welcome ondone={() => { needsWelcome = false; loadProjects(); }} />
+{/if}
 
 <style>
   :global(:root) {

@@ -577,6 +577,31 @@ class Copilot:
         config, preserving existing settings. Returns the config path written."""
         return OB.write_choice(name, model=model, key_value=key)
 
+    def needs_onboarding(self) -> bool:
+        """True on first run only: no config file yet (and not opted out)."""
+        try:
+            return bool(OB.needs_onboarding())
+        except Exception:
+            return False
+
+    def onboard_choices(self, featured_only: bool = True) -> List[dict]:
+        """Curated backend choices with readiness + status, for the welcome screen."""
+        try:
+            out = []
+            for d in OB.detect(featured_only=featured_only):
+                c = d.choice
+                out.append({
+                    "name": c.name, "label": c.label, "kind": c.kind, "blurb": c.blurb,
+                    "key_env": c.key_env,
+                    "default_model": getattr(c, "default_model", "") or "",
+                    "featured": c.featured,
+                    "brand_hex": getattr(c, "brand_hex", "") or "",
+                    "ready": d.ready, "status": d.status,
+                })
+            return out
+        except Exception:
+            return []
+
     # ---- cockpit session persistence -------------------------------------
     #
     # The TUI persists every cockpit Q&A conversation (store.py) so a returning

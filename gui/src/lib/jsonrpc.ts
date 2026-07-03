@@ -242,4 +242,19 @@ export const surfaces = {
   modelsFor: (name: string) => rpc<ModelInfo[]>('models_for', { name }),
   setBackend: (params: { name: string; model?: string; key?: string }) =>
     rpc<string>('set_backend', params as Record<string, unknown>),
+  needsOnboarding: () => rpc<boolean>('needs_onboarding', {}),
+  onboardChoices: (featured_only = true) =>
+    rpc<OnboardChoice[]>('onboard_choices', { featured_only }),
 };
+export interface OnboardChoice {
+  name: string;
+  label: string;
+  kind: string;
+  blurb: string;
+  key_env: string;
+  default_model: string;
+  featured: boolean;
+  brand_hex: string;
+  ready: boolean;
+  status: string;
+}

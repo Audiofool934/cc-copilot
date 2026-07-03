@@ -605,6 +605,16 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(ms[0]["id"], "deepseek-v4-flash")
         self.assertIn("note", ms[0])
 
+    def test_onboard_choices_shape(self):
+        cs = API.Copilot().onboard_choices()
+        self.assertIsInstance(cs, list)
+        for c in cs:
+            for k in ("name", "label", "kind", "ready", "status"):
+                self.assertIn(k, c)
+
+    def test_needs_onboarding_is_bool(self):
+        self.assertIsInstance(API.Copilot().needs_onboarding(), bool)
+
 
 if __name__ == "__main__":
     unittest.main()
