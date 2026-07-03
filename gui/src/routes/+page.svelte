@@ -15,9 +15,12 @@
   let tab = $state<"chat" | "live" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state">("chat");
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
+  let scope = $state<"session" | "multi-session" | "project">("session");
+  let scopeSessions = $state("");
   let brief = $state("");
   let observe = $state("");
   let since = $state("");
+  let sinceWhen = $state("30m");
   let stateJson = $state<State | null>(null);
   let verdict = $state<number | null>(null);
   let loading = $state(false);
@@ -66,23 +69,39 @@
     loading = true;
     error = "";
     try {
-      const [b, o, s, st, v] = await Promise.all([
-        surfaces.brief({ session: sessionPath }),
-        surfaces.observe({ session: sessionPath }),
-        surfaces.since({ session: sessionPath, when: "30m" }),
+      const sp = { session: sessionPath, scope, scope_sessions: scopeSessions };
+      const [b, o, st, v] = await Promise.all([
+        surfaces.brief(sp),
+        surfaces.observe(sp),
         surfaces.state(sessionPath),
-        surfaces.checkVerdict({ session: sessionPath }),
+        surfaces.checkVerdict(sp),
       ]);
       brief = b;
       observe = o;
-      since = s;
       stateJson = st;
       verdict = v;
+      if (tab === "since") loadSince();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  }
+
+  async function loadSince() {
+    if (!sessionPath) return;
+    try {
+      since = await surfaces.since({ session: sessionPath, when: sinceWhen, peek: true });
+    } catch (e) {
+      since = "";
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function markSeen() {
+    if (!sessionPath) return;
+    try { await surfaces.advanceSinceMark({ session: sessionPath }); await loadSince(); }
+    catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
 
   function render(md: string): string {
@@ -110,6 +129,9 @@
     if (tab === "fleet") loadFleet();
   });
   $effect(() => { cwd; fleetLoaded = false; fleetMd = ""; });
+  // reload reading surfaces when the scope changes; reload since when its window changes
+  $effect(() => { if (sessionPath) { void scope; void scopeSessions; loadAll(); } });
+  $effect(() => { if (tab === "since" && sessionPath) { void sinceWhen; loadSince(); } });
 
   onMount(loadProjects);
 </script>
@@ -132,6 +154,18 @@
           {/each}
         </select>
       </label>
+      <label>scope
+        <select bind:value={scope}>
+          <option value="session">session</option>
+          <option value="multi-session">multi</option>
+          <option value="project">project</option>
+        </select>
+      </label>
+      {#if scope !== "session"}
+        <label>sessions
+          <input bind:value={scopeSessions} placeholder="ids/prefixes, or blank for all" />
+        </label>
+      {/if}
     </div>
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
       {verdictLabel(verdict)}
@@ -153,23 +187,37 @@
     {:else if !sessionPath && tab !== "fleet"}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
-      <Chat {sessionPath} />
+      <Chat {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "live"}
-      <Live {sessionPath} />
+      <Live {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "timeline"}
       <Timeline {sessionPath} />
     {:else if tab === "diff"}
       <Diff {sessionPath} />
     {:else if tab === "drafts"}
-      <Drafts {sessionPath} />
+      <Drafts {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "fleet"}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- markdown from the local cc-copilot server -->
       <div class="markdown">{@html render(fleetMd)}</div>
     {:else if tab === "state"}
       <pre class="json">{stateJson ? JSON.stringify(stateJson, null, 2) : ""}</pre>
+    {:else if tab === "since"}
+      <div class="since-controls">
+        <label>when
+          <select bind:value={sinceWhen}>
+            <option value="30m">last 30m</option>
+            <option value="2h">last 2h</option>
+            <option value="1d">last 1d</option>
+            <option value="last-look">last look</option>
+          </select>
+        </label>
+        <button class="mark" onclick={markSeen} disabled={!sessionPath}>mark seen</button>
+      </div>
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -- markdown from the local cc-copilot server -->
+      <div class="markdown">{@html render(since)}</div>
     {:else}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- the markdown comes from the local cc-copilot server, not user input -->
-      <div class="markdown">{@html render(tab === "brief" ? brief : tab === "observe" ? observe : since)}</div>
+      <div class="markdown">{@html render(tab === "brief" ? brief : observe)}</div>
     {/if}
   </main>
 </div>
@@ -225,6 +273,11 @@
 
   .content { overflow: auto; padding: 20px 28px; flex: 1; }
   .content.chat { padding: 12px 16px 16px; overflow: hidden; display: flex; }
+  .since-controls { display: flex; gap: 12px; align-items: center; padding: 0 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .since-controls label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .since-controls select { padding: 4px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .mark { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--accent); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .mark:disabled { opacity: 0.5; }
 
   .markdown { max-width: 880px; line-height: 1.55; }
   .markdown :global(h1) { font-size: 18px; margin: 0 0 8px; }

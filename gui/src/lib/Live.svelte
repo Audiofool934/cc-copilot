@@ -3,7 +3,7 @@
   import { marked } from "marked";
   import { surfaces } from "$lib/jsonrpc";
 
-  let { sessionPath } = $props<{ sessionPath: string }>();
+  let { sessionPath, scope = "session", scopeSessions = "" } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string }>();
 
   let brief = $state("");
   let verdict = $state<number | null>(null);
@@ -21,8 +21,8 @@
     if (!sessionPath) return;
     try {
       const [b, v, st] = await Promise.all([
-        surfaces.brief({ session: sessionPath }),
-        surfaces.checkVerdict({ session: sessionPath }),
+        surfaces.brief({ session: sessionPath, scope, scope_sessions: scopeSessions }),
+        surfaces.checkVerdict({ session: sessionPath, scope, scope_sessions: scopeSessions }),
         surfaces.state(sessionPath),
       ]);
       brief = b;

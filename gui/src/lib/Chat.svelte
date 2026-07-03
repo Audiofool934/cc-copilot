@@ -3,7 +3,7 @@
   import { streamMethod } from "$lib/stream";
   import { surfaces } from "$lib/jsonrpc";
 
-  let { sessionPath } = $props<{ sessionPath: string }>();
+  let { sessionPath, scope = "session", scopeSessions = "" } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string }>();
 
   interface Message { role: "user" | "assistant"; text: string }
   let messages = $state<Message[]>([]);
@@ -37,7 +37,7 @@
     try {
       await streamMethod(
         "chat_stream",
-        { session: sessionPath, history, question: q },
+        { session: sessionPath, history, question: q, scope, scope_sessions: scopeSessions },
         (chunk) => {
           ai.text += chunk;
           messages = [...messages]; // trigger reactivity

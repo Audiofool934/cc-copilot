@@ -188,13 +188,13 @@ export const surfaces = {
   currentSessionPath: () => rpc<string | null>("current_session_path", {}),
   resolve: (cwd: string, session: string | null = null) =>
     rpc<string | null>("resolve", { cwd, session }),
-  brief: (params: { cwd?: string; session?: string; scope?: string } = {}) =>
+  brief: (params: { cwd?: string; session?: string; scope?: string; scope_sessions?: string } = {}) =>
     rpc<string>("brief", params as Record<string, unknown>),
-  check: (params: { cwd?: string; session?: string; scope?: string } = {}) =>
+  check: (params: { cwd?: string; session?: string; scope?: string; scope_sessions?: string } = {}) =>
     rpc<string>("check", params as Record<string, unknown>),
-  checkVerdict: (params: { cwd?: string; session?: string; scope?: string } = {}) =>
+  checkVerdict: (params: { cwd?: string; session?: string; scope?: string; scope_sessions?: string } = {}) =>
     rpc<number>("check_verdict", params as Record<string, unknown>),
-  observe: (params: { cwd?: string; session?: string; scope?: string } = {}) =>
+  observe: (params: { cwd?: string; session?: string; scope?: string; scope_sessions?: string } = {}) =>
     rpc<string>("observe", params as Record<string, unknown>),
   since: (params: { cwd?: string; session?: string; when?: string; peek?: boolean } = {}) =>
     rpc<string>("since", params as Record<string, unknown>),

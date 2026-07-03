@@ -3,7 +3,7 @@
   import { streamMethod } from "$lib/stream";
   import { surfaces } from "$lib/jsonrpc";
 
-  let { sessionPath } = $props<{ sessionPath: string }>();
+  let { sessionPath, scope = "session", scopeSessions = "" } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string }>();
 
   let instruction = $state("");
   let when = $state("30m");
@@ -29,7 +29,7 @@
         result = await surfaces.handoff({ session: sessionPath });
       } else {
         const method = `${k}_stream`;
-        await streamMethod(method, { session: sessionPath, instruction },
+        await streamMethod(method, { session: sessionPath, instruction, scope, scope_sessions: scopeSessions },
           (c) => { result += c; });
       }
     } catch (e) {
