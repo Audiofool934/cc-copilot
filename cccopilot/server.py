@@ -67,6 +67,10 @@ _PUBLIC = {
     "cockpit_history": None,                  # returns list[[role, text]]
     "cockpit_record": None,                    # returns int (turn count); params: question, answer, ...
     "cockpit_forget": None,                     # returns bool
+    # ---- settings: backends / models ----
+    "backends": None,                          # returns list[dict] (availability + active)
+    "models_for": None,                        # returns list[dict] (params: name)
+    "set_backend": None,                        # returns str (config path); params: name, model?, key?
     # ---- narration (LLM), blocking request/response ----
     "narrate_brief": None,                      # returns str
     "ask": None,                                # returns str (params: question, ...)

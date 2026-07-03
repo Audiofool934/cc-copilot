@@ -589,5 +589,22 @@ class TestCockpitPersistence(unittest.TestCase):
                             for s in sessions))
 
 
+# ---- settings: backends / models ----------------------------------------
+
+class TestSettings(unittest.TestCase):
+    def test_backends_returns_list_with_expected_shape(self):
+        bs = API.Copilot().backends()
+        self.assertIsInstance(bs, list)
+        for b in bs:
+            for key in ("name", "available", "active", "needs_key", "key_env"):
+                self.assertIn(key, b)
+
+    def test_models_for_uses_static_catalog(self):
+        ms = API.Copilot().models_for("deepseek")
+        self.assertTrue(ms)
+        self.assertEqual(ms[0]["id"], "deepseek-v4-flash")
+        self.assertIn("note", ms[0])
+
+
 if __name__ == "__main__":
     unittest.main()

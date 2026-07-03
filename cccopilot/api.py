@@ -26,12 +26,15 @@ from dataclasses import asdict
 from typing import List, Optional, Tuple
 
 from . import brief as B
+from . import backends as BK
 from . import chat as C
 from . import context as EC
 from . import handoff as HO
 from . import lastlook as LL
+from . import models as MODELS
 from . import narrate as N
 from . import observe as O
+from . import onboard as OB
 from . import scope as SC
 from . import since as SI
 from . import sources as SRC
@@ -526,6 +529,53 @@ class Copilot:
         since_view = sv if isinstance(sv, SI.SinceView) else None
         return HO.render(st, agent=agent, generated_at=generated_at,
                          since_view=since_view)
+
+    # ---- settings: backends / models --------------------------------------
+    #
+    # The model picker: list backends with availability + the active one, list
+    # curated models, and write a chosen backend/model (+ optional API key) to
+    # the cc-copilot config. set_backend mutates ~/.cc-copilot.toml (cc-copilot's
+    # own config, not the observed agent); the other two are read-only.
+
+    def backends(self) -> List[dict]:
+        """LLM backends with availability and the active one marked."""
+        try:
+            reg = BK.registry()
+            active = ""
+            try:
+                active = BK.resolve(None).name
+            except Exception:
+                pass
+            out = []
+            for name, be in sorted(reg.items()):
+                try:
+                    ch = OB.choice_for_or_none(name)
+                    out.append({
+                        "name": name,
+                        "available": bool(be.available()),
+                        "reason": "" if be.available() else be.reason(),
+                        "active": name == active,
+                        "needs_key": bool(getattr(be, "needs_key", False)),
+                        "key_env": getattr(ch, "key_env", "") or "",
+                        "default_model": getattr(be, "default_model", "") or "",
+                    })
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
+    def models_for(self, name: str) -> List[dict]:
+        """Curated models for a backend, as ``[{"id", "note"}, ...]``."""
+        try:
+            return [{"id": m.id, "note": m.note} for m in MODELS.models_for(name)]
+        except Exception:
+            return []
+
+    def set_backend(self, name: str, *, model: str = "", key: str = "") -> str:
+        """Write the chosen backend (and optional model + API key) to the cc-copilot
+        config, preserving existing settings. Returns the config path written."""
+        return OB.write_choice(name, model=model, key_value=key)
 
     # ---- cockpit session persistence -------------------------------------
     #

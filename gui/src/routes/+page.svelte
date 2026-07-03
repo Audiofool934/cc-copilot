@@ -7,12 +7,13 @@
   import Drafts from "$lib/Drafts.svelte";
   import Live from "$lib/Live.svelte";
   import Diff from "$lib/Diff.svelte";
+  import Settings from "$lib/Settings.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "live" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state">("chat");
+  let tab = $state<"chat" | "live" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
   let scope = $state<"session" | "multi-session" | "project">("session");
@@ -173,7 +174,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "live", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state"] as t}
+    {#each ["chat", "live", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state", "settings"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -201,6 +202,8 @@
       <div class="markdown">{@html render(fleetMd)}</div>
     {:else if tab === "state"}
       <pre class="json">{stateJson ? JSON.stringify(stateJson, null, 2) : ""}</pre>
+    {:else if tab === "settings"}
+      <Settings />
     {:else if tab === "since"}
       <div class="since-controls">
         <label>when

@@ -159,6 +159,19 @@ export interface DiffView {
   text: string;
   message?: string;
 }
+export interface BackendInfo {
+  name: string;
+  available: boolean;
+  reason: string;
+  active: boolean;
+  needs_key: boolean;
+  key_env: string;
+  default_model: string;
+}
+export interface ModelInfo {
+  id: string;
+  note: string;
+}
 export interface State {
   assessment: Assessment;
   session_id: string;
@@ -224,4 +237,9 @@ export const surfaces = {
     rpc<boolean>("cockpit_forget", { session }),
   cockpitSessions: (cwd?: string) =>
     rpc<Record<string, unknown>[]>('cockpit_sessions', cwd ? { cwd } : {}),
+  // ---- settings: backends / models ----
+  backends: () => rpc<BackendInfo[]>('backends', {}),
+  modelsFor: (name: string) => rpc<ModelInfo[]>('models_for', { name }),
+  setBackend: (params: { name: string; model?: string; key?: string }) =>
+    rpc<string>('set_backend', params as Record<string, unknown>),
 };
