@@ -36,6 +36,7 @@ from . import sources as SRC
 from . import state as S
 from .locate import SessionRef
 from .narrate import StreamHandle
+from .serialize import since_view_to_dict
 from .state import State
 from .transcript import Transcript
 
@@ -200,19 +201,11 @@ class Copilot:
         return O.render(path, st, SC.normalize(scope), sessions=scope_sessions,
                          agents=self._agents)
 
-    def since(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
-              when: str = "last-look", peek: bool = True,
-              include_current: bool = False) -> str:
-        """What changed since ``when`` (what ``cc-copilot since`` prints, deterministic path).
-
-        ``when`` is ``"last-look"`` (the stored marker for this session) or a
-        duration like ``"30m"`` / ``"2h"`` / ``"1d"``.
-
-        With ``peek=True`` (the default) the call is read-only: it never creates
-        or advances the last-look marker, so a GUI can re-render freely. With
-        ``peek=False`` it mirrors ``cc-copilot since`` - recording a marker on
-        first use and advancing it forward-only once the delta is rendered.
-        """
+    def _since_view(self, cwd, session, when, peek, include_current):
+        """Build the since SinceView for ``when``, or return a status string
+        (no last-look mark yet / tracking off). Shared by :meth:`since` (which
+        returns the rendered text) and :meth:`diff` (which returns the
+        structured dict). Raises ``ValueError`` for an unparseable duration."""
         path = self._require(cwd, session, include_current)
         tr = SRC.parse(path)
         st = S.build(tr)
@@ -243,14 +236,45 @@ class Copilot:
                             label="last look", looked_at=mark.get("looked_at", ""))
             if not peek:
                 LL.advance(key, cur_line, cur_ts, _now_iso())
-            return view.text
+            return view
 
         secs = SI.parse_duration(when)
         if secs is None:
             raise ValueError(f"unknown time {when!r}; use 'last-look' or a "
                              f"duration like 30m / 2h / 1d")
-        view = SI.build(tr, st, seconds=secs, label=when)
-        return view.text
+        return SI.build(tr, st, seconds=secs, label=when)
+
+    def since(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+              when: str = "last-look", peek: bool = True,
+              include_current: bool = False) -> str:
+        """What changed since ``when`` (what ``cc-copilot since`` prints, deterministic path).
+
+        ``when`` is ``"last-look"`` (the stored marker for this session) or a
+        duration like ``"30m"`` / ``"2h"`` / ``"1d"``.
+
+        With ``peek=True`` (the default) the call is read-only: it never creates
+        or advances the last-look marker, so a GUI can re-render freely. With
+        ``peek=False`` it mirrors ``cc-copilot since`` - recording a marker on
+        first use and advancing it forward-only once the delta is rendered.
+        """
+        v = self._since_view(cwd, session, when, peek, include_current)
+        return v.text if isinstance(v, SI.SinceView) else v
+
+    def diff(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
+             when: str = "30m", peek: bool = True,
+             include_current: bool = False) -> dict:
+        """The structured ``/diff`` view: the typed delta behind the ``since``
+        text - new turns, messages, commands, failures, changed files, the
+        status/verdict transition, and the pending-ask cue. ``when`` is a
+        duration (``"30m"`` / ``"2h"`` / ``"1d"``) or ``"last-look"``.
+
+        Returns ``{"message": ..., "nothing_new": true, "new_events": 0}`` when
+        there is no last-look mark yet or tracking is off (no diff to render).
+        """
+        v = self._since_view(cwd, session, when, peek, include_current)
+        if isinstance(v, SI.SinceView):
+            return since_view_to_dict(v)
+        return {"message": v, "nothing_new": True, "new_events": 0}
 
     def advance_since_mark(self, cwd: Optional[str] = None,
                            session: Optional[str] = None) -> Optional[dict]:

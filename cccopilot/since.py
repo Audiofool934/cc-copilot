@@ -16,7 +16,7 @@ import re
 import subprocess
 
 from . import git_safe as GIT
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -94,6 +94,14 @@ class SinceView:
     text: str
     nothing_new: bool = True       # True iff the render is the "Nothing new" line
     pending_ask: str = ""          # cited "last ask still unanswered" cue, or ""
+    # Structured delta rows (populated by build) for the GUI /diff view - the
+    # rendered ``text`` is the Markdown; these are the typed records behind it.
+    new_humans: list = field(default_factory=list)        # Record: new user turns
+    new_agent: list = field(default_factory=list)         # Record: new agent messages
+    new_commands: list = field(default_factory=list)      # Command: new commands
+    new_failures: list = field(default_factory=list)      # Failure: new failures
+    new_changed_files: list = field(default_factory=list)  # FileChange: files changed
+    diff: object = None                                   # State.Diff (transitions + deltas)
 
     @property
     def has_changes(self) -> bool:
@@ -216,7 +224,10 @@ def build(tr: Transcript, st: S.State, *, since_line: Optional[int] = None,
     text = _render(label, cutoff, st, d, new_humans, new_agent,
                    new_cmds, new_fail, new_chg, looked_at)
     return SinceView(cutoff_line=cutoff, label=label, new_events=n, text=text,
-                     nothing_new=nothing, pending_ask=_pending_ask_line(st))
+                     nothing_new=nothing, pending_ask=_pending_ask_line(st),
+                     new_humans=new_humans, new_agent=new_agent,
+                     new_commands=new_cmds, new_failures=new_fail,
+                     new_changed_files=new_chg, diff=d)
 
 
 def _pending_ask_line(st: S.State) -> str:

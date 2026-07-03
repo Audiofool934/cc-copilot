@@ -220,6 +220,31 @@ class TestSincePeek(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cp.since(session=self.path, when="soon")
 
+    def test_diff_returns_structured_delta(self):
+        d = self.cp.diff(session=self.path, when="30m")
+        self.assertIsInstance(d, dict)
+        self.assertGreater(d["new_events"], 0)
+        self.assertEqual(d["label"], "30m")
+        self.assertTrue(d["new_agent"], "expected the agent's new messages")
+        self.assertTrue(d["new_commands"], "expected Bash + Edit commands")
+        self.assertTrue(d["new_changed_files"], "expected a.py changed")
+        self.assertIsNotNone(d["diff"], "expected a State.Diff transition block")
+
+    def test_diff_no_mark_returns_message(self):
+        # last-look with no mark and tracking off -> a status dict, no narration
+        import os as _os
+        saved = _os.environ.get("CC_COPILOT_HISTORY")
+        _os.environ["CC_COPILOT_HISTORY"] = "0"
+        try:
+            d = self.cp.diff(session=self.path, when="last-look")
+            self.assertTrue(d["nothing_new"])
+            self.assertIn("tracking is off", d["message"])
+        finally:
+            if saved is None:
+                _os.environ.pop("CC_COPILOT_HISTORY", None)
+            else:
+                _os.environ["CC_COPILOT_HISTORY"] = saved
+
 
 class TestResolveAndSessions(unittest.TestCase):
     """Session discovery via a fake Claude home (isolated, no real ~/.claude)."""

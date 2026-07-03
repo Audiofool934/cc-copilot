@@ -60,6 +60,7 @@ _PUBLIC = {
     "check_verdict": None,                     # returns int
     "observe": None,                           # returns str
     "since": None,                             # returns str
+    "diff": None,                              # returns dict (structured /diff view)
     "advance_since_mark": None,                # returns dict | None
     # ---- narration (LLM), blocking request/response ----
     "narrate_brief": None,                      # returns str

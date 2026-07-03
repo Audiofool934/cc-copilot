@@ -135,6 +135,30 @@ export interface Failure {
   call_line: number | null;
   hhmm: string;
 }
+export interface DiffBlock {
+  new_events: number;
+  status_from: string;
+  status_to: string;
+  verdict_from: string;
+  verdict_to: string;
+  new_failures: Failure[];
+  new_changed: FileChange[];
+}
+export interface DiffView {
+  cutoff_line: number;
+  label: string;
+  new_events: number;
+  nothing_new: boolean;
+  pending_ask: string;
+  new_humans: TranscriptRecord[];
+  new_agent: TranscriptRecord[];
+  new_commands: Command[];
+  new_failures: Failure[];
+  new_changed_files: FileChange[];
+  diff: DiffBlock | null;
+  text: string;
+  message?: string;
+}
 export interface State {
   assessment: Assessment;
   session_id: string;
@@ -174,6 +198,8 @@ export const surfaces = {
     rpc<string>("observe", params as Record<string, unknown>),
   since: (params: { cwd?: string; session?: string; when?: string; peek?: boolean } = {}) =>
     rpc<string>("since", params as Record<string, unknown>),
+  diff: (params: { cwd?: string; session?: string; when?: string; peek?: boolean } = {}) =>
+    rpc<DiffView>("diff", params as Record<string, unknown>),
   state: (path: string) => rpc<State>("state", { path }),
   transcript: (path: string) => rpc<Transcript>("transcript", { path }),
   advanceSinceMark: (params: { cwd?: string; session?: string } = {}) =>

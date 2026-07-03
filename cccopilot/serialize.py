@@ -106,3 +106,38 @@ def state_to_dict(st: State) -> dict:
             if st.pending_tool else None
         ),
     }
+
+
+def diff_to_dict(d) -> dict:
+    """A ``State.Diff`` (what changed between two snapshots) as JSON - for
+    ``/diff`` and the watch/alert transition detection."""
+    return {
+        "new_events": d.new_events,
+        "status_from": d.status_from,
+        "status_to": d.status_to,
+        "verdict_from": d.verdict_from,
+        "verdict_to": d.verdict_to,
+        "new_failures": [asdict(f) for f in d.new_failures],
+        "new_changed": [asdict(fc) for fc in d.new_changed],
+    }
+
+
+def since_view_to_dict(view) -> dict:
+    """A ``since.SinceView`` as JSON: the structured delta behind the rendered
+    ``text`` - new turns, messages, commands, failures, changed files, the
+    status/verdict transition, and the pending-ask cue. The GUI ``/diff`` view
+    renders this natively instead of the Markdown."""
+    return {
+        "cutoff_line": view.cutoff_line,
+        "label": view.label,
+        "new_events": view.new_events,
+        "nothing_new": view.nothing_new,
+        "pending_ask": view.pending_ask,
+        "new_humans": [record_to_dict(r) for r in view.new_humans],
+        "new_agent": [record_to_dict(r) for r in view.new_agent],
+        "new_commands": [asdict(c) for c in view.new_commands],
+        "new_failures": [asdict(f) for f in view.new_failures],
+        "new_changed_files": [asdict(fc) for fc in view.new_changed_files],
+        "diff": diff_to_dict(view.diff) if view.diff is not None else None,
+        "text": view.text,
+    }
