@@ -5,12 +5,13 @@
   import Chat from "$lib/Chat.svelte";
   import Timeline from "$lib/Timeline.svelte";
   import Drafts from "$lib/Drafts.svelte";
+  import Live from "$lib/Live.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "timeline" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state">("chat");
+  let tab = $state<"chat" | "live" | "timeline" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state">("chat");
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
   let brief = $state("");
@@ -137,7 +138,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "timeline", "drafts", "fleet", "brief", "observe", "since", "state"] as t}
+    {#each ["chat", "live", "timeline", "drafts", "fleet", "brief", "observe", "since", "state"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -145,13 +146,15 @@
     </button>
   </nav>
 
-  <main class="content" class:chat={tab === "chat" || tab === "timeline" || tab === "drafts"}>
+  <main class="content" class:chat={tab === "chat" || tab === "live" || tab === "timeline" || tab === "drafts"}>
     {#if error}
       <div class="error">⚠ {error}</div>
     {:else if !sessionPath && tab !== "fleet"}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
       <Chat {sessionPath} />
+    {:else if tab === "live"}
+      <Live {sessionPath} />
     {:else if tab === "timeline"}
       <Timeline {sessionPath} />
     {:else if tab === "drafts"}
