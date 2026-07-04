@@ -141,7 +141,11 @@
   .poll.active { color: var(--good); border-color: var(--good); }
   .feed { flex: 1; overflow: auto; font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; }
   .truncated { color: var(--muted); padding: 8px 0; font-style: italic; }
-  .rec { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .rec { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+    /* native virtualization: the browser skips layout/paint for off-screen rows,
+       so thousands of records cost ~nothing until scrolled into view. Handles
+       variable row heights (no JS windowing drift). */
+    content-visibility: auto; contain-intrinsic-size: 0 26px; }
   .gutter { width: 84px; flex-shrink: 0; color: var(--muted); display: flex; gap: 6px; }
   .line { opacity: 0.6; }
   .hhmm { opacity: 0.9; }
