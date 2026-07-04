@@ -235,16 +235,18 @@ export const surfaces = {
   watchProgress: (params: { delta_text: string; instruction?: string }) =>
     rpc<string>('watch_progress', params as Record<string, unknown>),
   // ---- cockpit session persistence ----
-  cockpitHistory: (session: string) =>
-    rpc<[string, string][]>("cockpit_history", { session }),
-  cockpitRecord: (params: { session: string; question: string; answer: string }) =>
+  cockpitHistory: (session: string, conv_id?: string) =>
+    rpc<[string, string][]>("cockpit_history", conv_id ? { session, conv_id } : { session }),
+  cockpitRecord: (params: { session: string; question: string; answer: string; conv_id?: string }) =>
     rpc<number>("cockpit_record", params as Record<string, unknown>),
-  cockpitRewind: (params: { session: string; message_index: number }) =>
+  cockpitRewind: (params: { session: string; message_index: number; conv_id?: string }) =>
     rpc<[string, string][]>("cockpit_rewind", params as Record<string, unknown>),
-  cockpitRewindUndo: (session: string) =>
-    rpc<[string, string][]>("cockpit_rewind_undo", { session }),
-  cockpitForget: (session: string) =>
-    rpc<boolean>("cockpit_forget", { session }),
+  cockpitRewindUndo: (session: string, conv_id?: string) =>
+    rpc<[string, string][]>("cockpit_rewind_undo", conv_id ? { session, conv_id } : { session }),
+  cockpitForget: (session: string, conv_id?: string) =>
+    rpc<boolean>("cockpit_forget", conv_id ? { session, conv_id } : { session }),
+  cockpitNew: (session: string) =>
+    rpc<{ conv_id: string; path: string } | null>("cockpit_new", { session }),
   cockpitSessions: (cwd?: string) =>
     rpc<Record<string, unknown>[]>('cockpit_sessions', cwd ? { cwd } : {}),
   // ---- settings: backends / models ----

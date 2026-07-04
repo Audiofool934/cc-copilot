@@ -5,7 +5,7 @@
 
   let { cwd = "", onResume } = $props<{
     cwd?: string;
-    onResume?: (cwd: string, sessionPath: string) => void;
+    onResume?: (cwd: string, sessionPath: string, convId: string) => void;
   }>();
 
   interface Header {
@@ -49,7 +49,7 @@
       toast("session transcript is no longer available", "error");
       return;
     }
-    onResume?.(h.cwd, h.transcript);
+    onResume?.(h.cwd, h.transcript, h.conv_id);
     open = false;
     toast(`resumed ${h.title}`, "ok");
   }

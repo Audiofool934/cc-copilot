@@ -66,11 +66,12 @@ _PUBLIC = {
     "target": None,                            # returns dict; params: cwd?, session?, scope?, scope_sessions?
     # ---- cockpit session persistence (best-effort) ----
     "cockpit_sessions": None,                  # returns list[dict] (ConvHeader)
-    "cockpit_history": None,                  # returns list[[role, text]]
-    "cockpit_record": None,                    # returns int (turn count); params: question, answer, ...
-    "cockpit_forget": None,                     # returns bool
-    "cockpit_rewind": None,                     # returns list[[role, text]]; params: session, message_index
-    "cockpit_rewind_undo": None,                # returns list[[role, text]]; params: session
+    "cockpit_history": None,                  # returns list[[role, text]]; params: session, conv_id?
+    "cockpit_record": None,                    # returns int (turn count); params: session, question, answer, conv_id?, ...
+    "cockpit_forget": None,                     # returns bool; params: session, conv_id?
+    "cockpit_new": None,                        # returns dict {conv_id, path}; params: session
+    "cockpit_rewind": None,                     # returns list[[role, text]]; params: session, message_index, conv_id?
+    "cockpit_rewind_undo": None,                # returns list[[role, text]]; params: session, conv_id?
     # ---- settings: backends / models ----
     "backends": None,                          # returns list[dict] (availability + active)
     "models_for": None,                        # returns list[dict] (params: name)

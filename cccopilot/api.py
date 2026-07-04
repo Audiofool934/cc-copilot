@@ -719,28 +719,49 @@ class Copilot:
         except Exception:
             return []
 
+    def _cockpit_store(self, path: str, conv_id: Optional[str] = None):
+        """Open the cockpit Store for ``path``, optionally a specific conv_id."""
+        if not conv_id:
+            return ST.Store.open_for(path, enabled=True)
+        store = ST.Store(conv_id, enabled=True)
+        store.transcript = os.path.abspath(path)
+        try:
+            tr = SRC.parse(path)
+            store.session_id = getattr(tr, "session_id", "") or ""
+            store.cwd = getattr(tr, "cwd", "") or ""
+            store.title = getattr(tr, "title", "") or ""
+        except Exception:
+            pass
+        return store
+
     def cockpit_history(self, cwd: Optional[str] = None,
-                        session: Optional[str] = None) -> List[list]:
-        """This session's saved cockpit Q&A turns as ``[[role, text], ...]``."""
+                        session: Optional[str] = None,
+                        *, conv_id: Optional[str] = None) -> List[list]:
+        """This session's saved cockpit Q&A turns as ``[[role, text], ...]``.
+
+        ``conv_id`` selects a specific conversation; the default is the
+        canonical conversation for this transcript.
+        """
         path = self._path_or_none(cwd, session)
         if not path or not ST.enabled():
             return []
         try:
-            store = ST.Store.open_for(path, enabled=ST.enabled())
+            store = self._cockpit_store(path, conv_id)
             return [[r, t] for r, t in store.load_history()]
         except Exception:
             return []
 
     def cockpit_record(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
                        question: str, answer: str,
-                       backend=None, model=None) -> int:
+                       backend=None, model=None,
+                       conv_id: Optional[str] = None) -> int:
         """Record a cockpit Q&A turn for this session. Returns the turn count
         after the record, or 0 if persistence is disabled / the record failed."""
         path = self._path_or_none(cwd, session)
         if not path or not ST.enabled():
             return 0
         try:
-            store = ST.Store.open_for(path, enabled=True)
+            store = self._cockpit_store(path, conv_id)
             st = S.build(SRC.parse(path))
             store.record_turn(question, answer, st=st, backend=backend, model=model)
             h = store.header()
@@ -749,19 +770,38 @@ class Copilot:
             return 0
 
     def cockpit_forget(self, cwd: Optional[str] = None,
-                       session: Optional[str] = None) -> bool:
+                       session: Optional[str] = None,
+                       *, conv_id: Optional[str] = None) -> bool:
         """Delete this session's saved cockpit conversation. Returns True if deleted."""
         path = self._path_or_none(cwd, session)
         if not path or not ST.enabled():
             return False
         try:
-            return ST.Store.open_for(path, enabled=True).delete()
+            return self._cockpit_store(path, conv_id).delete()
         except Exception:
             return False
 
+    def cockpit_new(self, cwd: Optional[str] = None,
+                    session: Optional[str] = None) -> Optional[dict]:
+        """Start a new independent cockpit conversation for this session.
+
+        Returns ``{"conv_id", "path"}`` for the new conversation, or None if
+        persistence is disabled or the session can't be resolved.
+        """
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return None
+        try:
+            tr = SRC.parse(path)
+            store = ST.Store.new_for(path, enabled=True, tr=tr)
+            return {"conv_id": store.conv_id, "path": path}
+        except Exception:
+            return None
+
     def cockpit_rewind(self, cwd: Optional[str] = None,
                        session: Optional[str] = None, *,
-                       message_index: int = 1) -> List[list]:
+                       message_index: int = 1,
+                       conv_id: Optional[str] = None) -> List[list]:
         """Rewind this session's saved chat to before ``message_index``.
 
         ``message_index`` is the 1-based user-message number (matching the
@@ -774,13 +814,14 @@ class Copilot:
         if not path or not ST.enabled():
             return []
         try:
-            store = ST.Store.open_for(path, enabled=True)
+            store = self._cockpit_store(path, conv_id)
             history = [[r, t] for r, t in store.load_history()]
             k = max(0, int(message_index or 1) - 1)
             turns_to_keep = C.ChatSession.stored_turn_count_before(history, k)
             self._rewind_undo[path] = {
                 "history": list(history),
                 "snapshot": store.snapshot(),
+                "conv_id": conv_id,
             }
             store.truncate(turns_to_keep)
             return [[r, t] for r, t in store.load_history()]
@@ -788,7 +829,8 @@ class Copilot:
             return []
 
     def cockpit_rewind_undo(self, cwd: Optional[str] = None,
-                            session: Optional[str] = None) -> List[list]:
+                            session: Optional[str] = None,
+                            *, conv_id: Optional[str] = None) -> List[list]:
         """Undo the last rewind for this session. Returns the restored history,
         or the current history if no undo is available."""
         path = self._path_or_none(cwd, session)
@@ -796,9 +838,9 @@ class Copilot:
             return []
         undo = self._rewind_undo.get(path)
         if not undo:
-            return [[r, t] for r, t in ST.Store.open_for(path, enabled=True).load_history()]
+            return [[r, t] for r, t in self._cockpit_store(path, conv_id).load_history()]
         try:
-            store = ST.Store.open_for(path, enabled=True)
+            store = self._cockpit_store(path, undo.get("conv_id") or conv_id)
             snap = undo.get("snapshot")
             if snap is not None and not store.restore_snapshot(snap):
                 return []

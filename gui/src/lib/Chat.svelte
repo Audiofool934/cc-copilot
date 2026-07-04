@@ -4,7 +4,7 @@
   import { surfaces } from "$lib/jsonrpc";
   import { toast } from "$lib/toasts.svelte";
 
-  let { sessionPath, scope = "session", scopeSessions = "", goto = () => {} } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string; goto?: (t: string) => void }>();
+  let { sessionPath, scope = "session", scopeSessions = "", goto = () => {}, activeConvId = $bindable<string | null>(null) } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string; goto?: (t: string) => void; activeConvId?: string | null }>();
 
   interface Message { role: "user" | "assistant"; text: string }
   let messages = $state<Message[]>([]);
@@ -32,6 +32,7 @@
     { cmd: "/state", desc: "raw state JSON", view: "state" },
     { cmd: "/settings", desc: "backend & model", view: "settings" },
     { cmd: "/clear", desc: "clear this chat (in-memory)", action: "clear" },
+    { cmd: "/new", desc: "start a new cockpit conversation", action: "new" },
     { cmd: "/forget", desc: "forget saved chat", action: "forget" },
     { cmd: "/stop", desc: "stop the stream", action: "stop" },
     { cmd: "/help", desc: "list commands", action: "help" },
@@ -44,6 +45,7 @@
     draft = "";
     if (c.view) goto(c.view);
     else if (c.action === "clear") messages = [];
+    else if (c.action === "new") newChat();
     else if (c.action === "forget") forget();
     else if (c.action === "stop") stop();
     // /help: leave the palette open (filtered shows all) by setting draft="/"
@@ -52,10 +54,10 @@
 
   // load this session's saved cockpit conversation when it changes
   $effect(() => {
-    if (!sessionPath) { messages = []; return; }
+    if (!sessionPath) { messages = []; activeConvId = null; return; }
     (async () => {
       try {
-        const hist = await surfaces.cockpitHistory(sessionPath);
+        const hist = await surfaces.cockpitHistory(sessionPath, activeConvId ?? undefined);
         messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
         scrollToBottom();
       } catch { /* persistence off or no history - start fresh */ }
@@ -87,7 +89,7 @@
         abortCtrl.signal,
       );
       // persist the completed Q&A turn (best-effort)
-      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: messages[aiIdx].text }).catch(() => {});
+      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: messages[aiIdx].text, conv_id: activeConvId ?? undefined }).catch(() => {});
     } catch (e) {
       const err = e as Error;
       if (err.name === "AbortError") {
@@ -105,10 +107,29 @@
 
   async function forget() {
     if (!sessionPath || busy) return;
-    try { await surfaces.cockpitForget(sessionPath); } catch { /* ignore */ }
+    try { await surfaces.cockpitForget(sessionPath, activeConvId ?? undefined); } catch { /* ignore */ }
     messages = [];
+    activeConvId = null;
     error = "";
     toast("conversation cleared", "ok");
+  }
+
+  async function newChat() {
+    if (!sessionPath || busy) return;
+    busy = true;
+    try {
+      const created = await surfaces.cockpitNew(sessionPath);
+      if (created) {
+        activeConvId = created.conv_id;
+        messages = [];
+        toast("new cockpit conversation started", "ok");
+      } else {
+        toast("could not start new conversation", "error");
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      toast(error, "error");
+    } finally { busy = false; }
   }
 
   function userMessageNumber(idx: number): number {
@@ -124,7 +145,7 @@
     busy = true;
     try {
       const n = userMessageNumber(idx);
-      const hist = await surfaces.cockpitRewind({ session: sessionPath, message_index: n });
+      const hist = await surfaces.cockpitRewind({ session: sessionPath, message_index: n, conv_id: activeConvId ?? undefined });
       messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
       toast(`rewound to before message ${n}`, "ok");
     } catch (e) {
@@ -137,7 +158,7 @@
     if (!sessionPath || busy) return;
     busy = true;
     try {
-      const hist = await surfaces.cockpitRewindUndo(sessionPath);
+      const hist = await surfaces.cockpitRewindUndo(sessionPath, activeConvId ?? undefined);
       messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
       toast("rewind undone", "ok");
     } catch (e) {
@@ -221,6 +242,7 @@
       <button class="clear" onclick={forget} disabled={busy} title="clear this session's saved cockpit conversation">clear</button>
       <button class="undo" onclick={rewindUndo} disabled={busy} title="undo the last rewind">undo rewind</button>
     {/if}
+    <button class="new" onclick={newChat} disabled={busy || !sessionPath} title="start a new cockpit conversation">new</button>
   </div>
 </div>
 
@@ -277,5 +299,6 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .clear { background: transparent; color: var(--muted); border: 1px solid var(--border); }
   .undo { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .new { background: transparent; color: var(--good); border: 1px solid var(--border); }
   .stop { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
 </style>

@@ -44,6 +44,7 @@
   let error = $state("");
   let targetOpen = $state(false);
   let targetInfo = $state<TargetInfo | null>(null);
+  let activeConvId = $state<string | null>(null);
 
   async function loadTarget() {
     if (!sessionPath) { targetInfo = null; return; }
@@ -94,14 +95,17 @@
     }
   }
 
-  async function resumeSession(targetCwd: string, targetPath: string) {
+  async function resumeSession(targetCwd: string, targetPath: string, convId: string) {
     error = "";
     try {
       if (!projects.some((p) => p[0] === targetCwd)) {
         projects = await surfaces.projects();
       }
       cwd = targetCwd;
-      await loadSessions(targetPath);
+      sessions = await surfaces.sessions(cwd);
+      sessionPath = targetPath;
+      activeConvId = convId;
+      await loadAll();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -112,6 +116,7 @@
     sessions = await surfaces.sessions(cwd);
     sessionPath = pinned && sessions.some((s) => s.path === pinned) ? pinned
       : (sessions[0]?.path ?? "");
+    activeConvId = null;
     if (sessionPath) await loadAll();
   }
 
@@ -272,7 +277,7 @@
     {:else if !sessionPath && tab !== "fleet"}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
-      <Chat {sessionPath} {scope} scopeSessions={scopeSessions} goto={(t) => (tab = t as typeof tab)} />
+      <Chat {sessionPath} {scope} scopeSessions={scopeSessions} goto={(t) => (tab = t as typeof tab)} bind:activeConvId />
     {:else if tab === "live"}
       <Live {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "watch"}
