@@ -21,6 +21,10 @@
   let sessionPath = $state("");
   let tab = $state<"chat" | "live" | "watch" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
   let needsWelcome = $state(false);
+  let theme = $state<"dark" | "light">(
+    (typeof localStorage !== "undefined" && (localStorage.getItem("cc-copilot-theme") as "dark" | "light")) || "dark"
+  );
+  $effect(() => { if (typeof localStorage !== "undefined") localStorage.setItem("cc-copilot-theme", theme); });
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
   let scope = $state<"session" | "multi-session" | "project">("session");
@@ -147,7 +151,7 @@
   });
 </script>
 
-<div class="app">
+<div class="app" data-theme={theme}>
   <header class="topbar">
     <div class="brand">🛰 cc-copilot</div>
     <div class="selectors">
@@ -179,6 +183,9 @@
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
       {verdictLabel(verdict)}
     </div>
+    <button class="theme" onclick={() => (theme = theme === "dark" ? "light" : "dark")} title="toggle theme">
+      {theme === "dark" ? "☾" : "☀"}
+    </button>
   </header>
 
   <nav class="tabs">
@@ -258,6 +265,18 @@
     font-size: 14px;
     color: var(--text);
   }
+  :global([data-theme="light"]) {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #eef0f4;
+    --text: #1a1d24;
+    --muted: #5b6373;
+    --accent: #2563d9;
+    --good: #1a7a3e;
+    --warn: #9a6a00;
+    --bad: #c6282a;
+    --border: #d8dde4;
+  }
   :global(*) { box-sizing: border-box; }
   :global(body) { margin: 0; background: var(--bg); }
 
@@ -279,6 +298,8 @@
     font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
     padding: 4px 10px; border: 1px solid; border-radius: 999px;
   }
+  .theme { font-size: 15px; line-height: 1; padding: 4px 9px; background: var(--panel);
+    color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 
   .tabs {
     display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--border);
