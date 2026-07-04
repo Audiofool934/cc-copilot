@@ -3,7 +3,7 @@
   import { streamMethod } from "$lib/stream";
   import { surfaces } from "$lib/jsonrpc";
 
-  let { sessionPath, scope = "session", scopeSessions = "" } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string }>();
+  let { sessionPath, scope = "session", scopeSessions = "", goto = () => {} } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string; goto?: (t: string) => void }>();
 
   interface Message { role: "user" | "assistant"; text: string }
   let messages = $state<Message[]>([]);
@@ -12,6 +12,41 @@
   let error = $state("");
   let scrollEl = $state<HTMLElement | null>(null);
   let abortCtrl = $state<AbortController | null>(null);
+
+  // slash-command palette (mirrors the TUI's command autocomplete)
+  const COMMANDS = [
+    { cmd: "/chat", desc: "grounded chat", view: "chat" },
+    { cmd: "/live", desc: "live watch", view: "live" },
+    { cmd: "/timeline", desc: "activity feed", view: "timeline" },
+    { cmd: "/brief", desc: "evidence-cited recap", view: "brief" },
+    { cmd: "/observe", desc: "attention board", view: "observe" },
+    { cmd: "/since", desc: "what changed", view: "since" },
+    { cmd: "/diff", desc: "structured delta", view: "diff" },
+    { cmd: "/now", desc: "next step (drafts)", view: "drafts" },
+    { cmd: "/goal", desc: "draft /goal (drafts)", view: "drafts" },
+    { cmd: "/loop", desc: "draft /loop (drafts)", view: "drafts" },
+    { cmd: "/handoff", desc: "shareable brief (drafts)", view: "drafts" },
+    { cmd: "/fleet", desc: "multi-session board", view: "fleet" },
+    { cmd: "/state", desc: "raw state JSON", view: "state" },
+    { cmd: "/settings", desc: "backend & model", view: "settings" },
+    { cmd: "/clear", desc: "clear this chat (in-memory)", action: "clear" },
+    { cmd: "/forget", desc: "forget saved chat", action: "forget" },
+    { cmd: "/stop", desc: "stop the stream", action: "stop" },
+    { cmd: "/help", desc: "list commands", action: "help" },
+  ];
+  let slashIdx = $state(0);
+  const filtered = $derived(draft.startsWith("/") ? COMMANDS.filter((c) => c.cmd.startsWith(draft)) : []);
+  const slashOpen = $derived(draft.startsWith("/") && filtered.length > 0);
+
+  function acceptCmd(c: typeof COMMANDS[number]) {
+    draft = "";
+    if (c.view) goto(c.view);
+    else if (c.action === "clear") messages = [];
+    else if (c.action === "forget") forget();
+    else if (c.action === "stop") stop();
+    // /help: leave the palette open (filtered shows all) by setting draft="/"
+    else if (c.action === "help") draft = "/";
+  }
 
   // load this session's saved cockpit conversation when it changes
   $effect(() => {
@@ -77,11 +112,22 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (slashOpen) {
+      if (e.key === "ArrowDown") { e.preventDefault(); slashIdx = Math.min(slashIdx + 1, filtered.length - 1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); slashIdx = Math.max(slashIdx - 1, 0); return; }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault(); if (filtered[slashIdx]) acceptCmd(filtered[slashIdx]); return;
+      }
+      if (e.key === "Escape") { e.preventDefault(); draft = ""; return; }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
     }
   }
+
+  // keep the selection in range as the filter narrows
+  $effect(() => { void filtered; if (slashIdx >= filtered.length) slashIdx = Math.max(0, filtered.length - 1); });
 
   function render(md: string): string {
     return marked.parse(md || "", { breaks: false }) as string;
@@ -106,13 +152,24 @@
   </div>
   {#if error}<div class="error">⚠ {error}</div>{/if}
   <div class="composer">
-    <textarea
-      bind:value={draft}
-      onkeydown={onKey}
-      placeholder="Ask about this session... (Enter to send, Shift+Enter for newline)"
-      disabled={busy}
-      rows="2"
-    ></textarea>
+    <div class="input-wrap">
+      <textarea
+        bind:value={draft}
+        onkeydown={onKey}
+        placeholder="Ask about this session... (type / for commands; Enter to send, Shift+Enter for newline)"
+        disabled={busy}
+        rows="2"
+      ></textarea>
+      {#if slashOpen}
+        <div class="slash-palette">
+          {#each filtered as c, i}
+            <button class="slash-item" class:active={i === slashIdx} onclick={() => acceptCmd(c)} onmouseenter={() => (slashIdx = i)}>
+              <span class="slash-cmd">{c.cmd}</span><span class="slash-desc">{c.desc}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
     <button onclick={send} disabled={busy || !draft.trim() || !sessionPath}>
       {busy ? "…" : "send"}
     </button>
@@ -151,12 +208,23 @@
   @keyframes blink { 50% { opacity: 0; } }
   .error { color: var(--bad); padding: 6px 0; }
   .composer { display: flex; gap: 8px; align-items: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
+  .input-wrap { flex: 1; position: relative; }
   textarea {
-    flex: 1; resize: none; font-family: inherit; font-size: 13px; line-height: 1.4;
+    width: 100%; resize: none; font-family: inherit; font-size: 13px; line-height: 1.4;
     padding: 8px 10px; background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 8px; outline: none;
   }
   textarea:focus { border-color: var(--accent); }
+  .slash-palette {
+    position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 10;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-height: 240px; overflow: auto; padding: 4px;
+  }
+  .slash-item { display: flex; gap: 12px; width: 100%; text-align: left; padding: 7px 10px;
+    background: transparent; color: var(--text); border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .slash-item.active { background: var(--panel-2); }
+  .slash-cmd { color: var(--accent); font-family: "SF Mono", ui-monospace, monospace; min-width: 90px; }
+  .slash-desc { color: var(--muted); }
   button {
     padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
     background: var(--accent); color: #0f1115; border: none; border-radius: 8px;

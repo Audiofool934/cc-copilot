@@ -193,7 +193,7 @@
     {:else if !sessionPath && tab !== "fleet"}
       <div class="empty">No sessions for this project. Pick another project, or run an agent in this directory.</div>
     {:else if tab === "chat"}
-      <Chat {sessionPath} {scope} scopeSessions={scopeSessions} />
+      <Chat {sessionPath} {scope} scopeSessions={scopeSessions} goto={(t) => (tab = t as typeof tab)} />
     {:else if tab === "live"}
       <Live {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "timeline"}
