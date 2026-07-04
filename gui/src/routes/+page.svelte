@@ -13,6 +13,7 @@
   import Watch from "$lib/Watch.svelte";
   import SessionsPicker from "$lib/SessionsPicker.svelte";
   import ScopeGroups from "$lib/ScopeGroups.svelte";
+  import ResumeBrowser from "$lib/ResumeBrowser.svelte";
   import Footer from "$lib/Footer.svelte";
   import ToastRack from "$lib/ToastRack.svelte";
   import { toast } from "$lib/toasts.svelte";
@@ -88,6 +89,19 @@
       }
       cwd = targetCwd;
       await loadSessions(live);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function resumeSession(targetCwd: string, targetPath: string) {
+    error = "";
+    try {
+      if (!projects.some((p) => p[0] === targetCwd)) {
+        projects = await surfaces.projects();
+      }
+      cwd = targetCwd;
+      await loadSessions(targetPath);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -214,6 +228,7 @@
         <SessionsPicker {cwd} bind:scopeSessions bind:sessionPath />
       {/if}
       <ScopeGroups bind:scope bind:scopeSessions />
+      <ResumeBrowser {cwd} onResume={resumeSession} />
       <button class="here" onclick={goHere} title="/here - jump to your current live session" disabled={loading}>here</button>
     </div>
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
