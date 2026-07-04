@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { surfaces, type BackendInfo, type ModelInfo } from "$lib/jsonrpc";
+  import { toast } from "$lib/toasts.svelte";
 
   let backends = $state<BackendInfo[]>([]);
   let selected = $state("");
@@ -35,9 +36,10 @@
     try {
       await surfaces.setBackend({ name: selected, model, key: key || undefined });
       saved = true;
+      toast("backend saved", "ok");
       backends = await surfaces.backends();
       setTimeout(() => (saved = false), 1500);
-    } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    } catch (e) { error = e instanceof Error ? e.message : String(e); toast(error, "error"); }
     finally { busy = false; }
   }
 

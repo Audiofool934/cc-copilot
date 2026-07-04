@@ -2,6 +2,7 @@
   import { marked } from "marked";
   import { streamMethod } from "$lib/stream";
   import { surfaces } from "$lib/jsonrpc";
+  import { toast } from "$lib/toasts.svelte";
 
   let { sessionPath, scope = "session", scopeSessions = "", goto = () => {} } = $props<{ sessionPath: string; scope?: string; scopeSessions?: string; goto?: (t: string) => void }>();
 
@@ -107,6 +108,7 @@
     try { await surfaces.cockpitForget(sessionPath); } catch { /* ignore */ }
     messages = [];
     error = "";
+    toast("conversation cleared", "ok");
   }
 
   async function scrollToBottom() {

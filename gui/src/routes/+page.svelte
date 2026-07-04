@@ -11,6 +11,9 @@
   import Welcome from "$lib/Welcome.svelte";
   import Watch from "$lib/Watch.svelte";
   import SessionsPicker from "$lib/SessionsPicker.svelte";
+  import Footer from "$lib/Footer.svelte";
+  import ToastRack from "$lib/ToastRack.svelte";
+  import { toast } from "$lib/toasts.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
@@ -230,7 +233,10 @@
       <div class="markdown">{@html render(tab === "brief" ? brief : observe)}</div>
     {/if}
   </main>
+  <Footer {tab} />
 </div>
+
+<ToastRack />
 
 {#if needsWelcome}
   <Welcome ondone={() => { needsWelcome = false; loadProjects(); }} />
