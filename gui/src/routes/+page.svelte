@@ -61,6 +61,24 @@
     }
   }
 
+  async function goHere() {
+    error = "";
+    try {
+      const live = await surfaces.currentSessionPath();
+      if (!live) { error = "no live session detected"; return; }
+      const st = await surfaces.state(live);
+      const targetCwd = st.cwd;
+      if (!targetCwd) { error = "could not determine live session project"; return; }
+      if (!projects.some((p) => p[0] === targetCwd)) {
+        projects = await surfaces.projects();
+      }
+      cwd = targetCwd;
+      await loadSessions(live);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async function loadSessions(pinned?: string) {
     if (!cwd) return;
     sessions = await surfaces.sessions(cwd);
@@ -181,6 +199,7 @@
         <SessionsPicker {cwd} bind:scopeSessions bind:sessionPath />
       {/if}
       <ScopeGroups bind:scope bind:scopeSessions />
+      <button class="here" onclick={goHere} title="/here - jump to your current live session" disabled={loading}>here</button>
     </div>
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
       {verdictLabel(verdict)}
@@ -302,6 +321,8 @@
   }
   .theme { font-size: 15px; line-height: 1; padding: 4px 9px; background: var(--panel);
     color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+  .here { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .here:disabled { opacity: 0.5; }
 
   .tabs {
     display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--border);
