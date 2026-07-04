@@ -384,6 +384,21 @@ class TestResolveAndSessions(unittest.TestCase):
         self.assertNotIn("codex-sibling", only_claude)
         self.assertNotIn("codex done", only_claude)
 
+    def test_context_build_honors_agents_filter_for_wider_scope(self):
+        # the ask/chat evidence context must also honor the agents filter
+        # (the audit's contract finding - same bug class as the render_evidence fix)
+        from cccopilot import locate as L, context as EC, state as S, sources as SRC
+        self._write_session(sid="claude-anchor")
+        d = os.path.join(self.claude_home, "projects", L.encode_cwd(self.cwd))
+        os.utime(os.path.join(d, "claude-anchor.jsonl"), (4000, 4000))
+        self._write_codex_session(sid="codex-sibling", ago_mtime=2000)
+        path = self.cp.resolve(self.cwd)
+        st = S.build(SRC.parse(path))
+        both = EC.build(path, st, "multi-session", agents=None).text
+        self.assertIn("codex done", both)                       # codex present unfiltered
+        only = EC.build(path, st, "multi-session", agents=["claude"]).text
+        self.assertNotIn("codex done", only)                    # codex excluded by filter
+
 
 # ---- narration (LLM) surfaces -------------------------------------------
 

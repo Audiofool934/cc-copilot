@@ -140,17 +140,20 @@ def chat_history_budget_chars(max_tokens: int = None) -> int:
 
 def build(path: str, st=None, scope: str = SC.SESSION, sessions=None,
           question: str = "", history=None, project_context: bool = True,
-          max_tokens: int = None, memory_text: str = "") -> EvidenceContext:
+          max_tokens: int = None, memory_text: str = "", agents=None) -> EvidenceContext:
     """Assemble a question-aware evidence context pack.
 
     Raw transcript records are primary. The rendered deterministic recap is
     included last as an orientation index, not as the model's only source.
+
+    ``agents`` is an optional agent filter forwarded to session discovery for
+    wider scopes, so the evidence honors the caller's in-scope agent contract.
     """
     sc = SC.normalize(scope)
     history = list(history or [])
     max_tokens = _context_token_budget(max_tokens)
     max_chars = max_tokens * 4
-    sources = _sources(path, st, sc, sessions)
+    sources = _sources(path, st, sc, sessions, agents=agents)
     selectors = SC.parse_selectors(sessions)
     terms = _conversation_terms(question, history)
 
@@ -202,13 +205,13 @@ def _context_token_budget(value: int = None) -> int:
     return DEFAULT_CONTEXT_TOKENS
 
 
-def _sources(path: str, st, scope: str, sessions) -> list:
+def _sources(path: str, st, scope: str, sessions, agents=None) -> list:
     if scope == SC.SESSION:
         current = _load_current(path, st)
         return [current] if current is not None else []
     out = []
     here = os.path.abspath(path) if path else ""
-    for ref in SC.resolve_session_refs(path, SC.parse_selectors(sessions)):
+    for ref in SC.resolve_session_refs(path, SC.parse_selectors(sessions), agents=agents):
         try:
             rst = st if here and os.path.abspath(ref.path) == here and st is not None \
                 else S.cached_build(ref.path, SRC.parse)

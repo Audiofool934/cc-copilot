@@ -313,10 +313,13 @@ class Copilot:
 
     def _ctx(self, path: str, st, sc: str, scope_sessions: str,
              question: str, history) -> str:
-        """A question-aware evidence context (what cmd_ask/chat ground in)."""
+        """A question-aware evidence context (what cmd_ask/chat ground in).
+
+        Honors the facade's ``agents`` filter for wider scopes, so a filtered
+        facade never grounds in an excluded agent's sessions."""
         ctx = EC.build(path, st, sc, sessions=scope_sessions,
                        question=question, history=list(history or []),
-                       project_context=True)
+                       project_context=True, agents=self._agents)
         return ctx.text
 
     def narrate_brief(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
