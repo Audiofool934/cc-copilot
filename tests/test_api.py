@@ -624,6 +624,41 @@ class TestCockpitPersistence(unittest.TestCase):
                             for s in sessions))
 
 
+# ---- chat rewind/undo ----------------------------------------------------
+
+class TestCockpitRewind(unittest.TestCase):
+    def setUp(self):
+        self._saved = os.environ.get("CC_COPILOT_HISTORY")
+        os.environ.pop("CC_COPILOT_HISTORY", None)
+        self.path = write(_FIXTURE)
+        self.cp = API.Copilot()
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("CC_COPILOT_HISTORY", None)
+        else:
+            os.environ["CC_COPILOT_HISTORY"] = self._saved
+        os.unlink(self.path)
+
+    def test_cockpit_rewind_and_undo(self):
+        path = self.path
+        self.cp.cockpit_record(session=path, question="q1", answer="a1")
+        self.cp.cockpit_record(session=path, question="q2", answer="a2")
+        hist = self.cp.cockpit_history(session=path)
+        self.assertEqual(len(hist), 4)  # user/assistant × 2
+
+        rewound = self.cp.cockpit_rewind(session=path, message_index=2)
+        self.assertEqual(len(rewound), 2)  # keep first turn
+
+        restored = self.cp.cockpit_rewind_undo(session=path)
+        self.assertEqual(len(restored), 4)
+
+    def test_cockpit_rewind_no_history_returns_empty(self):
+        path = self.path
+        rewound = self.cp.cockpit_rewind(session=path, message_index=1)
+        self.assertEqual(rewound, [])
+
+
 # ---- settings: backends / models ----------------------------------------
 
 class TestSettings(unittest.TestCase):

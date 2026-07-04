@@ -83,6 +83,7 @@ class Copilot:
 
     def __init__(self, agents: Optional[List[str]] = None):
         self._agents = agents
+        self._rewind_undo: dict = {}
 
     # ---- session discovery -------------------------------------------------
 
@@ -757,6 +758,54 @@ class Copilot:
             return ST.Store.open_for(path, enabled=True).delete()
         except Exception:
             return False
+
+    def cockpit_rewind(self, cwd: Optional[str] = None,
+                       session: Optional[str] = None, *,
+                       message_index: int = 1) -> List[list]:
+        """Rewind this session's saved chat to before ``message_index``.
+
+        ``message_index`` is the 1-based user-message number (matching the
+        TUI's ``/rewind <n>``). The current history is snapshotted so
+        ``cockpit_rewind_undo`` can restore it.
+
+        Returns the truncated history as ``[[role, text], ...]``.
+        """
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return []
+        try:
+            store = ST.Store.open_for(path, enabled=True)
+            history = [[r, t] for r, t in store.load_history()]
+            k = max(0, int(message_index or 1) - 1)
+            turns_to_keep = C.ChatSession.stored_turn_count_before(history, k)
+            self._rewind_undo[path] = {
+                "history": list(history),
+                "snapshot": store.snapshot(),
+            }
+            store.truncate(turns_to_keep)
+            return [[r, t] for r, t in store.load_history()]
+        except Exception:
+            return []
+
+    def cockpit_rewind_undo(self, cwd: Optional[str] = None,
+                            session: Optional[str] = None) -> List[list]:
+        """Undo the last rewind for this session. Returns the restored history,
+        or the current history if no undo is available."""
+        path = self._path_or_none(cwd, session)
+        if not path or not ST.enabled():
+            return []
+        undo = self._rewind_undo.get(path)
+        if not undo:
+            return [[r, t] for r, t in ST.Store.open_for(path, enabled=True).load_history()]
+        try:
+            store = ST.Store.open_for(path, enabled=True)
+            snap = undo.get("snapshot")
+            if snap is not None and not store.restore_snapshot(snap):
+                return []
+            del self._rewind_undo[path]
+            return [[r, t] for r, t in store.load_history()]
+        except Exception:
+            return []
 
     # ---- internal ---------------------------------------------------------
 

@@ -111,6 +111,41 @@
     toast("conversation cleared", "ok");
   }
 
+  function userMessageNumber(idx: number): number {
+    let n = 0;
+    for (let i = 0; i <= idx; i++) {
+      if (messages[i].role === "user") n++;
+    }
+    return n;
+  }
+
+  async function rewind(idx: number) {
+    if (!sessionPath || busy) return;
+    busy = true;
+    try {
+      const n = userMessageNumber(idx);
+      const hist = await surfaces.cockpitRewind({ session: sessionPath, message_index: n });
+      messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
+      toast(`rewound to before message ${n}`, "ok");
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      toast(error, "error");
+    } finally { busy = false; }
+  }
+
+  async function rewindUndo() {
+    if (!sessionPath || busy) return;
+    busy = true;
+    try {
+      const hist = await surfaces.cockpitRewindUndo(sessionPath);
+      messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
+      toast("rewind undone", "ok");
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      toast(error, "error");
+    } finally { busy = false; }
+  }
+
   async function scrollToBottom() {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
     if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -145,10 +180,11 @@
       <div class="empty">Ask a question grounded in this session's transcript and project.
         Enter sends, Shift+Enter for a newline.</div>
     {/if}
-    {#each messages as m (m)}
+    {#each messages as m, i (m)}
       <div class="msg {m.role}">
         {#if m.role === "user"}
           <div class="bubble">{m.text}</div>
+          <button class="rewind" onclick={() => rewind(i)} title="rewind to before this message" disabled={busy}>rewind</button>
         {:else}
           <div class="md">{@html render(m.text)}{#if busy && m === messages[messages.length - 1]}<span class="cursor">▋</span>{/if}</div>
         {/if}
@@ -183,6 +219,7 @@
     {/if}
     {#if messages.length}
       <button class="clear" onclick={forget} disabled={busy} title="clear this session's saved cockpit conversation">clear</button>
+      <button class="undo" onclick={rewindUndo} disabled={busy} title="undo the last rewind">undo rewind</button>
     {/if}
   </div>
 </div>
@@ -198,6 +235,9 @@
     background: var(--panel-2); border: 1px solid var(--border);
     padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-wrap: break-word;
   }
+  .rewind { font-size: 11px; color: var(--muted); background: transparent; border: none; cursor: pointer; margin-left: 6px; }
+  .rewind:hover { color: var(--accent); }
+  .rewind:disabled { opacity: 0.5; cursor: default; }
   .msg.assistant .md {
     max-width: 880px; line-height: 1.55; padding: 4px 0;
   }
@@ -236,5 +276,6 @@
   }
   button:disabled { opacity: 0.5; cursor: default; }
   .clear { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .undo { background: transparent; color: var(--accent); border: 1px solid var(--border); }
   .stop { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
 </style>

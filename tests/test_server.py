@@ -102,6 +102,13 @@ class TestParity(_ServerCase):
         r = self._rpc("target", {"session": self.path})
         self.assertNotIn("error", r)
         self.assertEqual(r["result"], self.cp.target(session=self.path))
+    def test_cockpit_rewind_and_undo_routes_through_facade(self):
+        self.httpd.copilot.cockpit_rewind = lambda **p: [["user", "q"]]
+        self.httpd.copilot.cockpit_rewind_undo = lambda **p: [["user", "q"], ["assistant", "a"]]
+        r = self._rpc("cockpit_rewind", {"session": self.path, "message_index": 2})
+        self.assertEqual(r["result"], [["user", "q"]])
+        r = self._rpc("cockpit_rewind_undo", {"session": self.path})
+        self.assertEqual(r["result"], [["user", "q"], ["assistant", "a"]])
 
 
 class TestSerializedObjects(_ServerCase):

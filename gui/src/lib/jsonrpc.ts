@@ -239,6 +239,10 @@ export const surfaces = {
     rpc<[string, string][]>("cockpit_history", { session }),
   cockpitRecord: (params: { session: string; question: string; answer: string }) =>
     rpc<number>("cockpit_record", params as Record<string, unknown>),
+  cockpitRewind: (params: { session: string; message_index: number }) =>
+    rpc<[string, string][]>("cockpit_rewind", params as Record<string, unknown>),
+  cockpitRewindUndo: (session: string) =>
+    rpc<[string, string][]>("cockpit_rewind_undo", { session }),
   cockpitForget: (session: string) =>
     rpc<boolean>("cockpit_forget", { session }),
   cockpitSessions: (cwd?: string) =>
