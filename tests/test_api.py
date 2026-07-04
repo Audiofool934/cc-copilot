@@ -112,6 +112,12 @@ class TestParity(unittest.TestCase):
         self.assertEqual(default, B.render(st, max_files=12, max_cmds=6))
         self.assertEqual(capped, B.render(st, max_files=0, max_cmds=0))
 
+    def test_status_renders_fleet_board(self):
+        cwd = os.path.dirname(self.path)
+        out = self.cp.status(cwd)
+        self.assertIsInstance(out, str)
+        self.assertTrue("status" in out.lower() or "no work sessions" in out)
+
 
 class TestStateAndTranscript(unittest.TestCase):
     def setUp(self):

@@ -217,6 +217,8 @@ export const surfaces = {
   transcript: (path: string) => rpc<Transcript>("transcript", { path }),
   advanceSinceMark: (params: { cwd?: string; session?: string } = {}) =>
     rpc<Record<string, unknown> | null>("advance_since_mark", params as Record<string, unknown>),
+  status: (params: { cwd?: string; limit?: number; show_all?: boolean } = {}) =>
+    rpc<string>("status", params as Record<string, unknown>),
   // ---- narration (LLM), blocking request/response ----
   now: (params: { cwd?: string; session?: string; instruction?: string; raw?: boolean } = {}) =>
     rpc<string>("now", params as Record<string, unknown>),

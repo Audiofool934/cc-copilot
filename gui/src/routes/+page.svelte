@@ -133,7 +133,7 @@
   async function loadFleet() {
     if (!cwd || fleetLoaded) return;
     fleetLoaded = true;
-    try { fleetMd = await surfaces.observe({ cwd, scope: "multi-session" }); }
+    try { fleetMd = await surfaces.status({ cwd }); }
     catch (e) { fleetMd = ""; error = e instanceof Error ? e.message : String(e); }
   }
 

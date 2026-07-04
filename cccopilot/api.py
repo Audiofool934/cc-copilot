@@ -302,6 +302,19 @@ class Copilot:
         LL.advance(key, cur_line, cur_ts, _now_iso())
         return LL.get(key)
 
+    # ---- fleet status board -------------------------------------------------
+    #
+    # The `/status` view: every work session in the project ranked by neediness,
+    # with cross-branch collision radar. Mirrors the CLI's `cc-copilot status`.
+
+    def status(self, cwd: Optional[str] = None, *, limit: int = 10,
+               show_all: bool = False) -> str:
+        """Fleet board for ``cwd``'s project: neediest sessions first.
+
+        Returns the same Markdown string the CLI ``cc-copilot status`` prints.
+        """
+        return C.render_fleet(cwd or os.getcwd(), limit=limit, show_all=show_all)[0]
+
     # ---- narration (LLM) surfaces ------------------------------------------
     #
     # Wrappers over narrate.* + context.build that mirror the CLI's cmd_ask /

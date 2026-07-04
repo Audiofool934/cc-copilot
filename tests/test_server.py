@@ -92,6 +92,11 @@ class TestParity(_ServerCase):
         r = self._rpc("check_verdict", {"session": self.path})
         self.assertIsInstance(r["result"], int)
         self.assertEqual(r["result"], self.cp.check_verdict(session=self.path))
+    def test_status_matches_facade(self):
+        cwd = os.path.dirname(self.path)
+        r = self._rpc("status", {"cwd": cwd})
+        self.assertNotIn("error", r)
+        self.assertEqual(r["result"], self.cp.status(cwd))
 
 
 class TestSerializedObjects(_ServerCase):
