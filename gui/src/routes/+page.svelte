@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { marked } from "marked";
   import { surfaces, type SessionRef, type State } from "$lib/jsonrpc";
+  import { THEMES, themeByName, applyTheme } from "$lib/themes";
   import Chat from "$lib/Chat.svelte";
   import Timeline from "$lib/Timeline.svelte";
   import Drafts from "$lib/Drafts.svelte";
@@ -22,10 +23,12 @@
   let sessionPath = $state("");
   let tab = $state<"chat" | "live" | "watch" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
   let needsWelcome = $state(false);
-  let theme = $state<"dark" | "light">(
-    (typeof localStorage !== "undefined" && (localStorage.getItem("cc-copilot-theme") as "dark" | "light")) || "dark"
-  );
-  $effect(() => { if (typeof localStorage !== "undefined") localStorage.setItem("cc-copilot-theme", theme); });
+  const savedTheme = typeof localStorage !== "undefined" ? localStorage.getItem("cc-copilot-theme") : null;
+  let theme = $state<string>(themeByName(savedTheme || "") ? (savedTheme as string) : "cockpit");
+  $effect(() => {
+    if (typeof localStorage !== "undefined") localStorage.setItem("cc-copilot-theme", theme);
+    applyTheme(theme);
+  });
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
   let scope = $state<"session" | "multi-session" | "project">("session");
@@ -165,12 +168,13 @@
   $effect(() => { if (tab === "since" && sessionPath) { void sinceWhen; loadSince(); } });
 
   onMount(async () => {
+    applyTheme(theme);
     try { needsWelcome = await surfaces.needsOnboarding(); } catch { /* ignore */ }
     loadProjects();
   });
 </script>
 
-<div class="app" data-theme={theme}>
+<div class="app">
   <header class="topbar">
     <div class="brand">🛰 cc-copilot</div>
     <div class="selectors">
@@ -204,9 +208,11 @@
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
       {verdictLabel(verdict)}
     </div>
-    <button class="theme" onclick={() => (theme = theme === "dark" ? "light" : "dark")} title="toggle theme">
-      {theme === "dark" ? "☾" : "☀"}
-    </button>
+    <div class="theme-wrap">
+      <select class="theme" bind:value={theme} title="theme">
+        {#each THEMES as t}<option value={t.name}>{t.label}</option>{/each}
+      </select>
+    </div>
   </header>
 
   <nav class="tabs">
@@ -272,31 +278,20 @@
 
 <style>
   :global(:root) {
-    --bg: #0f1115;
-    --panel: #161922;
-    --panel-2: #1c2030;
-    --text: #e6e9ef;
-    --muted: #8b93a7;
-    --accent: #6aa9ff;
-    --good: #3fb950;
-    --warn: #d29922;
-    --bad: #f85149;
-    --border: #232838;
+    /* Default theme (cockpit) - overridden by applyTheme() when JS runs. */
+    --bg: #1e1e1e;
+    --panel: #1e1e1e;
+    --panel-2: #262626;
+    --text: #c0caf5;
+    --muted: #6c7086;
+    --accent: #807ea6;
+    --good: #9ece6a;
+    --warn: #e0af68;
+    --bad: #f7768e;
+    --border: #353535;
     font-family: -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
     font-size: 14px;
     color: var(--text);
-  }
-  :global([data-theme="light"]) {
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --panel-2: #eef0f4;
-    --text: #1a1d24;
-    --muted: #5b6373;
-    --accent: #2563d9;
-    --good: #1a7a3e;
-    --warn: #9a6a00;
-    --bad: #c6282a;
-    --border: #d8dde4;
   }
   :global(*) { box-sizing: border-box; }
   :global(body) { margin: 0; background: var(--bg); }
@@ -319,8 +314,10 @@
     font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
     padding: 4px 10px; border: 1px solid; border-radius: 999px;
   }
-  .theme { font-size: 15px; line-height: 1; padding: 4px 9px; background: var(--panel);
-    color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+  .theme-wrap select {
+    font-size: 12px; padding: 4px 8px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  }
   .here { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .here:disabled { opacity: 0.5; }
 
