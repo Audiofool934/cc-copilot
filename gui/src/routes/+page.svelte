@@ -342,31 +342,39 @@
   }
   :global(*) { box-sizing: border-box; }
   :global(body) { margin: 0; background: var(--bg); }
+  :global(:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  :global(select:focus-visible, input:focus-visible, textarea:focus-visible) {
+    outline: none;
+  }
 
   .app { display: flex; flex-direction: column; height: 100vh; }
 
   .topbar {
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 12px;
     padding: 10px 16px; border-bottom: 1px solid var(--border);
-    background: var(--panel);
+    background: var(--panel); flex-wrap: wrap;
   }
   .brand { font-weight: 600; font-size: 15px; white-space: nowrap; }
-  .selectors { display: flex; gap: 12px; flex: 1; }
-  .selectors label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); flex: 1; }
+  .selectors { display: flex; align-items: flex-end; gap: 10px; flex: 1; flex-wrap: wrap; }
+  .selectors label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); flex: 1; min-width: 120px; }
   .selectors select {
-    margin-top: 2px; padding: 5px 8px; font-size: 13px;
+    margin-top: 2px; padding: 5px 8px; font-size: 13px; height: 30px;
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
   }
+  .selectors select:focus { border-color: var(--accent); }
   .verdict {
     font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
-    padding: 4px 10px; border: 1px solid; border-radius: 999px;
+    padding: 4px 10px; border: 1px solid; border-radius: 999px; white-space: nowrap;
   }
   .theme-wrap select {
     font-size: 12px; padding: 4px 8px; background: var(--panel); color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px;
   }
   .target-wrap { position: relative; }
-  .target { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .target { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px; }
   .target-wrap .backdrop { position: fixed; inset: 0; z-index: 90; border: none; background: transparent; padding: 0; cursor: default; }
   .target-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 91; min-width: 260px; max-width: 360px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -375,7 +383,7 @@
   .target-panel .key { color: var(--muted); min-width: 60px; }
   .target-panel .val { color: var(--text); word-break: break-all; }
   .target-panel .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
-  .here { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .here { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px; }
   .here:disabled { opacity: 0.5; }
 
   .tabs {

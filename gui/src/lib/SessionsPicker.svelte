@@ -29,7 +29,7 @@
 </script>
 
 <div class="picker">
-  <button class:active={open} onclick={() => (open = !open)} disabled={!cwd} title="select sessions for multi/project scope">
+  <button class="trigger" class:active={open} onclick={() => (open = !open)} disabled={!cwd} title="select sessions for multi/project scope">
     sessions {selected.size > 0 ? `(${selected.size})` : ""}
   </button>
   {#if open}
@@ -53,8 +53,11 @@
 
 <style>
   .picker { position: relative; }
-  .picker button { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
-  .picker button.active { color: var(--accent); border-color: var(--accent); }
+  .picker .trigger {
+    font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px;
+  }
+  .picker .trigger.active { color: var(--accent); border-color: var(--accent); }
   .backdrop { position: fixed; inset: 0; z-index: 90; border: none; background: transparent; padding: 0; cursor: default; }
   .panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 91; min-width: 320px; max-width: 420px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);

@@ -84,7 +84,7 @@
   .picker { position: relative; }
   .picker > button {
     font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px;
   }
   .picker > button.active { color: var(--accent); border-color: var(--accent); }
   .picker > button:disabled { opacity: 0.5; }
