@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { marked } from "marked";
-  import { surfaces, type SessionRef, type State } from "$lib/jsonrpc";
+  import { surfaces, type SessionRef, type State, type TargetInfo } from "$lib/jsonrpc";
   import { THEMES, themeByName, applyTheme } from "$lib/themes";
   import Chat from "$lib/Chat.svelte";
   import Timeline from "$lib/Timeline.svelte";
@@ -41,6 +41,17 @@
   let verdict = $state<number | null>(null);
   let loading = $state(false);
   let error = $state("");
+  let targetOpen = $state(false);
+  let targetInfo = $state<TargetInfo | null>(null);
+
+  async function loadTarget() {
+    if (!sessionPath) { targetInfo = null; return; }
+    try {
+      targetInfo = await surfaces.target({ session: sessionPath, scope, scope_sessions: scopeSessions });
+    } catch { targetInfo = null; }
+  }
+
+  $effect(() => { if (sessionPath) { void scope; void scopeSessions; loadTarget(); } });
 
   async function loadProjects() {
     error = "";
@@ -213,6 +224,22 @@
         {#each THEMES as t}<option value={t.name}>{t.label}</option>{/each}
       </select>
     </div>
+    <div class="target-wrap">
+      <button class="target" onclick={() => (targetOpen = !targetOpen)} title="current cockpit target">target</button>
+      {#if targetOpen}
+        <button class="backdrop" aria-label="close" onclick={() => targetOpen = false}></button>
+        <div class="target-panel">
+          {#if targetInfo}
+            <div class="row"><span class="key">cockpit</span><span class="val">{targetInfo.conv_id || "—"}</span></div>
+            <div class="row"><span class="key">target</span><span class="val">{targetInfo.path}</span></div>
+            <div class="row"><span class="key">evidence</span><span class="val">{targetInfo.scope}{targetInfo.scope_sessions.length ? `:${targetInfo.scope_sessions.length}` : ""}</span></div>
+            <div class="row"><span class="key">status</span><span class="val">{targetInfo.banner}</span></div>
+          {:else}
+            <div class="empty">no target selected</div>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </header>
 
   <nav class="tabs">
@@ -318,6 +345,16 @@
     font-size: 12px; padding: 4px 8px; background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
   }
+  .target-wrap { position: relative; }
+  .target { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .target-wrap .backdrop { position: fixed; inset: 0; z-index: 90; border: none; background: transparent; padding: 0; cursor: default; }
+  .target-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 91; min-width: 260px; max-width: 360px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    padding: 10px; }
+  .target-panel .row { display: flex; gap: 10px; padding: 4px 0; font-size: 12px; }
+  .target-panel .key { color: var(--muted); min-width: 60px; }
+  .target-panel .val { color: var(--text); word-break: break-all; }
+  .target-panel .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
   .here { font-size: 12px; padding: 4px 10px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .here:disabled { opacity: 0.5; }
 

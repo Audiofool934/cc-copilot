@@ -63,6 +63,7 @@ _PUBLIC = {
     "diff": None,                              # returns dict (structured /diff view)
     "advance_since_mark": None,                # returns dict | None
     "status": None,                            # returns str; params: cwd?, limit?, show_all?
+    "target": None,                            # returns dict; params: cwd?, session?, scope?, scope_sessions?
     # ---- cockpit session persistence (best-effort) ----
     "cockpit_sessions": None,                  # returns list[dict] (ConvHeader)
     "cockpit_history": None,                  # returns list[[role, text]]

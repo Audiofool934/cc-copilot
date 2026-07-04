@@ -219,6 +219,8 @@ export const surfaces = {
     rpc<Record<string, unknown> | null>("advance_since_mark", params as Record<string, unknown>),
   status: (params: { cwd?: string; limit?: number; show_all?: boolean } = {}) =>
     rpc<string>("status", params as Record<string, unknown>),
+  target: (params: { cwd?: string; session?: string; scope?: string; scope_sessions?: string } = {}) =>
+    rpc<TargetInfo>("target", params as Record<string, unknown>),
   // ---- narration (LLM), blocking request/response ----
   now: (params: { cwd?: string; session?: string; instruction?: string; raw?: boolean } = {}) =>
     rpc<string>("now", params as Record<string, unknown>),
@@ -273,4 +275,11 @@ export interface ScopeGroup {
   scope: string;
   scope_sessions: string[];
   updated_at?: number;
+}
+export interface TargetInfo {
+  conv_id: string;
+  path: string;
+  scope: string;
+  scope_sessions: string[];
+  banner: string;
 }

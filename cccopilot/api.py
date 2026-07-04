@@ -26,6 +26,7 @@ from dataclasses import asdict
 from typing import List, Optional, Tuple
 
 from . import brief as B
+from .brief import _dur
 from . import backends as BK
 from . import chat as C
 from . import context as EC
@@ -314,6 +315,34 @@ class Copilot:
         Returns the same Markdown string the CLI ``cc-copilot status`` prints.
         """
         return C.render_fleet(cwd or os.getcwd(), limit=limit, show_all=show_all)[0]
+
+    def target(self, cwd: Optional[str] = None, session: Optional[str] = None,
+               *, scope: str = SC.SESSION, scope_sessions: str = "") -> dict:
+        """Current cockpit target metadata: transcript path, conv_id, evidence
+        scope, and a one-line status banner. Mirrors the TUI's ``/target``."""
+        path = self._path_or_none(cwd, session)
+        if not path:
+            raise SessionNotFound("no cc-copilot session: pass a cwd or a session path")
+        try:
+            store = ST.Store.open_for(path, enabled=ST.enabled())
+            conv_id = store.conv_id
+        except Exception:
+            conv_id = ""
+        try:
+            tr = SRC.parse(path)
+            st = S.build(tr)
+            a = A.assess(st)
+            banner = (f"scope: {scope} · {st.status} · idle {_dur(st.idle_seconds)} · "
+                      f"{st.tr.raw_lines} ev · safety: {a.verdict}")
+        except Exception:
+            banner = "scope: {} · no live session — transcript gone".format(scope)
+        return {
+            "conv_id": conv_id,
+            "path": path,
+            "scope": scope,
+            "scope_sessions": list(SC.parse_selectors(scope_sessions)),
+            "banner": banner,
+        }
 
     # ---- narration (LLM) surfaces ------------------------------------------
     #

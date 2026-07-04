@@ -118,6 +118,13 @@ class TestParity(unittest.TestCase):
         self.assertIsInstance(out, str)
         self.assertTrue("status" in out.lower() or "no work sessions" in out)
 
+    def test_target_returns_session_metadata(self):
+        t = self.cp.target(session=self.path)
+        self.assertEqual(t["path"], os.path.abspath(self.path))
+        self.assertEqual(t["scope"], "session")
+        self.assertIn("banner", t)
+        self.assertIn("conv_id", t)
+
 
 class TestStateAndTranscript(unittest.TestCase):
     def setUp(self):

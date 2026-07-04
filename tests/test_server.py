@@ -98,6 +98,11 @@ class TestParity(_ServerCase):
         self.assertNotIn("error", r)
         self.assertEqual(r["result"], self.cp.status(cwd))
 
+    def test_target_matches_facade(self):
+        r = self._rpc("target", {"session": self.path})
+        self.assertNotIn("error", r)
+        self.assertEqual(r["result"], self.cp.target(session=self.path))
+
 
 class TestSerializedObjects(_ServerCase):
     def test_transcript_shape(self):
