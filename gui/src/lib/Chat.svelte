@@ -17,6 +17,7 @@
   const COMMANDS = [
     { cmd: "/chat", desc: "grounded chat", view: "chat" },
     { cmd: "/live", desc: "live watch", view: "live" },
+    { cmd: "/watch", desc: "monitor + narration", view: "watch" },
     { cmd: "/timeline", desc: "activity feed", view: "timeline" },
     { cmd: "/brief", desc: "evidence-cited recap", view: "brief" },
     { cmd: "/observe", desc: "attention board", view: "observe" },

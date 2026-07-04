@@ -228,6 +228,8 @@ export const surfaces = {
     rpc<string>("recap_since", params as Record<string, unknown>),
   handoff: (params: { cwd?: string; session?: string } = {}) =>
     rpc<string>("handoff", params as Record<string, unknown>),
+  watchProgress: (params: { delta_text: string; instruction?: string }) =>
+    rpc<string>('watch_progress', params as Record<string, unknown>),
   // ---- cockpit session persistence ----
   cockpitHistory: (session: string) =>
     rpc<[string, string][]>("cockpit_history", { session }),

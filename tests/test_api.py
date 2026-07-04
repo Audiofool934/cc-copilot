@@ -562,6 +562,13 @@ class TestNarration(unittest.TestCase):
         self.assertIn("Full brief", out)
         self.assertIn("testsess", out)  # the session id appears in the meta
 
+    def test_watch_progress_narrates_delta(self):
+        out = API.Copilot().watch_progress("ran pytest [L3]", backend=self.be,
+                                            instruction="focus on failures")
+        self.assertEqual(out, "ok")
+        self.assertIn("ran pytest", self.be.prompts[0])
+        self.assertIn("focus on failures", self.be.prompts[0])
+
 
 # ---- cockpit session persistence ----------------------------------------
 

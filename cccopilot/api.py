@@ -518,6 +518,15 @@ class Copilot:
         return N.recap_since(since_text, model=model, backend=backend,
                               instruction=instruction)
 
+    def watch_progress(self, delta_text: str, *, instruction: str = "",
+                       model: str = None, backend=None) -> str:
+        """Narrate a watch delta into a process-oriented progress update (the
+        monitor card). ``delta_text`` is the since-delta to narrate; feed it
+        ``since(when='last-look', peek=False)`` so the marker advances each
+        cycle - the watch loop. ``instruction`` is an optional preset steer."""
+        return N.watch_progress_brief(delta_text, model=model, backend=backend,
+                                       instruction=instruction)
+
     def handoff(self, cwd: Optional[str] = None, session: Optional[str] = None, *,
                 include_current: bool = False) -> str:
         """A shareable Markdown handoff brief for this session (``/handoff``):

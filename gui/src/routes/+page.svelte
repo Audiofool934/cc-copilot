@@ -9,12 +9,13 @@
   import Diff from "$lib/Diff.svelte";
   import Settings from "$lib/Settings.svelte";
   import Welcome from "$lib/Welcome.svelte";
+  import Watch from "$lib/Watch.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "live" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
+  let tab = $state<"chat" | "live" | "watch" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
   let needsWelcome = $state(false);
   let fleetMd = $state("");
   let fleetLoaded = $state(false);
@@ -179,7 +180,7 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "live", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state", "settings"] as t}
+    {#each ["chat", "live", "watch", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state", "settings"] as t}
       <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
     {/each}
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
@@ -187,7 +188,7 @@
     </button>
   </nav>
 
-  <main class="content" class:chat={tab === "chat" || tab === "live" || tab === "timeline" || tab === "diff" || tab === "drafts"}>
+  <main class="content" class:chat={tab === "chat" || tab === "live" || tab === "watch" || tab === "timeline" || tab === "diff" || tab === "drafts"}>
     {#if error}
       <div class="error">⚠ {error}</div>
     {:else if !sessionPath && tab !== "fleet"}
@@ -196,6 +197,8 @@
       <Chat {sessionPath} {scope} scopeSessions={scopeSessions} goto={(t) => (tab = t as typeof tab)} />
     {:else if tab === "live"}
       <Live {sessionPath} {scope} scopeSessions={scopeSessions} />
+    {:else if tab === "watch"}
+      <Watch {sessionPath} {scope} scopeSessions={scopeSessions} />
     {:else if tab === "timeline"}
       <Timeline {sessionPath} />
     {:else if tab === "diff"}
