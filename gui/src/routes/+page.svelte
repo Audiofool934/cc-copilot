@@ -10,6 +10,7 @@
   import Settings from "$lib/Settings.svelte";
   import Welcome from "$lib/Welcome.svelte";
   import Watch from "$lib/Watch.svelte";
+  import SessionsPicker from "$lib/SessionsPicker.svelte";
 
   let projects = $state<[string, number, number][]>([]);
   let cwd = $state("");
@@ -169,9 +170,7 @@
         </select>
       </label>
       {#if scope !== "session"}
-        <label>sessions
-          <input bind:value={scopeSessions} placeholder="ids/prefixes, or blank for all" />
-        </label>
+        <SessionsPicker {cwd} bind:scopeSessions bind:sessionPath />
       {/if}
     </div>
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
