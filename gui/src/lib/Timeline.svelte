@@ -22,10 +22,17 @@
 
   async function load() {
     if (!sessionPath) return;
-    loading = true;
     error = "";
     try {
       const tr = await surfaces.transcript(sessionPath);
+      // Skip the re-render when the transcript hasn't grown since the last poll
+      // (the common idle-monitor case) - avoids re-rendering the whole list
+      // every 3s. The audit's "live polling cost" perf finding.
+      const last = tr.records.length ? tr.records[tr.records.length - 1].line : 0;
+      const prev = records.length ? records[records.length - 1].line : -1;
+      if (tr.records.length === records.length && last === prev) {
+        return; // unchanged
+      }
       records = tr.records;
       title = tr.title || tr.session_id.slice(0, 8);
       if (follow) await scrollToBottom();

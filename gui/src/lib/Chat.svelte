@@ -66,8 +66,8 @@
     draft = "";
     error = "";
     const history = messages.map((m) => [m.role, m.text] as [string, string]);
-    const ai: Message = { role: "assistant", text: "" };
-    messages = [...messages, { role: "user", text: q }, ai];
+    messages = [...messages, { role: "user", text: q }, { role: "assistant", text: "" }];
+    const aiIdx = messages.length - 1;
     await scrollToBottom();
     busy = true;
     abortCtrl = new AbortController();
@@ -76,14 +76,16 @@
         "chat_stream",
         { session: sessionPath, history, question: q, scope, scope_sessions: scopeSessions },
         (chunk) => {
-          ai.text += chunk;
-          messages = [...messages]; // trigger reactivity
+          // Mutate through the proxied $state element so Svelte 5's deep
+          // reactivity updates only this row - no per-chunk array copy / full
+          // list re-render (the audit's chat re-render storm).
+          messages[aiIdx].text += chunk;
           scrollToBottom();
         },
         abortCtrl.signal,
       );
       // persist the completed Q&A turn (best-effort)
-      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: ai.text }).catch(() => {});
+      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: messages[aiIdx].text }).catch(() => {});
     } catch (e) {
       const err = e as Error;
       if (err.name === "AbortError") {
