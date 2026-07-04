@@ -14,6 +14,7 @@
   let interval = $state(3);
   let monitor = $state(true);
   let preset = $state("default");
+  let custom = $state("");
   let cards = $state<{ text: string; ts: string }[]>([]);
   let error = $state("");
   let prevEvents = 0;
@@ -25,6 +26,8 @@
     { id: "review", label: "review", instruction: "focus on what to verify before this is safe to merge" },
     { id: "ship", label: "ship", instruction: "focus on whether the work is complete and shippable" },
   ];
+
+  const instruction = $derived(custom.trim() || PRESETS.find((p) => p.id === preset)?.instruction || "");
 
   async function tick() {
     if (!sessionPath) return;
@@ -47,8 +50,7 @@
     try {
       let delta = await surfaces.since({ session: sessionPath, when: "last-look", peek: false });
       if (delta.startsWith("No last-look mark") || delta.startsWith("last-look tracking is off")) return;
-      const instr = PRESETS.find((p) => p.id === preset)?.instruction ?? "";
-      const text = await surfaces.watchProgress({ delta_text: delta, instruction: instr });
+      const text = await surfaces.watchProgress({ delta_text: delta, instruction });
       if (text && text.trim()) {
         cards = [...cards, { text, ts: new Date().toLocaleTimeString() }];
         if (cards.length > 50) cards = cards.slice(-50);
@@ -80,6 +82,7 @@
     <select bind:value={preset} onchange={start}>
       {#each PRESETS as p}<option value={p.id}>{p.label}</option>{/each}
     </select>
+    <input class="custom" type="text" bind:value={custom} placeholder="custom steer (overrides preset)" />
     <span class="updated">{updated}</span>
   </div>
   {#if error}<div class="error">⚠ {error}</div>{/if}
@@ -108,6 +111,8 @@
   .bar label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
   .bar input[type=number] { width: 44px; padding: 3px 6px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   .bar select { padding: 3px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .bar .custom { padding: 3px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 180px; }
+  .bar .custom:focus { border-color: var(--accent); outline: none; }
   .status { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
   .status.running { background: #1d2b46; color: #9ec5ff; } .status.stalled { background: #3d1f1f; color: #ff8b8b; }
   .status.idle { background: #1c232e; color: var(--muted); } .status.awaiting-agent { background: #3d3010; color: #e0c060; }
