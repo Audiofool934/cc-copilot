@@ -36,6 +36,7 @@ from . import narrate as N
 from . import observe as O
 from . import onboard as OB
 from . import scope as SC
+from . import scope_groups as SG
 from . import since as SI
 from . import sources as SRC
 from . import state as S
@@ -613,6 +614,45 @@ class Copilot:
             return out
         except Exception:
             return []
+
+    # ---- saved evidence scope groups ---------------------------------------
+    #
+    # Human-named shortcuts for the evidence scope (session / multi-session /
+    # project plus an optional selected-session subset). Persisted in
+    # ~/.local/share/cc-copilot/scope_groups.json (or platform equivalent).
+
+    def scope_groups(self) -> List[dict]:
+        """All saved scope groups, sorted by name."""
+        try:
+            return [
+                {"name": g.name, "scope": g.scope,
+                 "scope_sessions": list(g.scope_sessions or []),
+                 "updated_at": g.updated_at}
+                for g in SG.list_groups()
+            ]
+        except Exception:
+            return []
+
+    def scope_group_save(self, name: str, *, scope: str = SC.SESSION,
+                         scope_sessions: str = "") -> dict:
+        """Save the current evidence scope under ``name`` for reuse."""
+        sessions = SC.parse_selectors(scope_sessions)
+        g = SG.save(name, scope, sessions)
+        return {"name": g.name, "scope": g.scope,
+                "scope_sessions": list(g.scope_sessions or []),
+                "updated_at": g.updated_at}
+
+    def scope_group_load(self, name: str) -> Optional[dict]:
+        """Load a saved scope group by name, or None if it doesn't exist."""
+        g = SG.get(name)
+        if g is None:
+            return None
+        return {"name": g.name, "scope": g.scope,
+                "scope_sessions": list(g.scope_sessions or [])}
+
+    def scope_group_delete(self, name: str) -> bool:
+        """Delete a saved scope group. Returns True if it existed."""
+        return SG.delete(name)
 
     # ---- cockpit session persistence -------------------------------------
     #

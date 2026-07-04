@@ -11,6 +11,7 @@
   import Welcome from "$lib/Welcome.svelte";
   import Watch from "$lib/Watch.svelte";
   import SessionsPicker from "$lib/SessionsPicker.svelte";
+  import ScopeGroups from "$lib/ScopeGroups.svelte";
   import Footer from "$lib/Footer.svelte";
   import ToastRack from "$lib/ToastRack.svelte";
   import { toast } from "$lib/toasts.svelte";
@@ -179,6 +180,7 @@
       {#if scope !== "session"}
         <SessionsPicker {cwd} bind:scopeSessions bind:sessionPath />
       {/if}
+      <ScopeGroups bind:scope bind:scopeSessions />
     </div>
     <div class="verdict" style="color:{verdictColor(verdict)}; border-color:{verdictColor(verdict)}">
       {verdictLabel(verdict)}

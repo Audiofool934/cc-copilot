@@ -638,5 +638,55 @@ class TestSettings(unittest.TestCase):
         self.assertIsInstance(API.Copilot().needs_onboarding(), bool)
 
 
+# ---- saved evidence scope groups -----------------------------------------
+
+class TestScopeGroups(unittest.TestCase):
+    """Facade wrappers over scope_groups.py use an isolated state directory."""
+
+    def setUp(self):
+        self._saved = os.environ.get("CC_COPILOT_STATE_DIR")
+        self.state_dir = tempfile.mkdtemp(prefix="ccapi-scope-")
+        os.environ["CC_COPILOT_STATE_DIR"] = self.state_dir
+        self.cp = API.Copilot()
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("CC_COPILOT_STATE_DIR", None)
+        else:
+            os.environ["CC_COPILOT_STATE_DIR"] = self._saved
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    def test_scope_groups_roundtrip(self):
+        self.assertEqual(self.cp.scope_groups(), [])
+
+        saved = self.cp.scope_group_save("release", scope="project", scope_sessions="abc123, def456")
+        self.assertEqual(saved["name"], "release")
+        self.assertEqual(saved["scope"], "project")
+        self.assertEqual(saved["scope_sessions"], ["abc123", "def456"])
+
+        groups = self.cp.scope_groups()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["name"], "release")
+
+        loaded = self.cp.scope_group_load("release")
+        self.assertEqual(loaded["scope"], "project")
+        self.assertEqual(loaded["scope_sessions"], ["abc123", "def456"])
+
+        self.assertTrue(self.cp.scope_group_delete("release"))
+        self.assertIsNone(self.cp.scope_group_load("release"))
+        self.assertFalse(self.cp.scope_group_delete("release"))
+
+    def test_scope_group_save_normalizes_name(self):
+        g = self.cp.scope_group_save("My-Group_1", scope="multi-session")
+        self.assertEqual(g["name"], "My-Group_1")
+        self.assertEqual(g["scope"], "multi-session")
+        self.assertEqual(g["scope_sessions"], [])
+
+    def test_scope_group_save_rejects_bad_name(self):
+        with self.assertRaises(ValueError):
+            self.cp.scope_group_save("bad name!")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -247,6 +247,12 @@ export const surfaces = {
   needsOnboarding: () => rpc<boolean>('needs_onboarding', {}),
   onboardChoices: (featured_only = true) =>
     rpc<OnboardChoice[]>('onboard_choices', { featured_only }),
+  // ---- saved evidence scope groups ----
+  scopeGroups: () => rpc<ScopeGroup[]>('scope_groups', {}),
+  scopeGroupSave: (params: { name: string; scope?: string; scope_sessions?: string }) =>
+    rpc<ScopeGroup>('scope_group_save', params as Record<string, unknown>),
+  scopeGroupLoad: (name: string) => rpc<ScopeGroup | null>('scope_group_load', { name }),
+  scopeGroupDelete: (name: string) => rpc<boolean>('scope_group_delete', { name }),
 };
 export interface OnboardChoice {
   name: string;
@@ -259,4 +265,10 @@ export interface OnboardChoice {
   brand_hex: string;
   ready: boolean;
   status: string;
+}
+export interface ScopeGroup {
+  name: string;
+  scope: string;
+  scope_sessions: string[];
+  updated_at?: number;
 }

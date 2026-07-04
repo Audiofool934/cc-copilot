@@ -318,5 +318,47 @@ class TestServerNarration(_ServerCase):
         self.assertIn("ask_stream", info["stream"])
 
 
+class TestScopeGroups(_ServerCase):
+    """Scope group endpoints route through the facade with isolated storage."""
+
+    def setUp(self):
+        super().setUp()
+        self._saved_state = os.environ.get("CC_COPILOT_STATE_DIR")
+        self.state_dir = tempfile.mkdtemp(prefix="ccserver-scope-")
+        os.environ["CC_COPILOT_STATE_DIR"] = self.state_dir
+
+    def tearDown(self):
+        if self._saved_state is None:
+            os.environ.pop("CC_COPILOT_STATE_DIR", None)
+        else:
+            os.environ["CC_COPILOT_STATE_DIR"] = self._saved_state
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        super().tearDown()
+
+    def test_scope_group_save_load_delete(self):
+        r = self._rpc("scope_group_save", {"name": "fleet", "scope": "multi-session", "scope_sessions": "s1,s2"})
+        self.assertNotIn("error", r)
+        self.assertEqual(r["result"]["name"], "fleet")
+        self.assertEqual(r["result"]["scope"], "multi-session")
+        self.assertEqual(r["result"]["scope_sessions"], ["s1", "s2"])
+
+        r = self._rpc("scope_groups", {})
+        self.assertEqual(len(r["result"]), 1)
+
+        r = self._rpc("scope_group_load", {"name": "fleet"})
+        self.assertEqual(r["result"]["scope"], "multi-session")
+
+        r = self._rpc("scope_group_delete", {"name": "fleet"})
+        self.assertTrue(r["result"])
+
+        r = self._rpc("scope_group_load", {"name": "fleet"})
+        self.assertIsNone(r["result"])
+
+    def test_scope_group_bad_name_returns_invalid_params(self):
+        r = self._rpc("scope_group_save", {"name": "bad name!"})
+        self.assertIn("error", r)
+        self.assertEqual(r["error"]["code"], -32602)
+
+
 if __name__ == "__main__":
     unittest.main()

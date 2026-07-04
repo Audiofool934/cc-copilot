@@ -73,6 +73,11 @@ _PUBLIC = {
     "set_backend": None,                        # returns str (config path); params: name, model?, key?
     "needs_onboarding": None,                   # returns bool
     "onboard_choices": None,                    # returns list[dict] (params: featured_only?)
+    # ---- saved evidence scope groups ----
+    "scope_groups": None,                       # returns list[dict]
+    "scope_group_save": None,                   # returns dict; params: name, scope?, scope_sessions?
+    "scope_group_load": None,                   # returns dict | None; params: name
+    "scope_group_delete": None,                 # returns bool; params: name
     # ---- narration (LLM), blocking request/response ----
     "narrate_brief": None,                      # returns str
     "ask": None,                                # returns str (params: question, ...)
