@@ -193,6 +193,8 @@
   function render(md: string): string {
     return marked.parse(md || "", { breaks: false }) as string;
   }
+
+  const inputId = crypto.randomUUID();
 </script>
 
 <div class="chat">
@@ -215,7 +217,9 @@
   {#if error}<div class="error">⚠ {error}</div>{/if}
   <div class="composer">
     <div class="input-wrap">
+      <label for={inputId} class="visually-hidden">Ask about this session</label>
       <textarea
+        id={inputId}
         bind:value={draft}
         onkeydown={onKey}
         placeholder="Ask about this session... (type / for commands; Enter to send, Shift+Enter for newline)"
@@ -276,6 +280,10 @@
   .error { color: var(--bad); padding: 6px 0; }
   .composer { display: flex; gap: 8px; align-items: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
   .input-wrap { flex: 1; position: relative; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   textarea {
     width: 100%; resize: none; font-family: inherit; font-size: 13px; line-height: 1.4;
     padding: 8px 10px; background: var(--panel); color: var(--text);

@@ -2,9 +2,9 @@
   import { toasts } from "$lib/toasts.svelte";
 </script>
 
-<div class="rack">
+<div class="rack" role="status" aria-live="polite">
   {#each toasts as t (t.id)}
-    <div class="toast {t.kind}">{t.msg}</div>
+    <div class="toast {t.kind}" role={t.kind === "error" ? "alert" : undefined} aria-live={t.kind === "error" ? "assertive" : undefined}>{t.msg}</div>
   {/each}
 </div>
 

@@ -114,8 +114,10 @@
   .bar .custom { padding: 3px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 180px; }
   .bar .custom:focus { border-color: var(--accent); outline: none; }
   .status { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
-  .status.running { background: #1d2b46; color: #9ec5ff; } .status.stalled { background: #3d1f1f; color: #ff8b8b; }
-  .status.idle { background: #1c232e; color: var(--muted); } .status.awaiting-agent { background: #3d3010; color: #e0c060; }
+  .status.running { background: var(--status-running-bg); color: var(--status-running-text); }
+  .status.stalled { background: var(--status-stalled-bg); color: var(--status-stalled-text); }
+  .status.idle { background: var(--status-idle-bg); color: var(--status-idle-text); }
+  .status.awaiting-agent { background: var(--status-awaiting-bg); color: var(--status-awaiting-text); }
   .pill { font-size: 11px; font-weight: 600; text-transform: uppercase; padding: 2px 9px; border: 1px solid; border-radius: 999px; }
   .events { font-size: 12px; color: var(--muted); }
   .updated { font-size: 12px; color: var(--muted); margin-left: auto; }

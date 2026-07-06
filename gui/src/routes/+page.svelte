@@ -22,7 +22,8 @@
   let cwd = $state("");
   let sessions = $state<SessionRef[]>([]);
   let sessionPath = $state("");
-  let tab = $state<"chat" | "live" | "watch" | "timeline" | "diff" | "drafts" | "fleet" | "brief" | "observe" | "since" | "state" | "settings">("chat");
+  const TABS = ["chat", "live", "watch", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state", "settings"] as const;
+  let tab = $state<(typeof TABS)[number]>("chat");
   let needsWelcome = $state(false);
   const savedTheme = typeof localStorage !== "undefined" ? localStorage.getItem("cc-copilot-theme") : null;
   let theme = $state<string>(themeByName(savedTheme || "") ? (savedTheme as string) : "cockpit");
@@ -197,6 +198,20 @@
   $effect(() => { if (sessionPath) { void scope; void scopeSessions; loadAll(); } });
   $effect(() => { if (tab === "since" && sessionPath) { void sinceWhen; loadSince(); } });
 
+  function handleTabKey(event: KeyboardEvent) {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    const list = event.currentTarget as HTMLDivElement;
+    const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const idx = buttons.indexOf(event.target as HTMLButtonElement);
+    if (idx === -1) return;
+    event.preventDefault();
+    const next = event.key === "ArrowRight"
+      ? (idx + 1) % buttons.length
+      : (idx - 1 + buttons.length) % buttons.length;
+    buttons[next].focus();
+    tab = TABS[next];
+  }
+
   onMount(async () => {
     applyTheme(theme);
     try { needsWelcome = await surfaces.needsOnboarding(); } catch { /* ignore */ }
@@ -240,7 +255,8 @@
       {verdictLabel(verdict)}
     </div>
     <div class="theme-wrap">
-      <select class="theme" bind:value={theme} title="theme">
+      <label for="theme-select">Theme</label>
+      <select id="theme-select" class="theme" bind:value={theme} title="theme">
         {#each THEMES as t}<option value={t.name}>{t.label}</option>{/each}
       </select>
     </div>
@@ -263,15 +279,26 @@
   </header>
 
   <nav class="tabs">
-    {#each ["chat", "live", "watch", "timeline", "diff", "drafts", "fleet", "brief", "observe", "since", "state", "settings"] as t}
-      <button class:active={tab === t} onclick={() => (tab = t as typeof tab)}>{t}</button>
-    {/each}
+    <div class="tablist" role="tablist" tabindex="-1" onkeydown={handleTabKey}>
+      {#each TABS as t}
+        <button
+          id="tab-{t}"
+          class:active={tab === t}
+          role="tab"
+          aria-selected={tab === t}
+          aria-controls="tabpanel"
+          tabindex={tab === t ? 0 : -1}
+          onclick={() => (tab = t)}
+        >{t}</button>
+      {/each}
+    </div>
     <button class="refresh" onclick={loadAll} disabled={loading || !sessionPath}>
       {loading ? "…" : "refresh"}
     </button>
   </nav>
 
   <main class="content" class:chat={tab === "chat" || tab === "live" || tab === "watch" || tab === "timeline" || tab === "diff" || tab === "drafts"}>
+    <div id="tabpanel" role="tabpanel" aria-labelledby="tab-{tab}" class="tabpanel">
     {#if error}
       <div class="error">⚠ {error}</div>
     {:else if !sessionPath && tab !== "fleet"}
@@ -313,6 +340,7 @@
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- the markdown comes from the local cc-copilot server, not user input -->
       <div class="markdown">{@html render(tab === "brief" ? brief : observe)}</div>
     {/if}
+    </div>
   </main>
   <Footer {tab} />
 </div>
@@ -336,6 +364,14 @@
     --warn: #e0af68;
     --bad: #f7768e;
     --border: #353535;
+    --status-running-bg: #1d2b46;
+    --status-running-text: #9ec5ff;
+    --status-stalled-bg: #3d1f1f;
+    --status-stalled-text: #ff8b8b;
+    --status-idle-bg: #1c232e;
+    --status-idle-text: var(--muted);
+    --status-awaiting-bg: #3d3010;
+    --status-awaiting-text: #e0c060;
     font-family: -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
     font-size: 14px;
     color: var(--text);
@@ -345,9 +381,6 @@
   :global(:focus-visible) {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-  }
-  :global(select:focus-visible, input:focus-visible, textarea:focus-visible) {
-    outline: none;
   }
 
   .app { display: flex; flex-direction: column; height: 100vh; }
@@ -369,6 +402,8 @@
     font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
     padding: 4px 10px; border: 1px solid; border-radius: 999px; white-space: nowrap;
   }
+  .theme-wrap { display: flex; align-items: center; gap: 6px; }
+  .theme-wrap label { font-size: 11px; color: var(--muted); }
   .theme-wrap select {
     font-size: 12px; padding: 4px 8px; background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; cursor: pointer; height: 30px;
@@ -390,6 +425,7 @@
     display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--border);
     background: var(--panel);
   }
+  .tablist { display: flex; gap: 2px; flex: 1; }
   .tabs button {
     background: none; border: none; color: var(--muted); cursor: pointer;
     padding: 9px 14px; font-size: 13px; border-bottom: 2px solid transparent;
@@ -399,6 +435,7 @@
 
   .content { overflow: auto; padding: 20px 28px; flex: 1; }
   .content.chat { padding: 12px 16px 16px; overflow: hidden; display: flex; }
+  .tabpanel { width: 100%; height: 100%; }
   .since-controls { display: flex; gap: 12px; align-items: center; padding: 0 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
   .since-controls label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .since-controls select { padding: 4px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }

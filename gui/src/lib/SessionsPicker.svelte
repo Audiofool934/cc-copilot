@@ -38,11 +38,13 @@
       <div class="hint">Check sessions to include in multi/project scope; → sets the anchor.</div>
       {#each sessions as s}
         <div class="row">
-          <input type="checkbox" checked={selected.has(rowId(s))} onchange={() => toggle(rowId(s))} />
-          <span class="meta">
-            <span class="t">{s.title || s.session_id.slice(0, 8)}</span>
-            <span class="sub">{s.agent} · {s.hhmm}{s.live ? " · live" : ""}</span>
-          </span>
+          <label class="session-label">
+            <input type="checkbox" checked={selected.has(rowId(s))} onchange={() => toggle(rowId(s))} />
+            <span class="meta">
+              <span class="t">{s.title || s.session_id.slice(0, 8)}</span>
+              <span class="sub">{s.agent} · {s.hhmm}{s.live ? " · live" : ""}</span>
+            </span>
+          </label>
           <button class="anchor" class:active={sessionPath === s.path} onclick={() => { sessionPath = s.path; open = false; }} title="use as anchor">→</button>
         </div>
       {/each}
@@ -65,6 +67,7 @@
   .hint { font-size: 11px; color: var(--muted); padding: 4px 6px 8px; }
   .row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; }
   .row:hover { background: var(--panel-2); }
+  .session-label { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
   .row .meta { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .t { font-size: 13px; }
   .sub { font-size: 11px; color: var(--muted); }

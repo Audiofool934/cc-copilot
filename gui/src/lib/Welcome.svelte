@@ -9,10 +9,51 @@
   let model = $state("");
   let busy = $state(false);
   let error = $state("");
+  let modalEl = $state<HTMLDivElement | null>(null);
+  const headingId = "welcome-heading";
 
   onMount(async () => {
     try { choices = await surfaces.onboardChoices(); selected = choices.find((c) => c.ready && c.kind !== "skip")?.name ?? choices[0]?.name ?? ""; }
     catch (e) { error = e instanceof Error ? e.message : String(e); }
+  });
+
+  function focusableIn(el: HTMLElement): HTMLElement[] {
+    return Array.from(
+      el.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((x) => !x.hasAttribute("disabled") && x.offsetParent !== null);
+  }
+
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key !== "Tab" || !modalEl) return;
+    const focusable = focusableIn(modalEl);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      ondone();
+      return;
+    }
+    trapFocus(e);
+  }
+
+  $effect(() => {
+    if (choices.length && modalEl) {
+      const first = focusableIn(modalEl)[0];
+      first?.focus();
+    }
   });
 
   $effect(() => {
@@ -33,8 +74,16 @@
 </script>
 
 <div class="overlay">
-  <div class="modal">
-    <h1>🛰 welcome to cc-copilot</h1>
+  <div
+    class="modal"
+    bind:this={modalEl}
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby={headingId}
+    tabindex="-1"
+    onkeydown={onKeyDown}
+  >
+    <h1 id={headingId}>🛰 welcome to cc-copilot</h1>
     <p class="muted">Pick the model that powers recaps, chat, /now, /goal, /loop. The deterministic
       core (brief / check / observe) needs no model. You can change this later in Settings.</p>
     {#if error}<div class="error">⚠ {error}</div>{/if}

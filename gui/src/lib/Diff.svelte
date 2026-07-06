@@ -87,14 +87,14 @@
   .bar select { padding: 4px 8px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   .count { font-size: 12px; color: var(--muted); }
   .transition { padding: 8px 12px; margin: 12px 0; background: var(--panel-2); border-left: 3px solid var(--accent); border-radius: 4px; font-size: 13px; }
-  .pending { padding: 8px 12px; margin: 8px 0; background: #3d3010; border-radius: 4px; font-size: 13px; color: #e0c060; }
+  .pending { padding: 8px 12px; margin: 8px 0; background: var(--status-awaiting-bg); border-radius: 4px; font-size: 13px; color: var(--status-awaiting-text); }
   section { margin: 16px 0; }
   h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 6px; }
   ul { margin: 0; padding-left: 20px; }
   li { margin: 3px 0; font-size: 13px; line-height: 1.5; }
   code { font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
   .cite { color: var(--accent); font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; }
-  .fails li { color: #ffb0b0; }
+  .fails li { color: var(--bad); }
   .empty { color: var(--muted); padding: 24px 0; }
   .error { color: var(--bad); padding: 8px 0; }
 </style>
