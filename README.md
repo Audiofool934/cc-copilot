@@ -23,6 +23,14 @@ next decisions. Ask across one session, selected sessions, or an entire
 project — without injecting supervision chatter into the main Claude Code or
 Codex workflow.
 
+A standalone **GUI** app lives in [`gui/`](gui/) — a Tauri + SvelteKit +
+TypeScript shell over the same Python core (exposed via a localhost JSON-RPC/SSE
+server in `cccopilot/server.py` and the `cccopilot/api.py` facade). It mirrors
+the cockpit feature-for-feature: streaming chat, live activity timeline, fleet
+board, drafts, watch monitor, scope/sessions pickers, saved scope groups,
+curated themes, and resumable cockpit conversations. See
+[GUI](#gui) below for how to run it.
+
 Read-only is how cc-copilot manifests under its current requirements, not a
 hard restriction baked into the design: the narrator that powers recaps, chat,
 `since`, `/goal`, and `/loop` is confined to read-only by default and can be
@@ -114,6 +122,27 @@ uvx --from "cc-copilot[tui]" cc-copilot cockpit
 Requirements: Python 3.9+. The CLI core is **dependency-free**; the cockpit TUI
 pulls in the optional `[tui]` extra (Textual) — drop it (`cc-copilot` instead of
 `cc-copilot[tui]`) if you only want the command-line briefs.
+
+## GUI
+
+The standalone GUI in [`gui/`](gui/) is a Tauri + SvelteKit + TypeScript app
+that drives the same Python core over a localhost JSON-RPC/SSE server. The Tauri
+shell spawns `cc-copilot serve` and talks to it from the frontend.
+
+```bash
+cd gui
+npm install
+npm run tauri dev      # opens the desktop app (hot reload)
+# or a production build:
+npm run tauri build
+```
+
+The Python core must be importable on PATH (the shell runs `cc-copilot serve`),
+so install it first (`pip install -e ".[tui]"` from a clone, or
+`uv tool install "cc-copilot[tui]"`). The GUI shares the cockpit's features —
+streaming chat, `/since` recaps, `/diff`, fleet `/status` board, watch monitor,
+drafts (`/now` / `/goal` / `/loop` / `/handoff`), saved scope groups, curated
+themes, resumable conversations, and per-message rewind.
 
 <details>
 <summary>plain <code>pip</code> / from source</summary>
@@ -536,10 +565,14 @@ handoff.py      a shareable Markdown handoff artifact
 notify.py       conservative away-alerts (desktop / terminal)
 observe.py      rank attention and next human decision
 scope.py        collect session, multi-session, and project evidence
+scope_groups.py save/reuse named evidence scope groups
 context.py      retrieve raw evidence for model-backed answers
 store.py        persist resumable Cockpit Sessions and compacted memory
 backends.py     call Codex, Claude, OpenAI-compatible APIs, Ollama, etc.
+api.py          the Copilot facade — a programmatic API over the core (3rd presenter)
+server.py       localhost JSON-RPC/SSE server that exposes the facade to the GUI
 tui.py          the cockpit (Textual TUI)
+gui/            the standalone Tauri + SvelteKit GUI (drives server.py)
 ```
 
 Agent specifics live entirely in `sources/`. Each adapter supplies just two
@@ -569,8 +602,11 @@ Releases publish to PyPI automatically on a `v*` tag — see
 - deeper project evidence retrieval and file ranking
 - additional transcript parsers beyond Claude Code and Codex
 - hook-driven push alerts for unattended runs
+- package the Tauri GUI for distribution (macOS/Windows/Linux binaries)
 
-Rust migration is tracked separately in [docs/rust-migration.md](docs/rust-migration.md).
+The Tauri + SvelteKit GUI ([`gui/`](gui/)) is the native desktop surface;
+the deferred Rust + Ratatui TUI language debate is parked in
+[docs/rust-migration.md](docs/rust-migration.md).
 
 ## Philosophy
 

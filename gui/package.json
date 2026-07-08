@@ -1,7 +1,7 @@
 {
-  "name": "gui",
+  "name": "cc-copilot-gui",
   "version": "0.1.0",
-  "description": "",
+  "description": "Standalone Tauri + SvelteKit + TypeScript GUI for cc-copilot, driving the Python core over a localhost JSON-RPC/SSE server.",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

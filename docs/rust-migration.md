@@ -1,7 +1,15 @@
 # Rust Migration Note
 
-Status: deferred  
-Date: 2026-06-08
+Status: superseded  
+Date: 2026-06-08 (updated 2026-07-06)
+
+> **Update (2026-07-06):** This note is superseded. The product has since added
+> a standalone GUI in [`gui/`](../gui/) — Tauri (Rust shell) + SvelteKit +
+> TypeScript over the same Python core (via `cccopilot/server.py` and
+> `cccopilot/api.py`). The "TypeScript rewrite adds too many moving parts"
+> reasoning below was written before that surface shipped; it is retained as
+> historical context only. The Python core + Textual TUI remain the primary
+> terminal surface; the GUI is the native desktop surface.
 
 ## Decision
 
