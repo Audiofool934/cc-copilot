@@ -993,7 +993,9 @@ class ChatSession:
         when = " ".join(toks).strip().lower() or "last-look"
         line, ts = self._cur_line()
         key = self._lastlook_key()
-        commit = lambda: None                      # durations don't move the marker
+
+        def commit():                              # durations don't move the marker
+            pass                                   # (overridden below for last-look)
         if when in ("last-look", "lastlook", "last"):
             if not LL.enabled():
                 return ("last-look tracking is off (persistence disabled). "

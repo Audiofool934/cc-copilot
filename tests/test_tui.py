@@ -477,7 +477,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(md), 1)
 
     async def test_timeline_rebuild_shows_observed_activity(self):
-        from textual.widgets import Static
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
@@ -533,7 +532,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         freeze) and renders the recap + evidence; --raw stays the instant delta."""
         import json
         import tempfile
-        from textual.widgets import Collapsible, Static
         from cccopilot import narrate as N
         from cccopilot.chat import ChatSession
         real_recap, real_avail = N.recap_since, N.available
@@ -744,7 +742,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         the dropped delta is lost forever)."""
         import json
         import tempfile
-        from textual.widgets import Static
         from cccopilot import narrate as N, lastlook as LL
         from cccopilot.chat import ChatSession, _now_iso
         real_recap, real_avail = N.recap_since, N.available
@@ -1066,7 +1063,6 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
                 os.environ["CC_COPILOT_STATE_DIR"] = old
 
     async def test_auto_refresh_updates_activity_without_manual_refresh(self):
-        from textual.widgets import Static
         sess = self._session("sess-A")
         app = tui.Cockpit(sess, poll=999, alerts=False)
         async with app.run_test() as pilot:
@@ -1540,8 +1536,8 @@ class TestCockpitHistory(unittest.IsolatedAsyncioTestCase):
         from cccopilot.chat import ChatSession
         p1 = write([user("alpha task", 100, sessionId="sess-A"),
                     asst("alpha-result", 5)], dir=self.home)
-        p2 = write([user("beta task", 100, sessionId="sess-B"),
-                    asst("beta-result", 4)], dir=self.home)
+        write([user("beta task", 100, sessionId="sess-B"),
+               asst("beta-result", 4)], dir=self.home)
         sess = ChatSession(p1, backend="codex", alerts=False)
         sess.refresh()
         refs = sess.sibling_refs()
@@ -2788,7 +2784,7 @@ class TestWelcomeScreen(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0][0], "openai")
 
     async def test_api_row_blocks_save_without_a_key(self):
-        from textual.widgets import RadioSet, RadioButton, Input
+        from textual.widgets import RadioSet, RadioButton
         from cccopilot import onboard as OB
 
         class Host(App):
@@ -2968,7 +2964,6 @@ class TestModelSwitchKeyPrompt(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertNotIsInstance(app.screen, tui.KeyPrompt)
             self.assertEqual(app.backend, "codex")                 # never switched
-        from cccopilot import onboard as OB
         # nothing was persisted by a cancel
         self.assertFalse(os.path.isfile(os.environ["CC_COPILOT_CONFIG"]))
 

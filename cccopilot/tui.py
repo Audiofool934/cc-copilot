@@ -54,10 +54,10 @@ except ImportError:
         "(or: pip install 'cc-copilot[tui]')")
 
 from . import (sources as SRC, state as S, assess as A, git_safe as GIT, narrate as N,
-               backends as BK, store as ST, scope as SC, locate as LOC,
+               backends as BK, store as ST, scope as SC,
                observe as O, context as EC, prefs as PREFS, onboard as OB,
                models as MODELS, scope_groups as SG, brief as BR)
-from .chat import (_fmt_alert, _fmt_diff, _GLYPH, _dur,
+from .chat import (_fmt_alert, _dur,
                    _deterministic_goal, _goal_context_question,
                    _loop_context_question, _is_meta_command_input)
 
@@ -1048,7 +1048,7 @@ class Picker(ModalScreen):
         super().__init__()
         self._title = title
         self._options = options            # [(label/renderable, value), …]
-        self._by_id = {str(i): v for i, (l, v) in enumerate(options)}
+        self._by_id = {str(i): v for i, (label, v) in enumerate(options)}
 
     @staticmethod
     def _plain_label(label) -> str:
@@ -1059,7 +1059,7 @@ class Picker(ModalScreen):
             yield Static(self._title, id="picker-title")
             yield PickerFilter(placeholder="filter…", id="picker-filter")
             yield OptionList(
-                *[Option(l, id=str(i)) for i, (l, v) in enumerate(self._options)],
+                *[Option(label, id=str(i)) for i, (label, v) in enumerate(self._options)],
                 id="picker-list")
 
     def on_mount(self):

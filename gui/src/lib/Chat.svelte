@@ -13,6 +13,10 @@
   let error = $state("");
   let scrollEl = $state<HTMLElement | null>(null);
   let abortCtrl = $state<AbortController | null>(null);
+  // Monotonic token guards the history-loading effect against stale fetches:
+  // if the session/conv changes before a fetch resolves, the older response is
+  // dropped instead of overwriting the newer session's messages.
+  let histToken = 0;
 
   // slash-command palette (mirrors the TUI's command autocomplete)
   const COMMANDS = [
@@ -52,12 +56,22 @@
     else if (c.action === "help") draft = "/";
   }
 
-  // load this session's saved cockpit conversation when it changes
+  // load this session's saved cockpit conversation when it changes.
+  // Aborts any in-flight stream first so a running answer from the previous
+  // session can't keep appending chunks into the new session's message list,
+  // and guards the history fetch with a token so a slow prior fetch can't
+  // overwrite the freshly-switched session's messages.
   $effect(() => {
+    void sessionPath; void activeConvId;
+    abortCtrl?.abort();
+    abortCtrl = null;
+    busy = false;
+    const token = ++histToken;
     if (!sessionPath) { messages = []; activeConvId = null; return; }
     (async () => {
       try {
         const hist = await surfaces.cockpitHistory(sessionPath, activeConvId ?? undefined);
+        if (token !== histToken) return;                 // a newer switch won
         messages = hist.map(([r, t]) => ({ role: r as Message["role"], text: t }));
         scrollToBottom();
       } catch { /* persistence off or no history - start fresh */ }
@@ -69,31 +83,42 @@
     if (!q || busy || !sessionPath) return;
     draft = "";
     error = "";
+    const sentSession = sessionPath;
+    const sentConvId = activeConvId;
     const history = messages.map((m) => [m.role, m.text] as [string, string]);
     messages = [...messages, { role: "user", text: q }, { role: "assistant", text: "" }];
     const aiIdx = messages.length - 1;
+    let acc = "";                                    // local accumulator survives session switches
     await scrollToBottom();
     busy = true;
     abortCtrl = new AbortController();
+    const persist = () => {
+      if (sessionPath !== sentSession || !acc) return;
+      surfaces.cockpitRecord({ session: sentSession, question: q, answer: acc, conv_id: sentConvId ?? undefined }).catch(() => {});
+    };
     try {
       await streamMethod(
         "chat_stream",
         { session: sessionPath, history, question: q, scope, scope_sessions: scopeSessions },
         (chunk) => {
-          // Mutate through the proxied $state element so Svelte 5's deep
-          // reactivity updates only this row - no per-chunk array copy / full
-          // list re-render (the audit's chat re-render storm).
-          messages[aiIdx].text += chunk;
-          scrollToBottom();
+          acc += chunk;
+          // Only mutate the live message row if we're still on the session
+          // this turn was started on - a session switch resets `messages`, so
+          // aiIdx would otherwise index into the wrong conversation.
+          if (sessionPath === sentSession && messages[aiIdx]) {
+            messages[aiIdx].text += chunk;
+            scrollToBottom();
+          }
         },
         abortCtrl.signal,
       );
-      // persist the completed Q&A turn (best-effort)
-      surfaces.cockpitRecord({ session: sessionPath, question: q, answer: messages[aiIdx].text, conv_id: activeConvId ?? undefined }).catch(() => {});
+      persist();                                     // completed turn
     } catch (e) {
       const err = e as Error;
       if (err.name === "AbortError") {
-        // user stopped - keep the partial answer, no error toast
+        // user stopped or session switched - keep any partial answer in-memory
+        // and persist it only if we're still on the same session.
+        persist();
       } else {
         error = err.message || String(e);
       }
@@ -108,14 +133,17 @@
   async function forget() {
     if (!sessionPath || busy) return;
     try { await surfaces.cockpitForget(sessionPath, activeConvId ?? undefined); } catch { /* ignore */ }
+    // Keep activeConvId as-is: the deleted conversation's next turn recreates
+    // its log (mirroring the TUI's /forget). Resetting to null would retrigger
+    // the history effect and reload the canonical conversation.
     messages = [];
-    activeConvId = null;
     error = "";
     toast("conversation cleared", "ok");
   }
 
   async function newChat() {
     if (!sessionPath || busy) return;
+    error = "";
     busy = true;
     try {
       const created = await surfaces.cockpitNew(sessionPath);
@@ -142,6 +170,7 @@
 
   async function rewind(idx: number) {
     if (!sessionPath || busy) return;
+    error = "";
     busy = true;
     try {
       const n = userMessageNumber(idx);
@@ -156,6 +185,7 @@
 
   async function rewindUndo() {
     if (!sessionPath || busy) return;
+    error = "";
     busy = true;
     try {
       const hist = await surfaces.cockpitRewindUndo(sessionPath, activeConvId ?? undefined);

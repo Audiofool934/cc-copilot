@@ -9,7 +9,7 @@ isn't in the brief.
 from __future__ import annotations
 
 from .state import State
-from .assess import assess, Assessment
+from .assess import assess
 
 
 # ---- formatting helpers -------------------------------------------------

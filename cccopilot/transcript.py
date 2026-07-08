@@ -23,7 +23,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 
 # Tools that mutate the working tree (used by the state builder to decide what

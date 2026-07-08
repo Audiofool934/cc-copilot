@@ -162,7 +162,6 @@ class TestSurfacing(_SessionEnv):
         self.assertFalse(getattr(ev[0], "live", False))
 
     def test_current_session_path_prefers_newest_duplicate(self):
-        import os.path as _p
         sid = "77777777-0000-0000-0000-000000000000"
         home = tempfile.mkdtemp(prefix="cccur-dup-")
         older = os.path.join(home, "projects", LOC.encode_cwd("/proj/old"))

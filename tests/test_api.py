@@ -124,6 +124,10 @@ class TestParity(unittest.TestCase):
         self.assertEqual(t["scope"], "session")
         self.assertIn("banner", t)
         self.assertIn("conv_id", t)
+        # the banner must carry the real assessed verdict, not the
+        # "transcript gone" fallback (regression: assess was unimported).
+        self.assertIn("safety:", t["banner"])
+        self.assertNotIn("transcript gone", t["banner"])
 
 
 class TestStateAndTranscript(unittest.TestCase):
@@ -356,7 +360,7 @@ class TestResolveAndSessions(unittest.TestCase):
 
     def test_include_current_controls_live_session(self):
         # include_current must control the LIVE session, not helper transcripts.
-        p = self._write_session()
+        self._write_session()
         included = self.cp.sessions(self.cwd, include_current=True)
         self.assertEqual(len(included), 1)
         sid = included[0].session_id
@@ -400,7 +404,7 @@ class TestResolveAndSessions(unittest.TestCase):
     def test_context_build_honors_agents_filter_for_wider_scope(self):
         # the ask/chat evidence context must also honor the agents filter
         # (the audit's contract finding - same bug class as the render_evidence fix)
-        from cccopilot import locate as L, context as EC, state as S, sources as SRC
+        from cccopilot import locate as L, context as EC, state as S
         self._write_session(sid="claude-anchor")
         d = os.path.join(self.claude_home, "projects", L.encode_cwd(self.cwd))
         os.utime(os.path.join(d, "claude-anchor.jsonl"), (4000, 4000))
@@ -556,7 +560,6 @@ class TestNarration(unittest.TestCase):
     def test_recap_since_no_mark_does_not_narrate(self):
         # with no last-look mark and last-look tracking off, since returns the
         # status message; recap_since must not call the backend.
-        from cccopilot import lastlook as LL
         saved = os.environ.get("CC_COPILOT_HISTORY")
         os.environ["CC_COPILOT_HISTORY"] = "0"   # tracking off -> "tracking is off"
         try:

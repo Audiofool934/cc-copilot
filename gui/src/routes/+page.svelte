@@ -46,12 +46,18 @@
   let targetOpen = $state(false);
   let targetInfo = $state<TargetInfo | null>(null);
   let activeConvId = $state<string | null>(null);
+  // Token guards prevent a slower prior fetch from overwriting state after a
+  // rapid session/scope switch (the async surfaces calls resolve out of order).
+  let loadToken = 0;
+  let targetToken = 0;
 
   async function loadTarget() {
     if (!sessionPath) { targetInfo = null; return; }
+    const token = ++targetToken;
     try {
-      targetInfo = await surfaces.target({ session: sessionPath, scope, scope_sessions: scopeSessions });
-    } catch { targetInfo = null; }
+      const info = await surfaces.target({ session: sessionPath, scope, scope_sessions: scopeSessions });
+      if (token === targetToken) targetInfo = info;
+    } catch { if (token === targetToken) targetInfo = null; }
   }
 
   $effect(() => { if (sessionPath) { void scope; void scopeSessions; loadTarget(); } });
@@ -104,9 +110,8 @@
       }
       cwd = targetCwd;
       sessions = await surfaces.sessions(cwd);
-      sessionPath = targetPath;
       activeConvId = convId;
-      await loadAll();
+      sessionPath = targetPath;          // the sessionPath/scope effect drives loadAll
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -115,22 +120,32 @@
   async function loadSessions(pinned?: string) {
     if (!cwd) return;
     sessions = await surfaces.sessions(cwd);
-    sessionPath = pinned && sessions.some((s) => s.path === pinned) ? pinned
-      : (sessions[0]?.path ?? "");
     activeConvId = null;
-    if (sessionPath) await loadAll();
+    sessionPath = pinned && sessions.some((s) => s.path === pinned) ? pinned
+      : (sessions[0]?.path ?? "");       // the sessionPath/scope effect drives loadAll
   }
 
   async function onCwdChange() {
     sessionPath = "";
+    activeConvId = null;
     brief = observe = since = "";
     stateJson = null;
     verdict = null;
+    targetInfo = null;
+    error = "";
     await loadSessions();
+  }
+
+  // Called when the user picks a session from the dropdown: reset the active
+  // cockpit conversation (it belongs to the previous session). The scope/scope-
+  // sessions effect + the sessionPath change drive the reload from here.
+  function onSessionPick() {
+    activeConvId = null;
   }
 
   async function loadAll() {
     if (!sessionPath) return;
+    const token = ++loadToken;
     loading = true;
     error = "";
     try {
@@ -141,25 +156,28 @@
         surfaces.state(sessionPath),
         surfaces.checkVerdict(sp),
       ]);
+      if (token !== loadToken) return;               // a newer switch won
       brief = b;
       observe = o;
       stateJson = st;
       verdict = v;
       if (tab === "since") loadSince();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      if (token === loadToken) error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (token === loadToken) loading = false;
     }
   }
 
+  let sinceToken = 0;
   async function loadSince() {
     if (!sessionPath) return;
+    const token = ++sinceToken;
     try {
-      since = await surfaces.since({ session: sessionPath, when: sinceWhen, peek: true });
+      const text = await surfaces.since({ session: sessionPath, when: sinceWhen, peek: true });
+      if (token === sinceToken) since = text;
     } catch (e) {
-      since = "";
-      error = e instanceof Error ? e.message : String(e);
+      if (token === sinceToken) { since = ""; error = e instanceof Error ? e.message : String(e); }
     }
   }
 
@@ -182,11 +200,18 @@
     return v === 2 ? "intervene" : v === 1 ? "review" : v === 0 ? "clear" : "—";
   }
 
+  let fleetToken = 0;
   async function loadFleet() {
     if (!cwd || fleetLoaded) return;
-    fleetLoaded = true;
-    try { fleetMd = await surfaces.status({ cwd }); }
-    catch (e) { fleetMd = ""; error = e instanceof Error ? e.message : String(e); }
+    const token = ++fleetToken;
+    try {
+      const md = await surfaces.status({ cwd });
+      if (token !== fleetToken) return;
+      fleetMd = md;
+      fleetLoaded = true;                            // only mark loaded on success
+    } catch (e) {
+      if (token === fleetToken) { fleetMd = ""; error = e instanceof Error ? e.message : String(e); }
+    }
   }
 
   // load the fleet board lazily when its tab is selected, and reload on cwd change
@@ -231,7 +256,7 @@
         </select>
       </label>
       <label>session
-        <select bind:value={sessionPath} onchange={loadAll}>
+        <select bind:value={sessionPath} onchange={onSessionPick}>
           {#each sessions as s}
             <option value={s.path}>{s.hhmm} · {s.agent} · {s.title || s.session_id.slice(0, 8)}{s.live ? " · live" : ""}</option>
           {/each}

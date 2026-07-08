@@ -19,6 +19,11 @@
   let error = $state("");
   let prevEvents = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
+  // Token guard + mounted flag: stale polls/narrations from a previous session
+  // can't land here, and no writes happen after unmount.
+  let tickToken = 0;
+  let narrToken = 0;
+  let mounted = true;
 
   const PRESETS = [
     { id: "default", label: "default", instruction: "" },
@@ -31,26 +36,30 @@
 
   async function tick() {
     if (!sessionPath) return;
+    const token = ++tickToken;
     try {
       const sp = { session: sessionPath, scope, scope_sessions: scopeSessions };
       const [b, v, st] = await Promise.all([
         surfaces.brief(sp), surfaces.checkVerdict(sp), surfaces.state(sessionPath),
       ]);
+      if (!mounted || token !== tickToken) return;
       brief = b; verdict = v; status = st.status; events = st.events;
       updated = new Date().toLocaleTimeString();
-      if (monitor && st.events > prevEvents && prevEvents > 0) {
-        await narrateDelta();
-      }
+      const grew = st.events > prevEvents && prevEvents > 0;
       prevEvents = st.events;
       error = "";
-    } catch (e) { error = e instanceof Error ? e.message : String(e); }
+      if (monitor && grew) narrateDelta();
+    } catch (e) { if (mounted && token === tickToken) error = e instanceof Error ? e.message : String(e); }
   }
 
   async function narrateDelta() {
+    const token = ++narrToken;
     try {
       let delta = await surfaces.since({ session: sessionPath, when: "last-look", peek: false });
+      if (!mounted || token !== narrToken) return;
       if (delta.startsWith("No last-look mark") || delta.startsWith("last-look tracking is off")) return;
       const text = await surfaces.watchProgress({ delta_text: delta, instruction });
+      if (!mounted || token !== narrToken) return;
       if (text && text.trim()) {
         cards = [...cards, { text, ts: new Date().toLocaleTimeString() }];
         if (cards.length > 50) cards = cards.slice(-50);
@@ -61,8 +70,17 @@
   function start() { stop(); if (playing) timer = setInterval(tick, Math.max(1, interval) * 1000); }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
   function toggle() { playing = !playing; if (playing) start(); else stop(); }
-  onDestroy(stop);
-  $effect(() => { if (sessionPath) { void interval; void monitor; void preset; tick(); start(); } });
+  // Reset cross-session state + reload when the session changes; restart the
+  // poll loop on session/interval/monitor/preset change.
+  $effect(() => {
+    void sessionPath;
+    if (!sessionPath) { stop(); return; }
+    brief = ""; verdict = null; status = ""; events = 0; updated = ""; error = "";
+    cards = []; prevEvents = 0;
+    tick();
+  });
+  $effect(() => { void sessionPath; void interval; void monitor; void preset; if (sessionPath) start(); });
+  onDestroy(() => { mounted = false; stop(); });
 
   function render(md: string): string { return marked.parse(md || "", { breaks: false }) as string; }
   function vColor(v: number | null) { return v === 2 ? "var(--bad)" : v === 1 ? "var(--warn)" : "var(--good)"; }

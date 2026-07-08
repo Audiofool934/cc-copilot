@@ -17,6 +17,11 @@
   let prevVerdict: number | null = null;
   let transition = $state("");
   let alerts = $state(false);
+  // Token guard + mounted flag: a slow poll from a previous session can't
+  // write stale brief/verdict/status into the current one, and no writes land
+  // after unmount.
+  let tickToken = 0;
+  let mounted = true;
 
   async function notify(title: string, body: string) {
     if (!alerts || typeof Notification === "undefined") return;
@@ -35,15 +40,17 @@
 
   async function tick() {
     if (!sessionPath) return;
+    const token = ++tickToken;
     try {
       const [b, v, st] = await Promise.all([
         surfaces.brief({ session: sessionPath, scope, scope_sessions: scopeSessions }),
         surfaces.checkVerdict({ session: sessionPath, scope, scope_sessions: scopeSessions }),
         surfaces.state(sessionPath),
       ]);
+      if (!mounted || token !== tickToken) return;
+      const prevStatus = status;
       brief = b;
       events = st.events;
-      const prevStatus = status;
       status = st.status;
       if (prevVerdict !== null && v !== prevVerdict) {
         transition = v === 2 ? "verdict escalated to intervene"
@@ -57,7 +64,7 @@
       updated = new Date().toLocaleTimeString();
       error = "";
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      if (mounted && token === tickToken) error = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -71,9 +78,17 @@
   }
   function toggle() { playing = !playing; if (playing) start(); else stop(); }
 
-  // (re)start polling when session or interval changes, or play toggles
-  $effect(() => { if (sessionPath) { tick(); start(); } });
-  onDestroy(stop);
+  // Reset cross-session state + reload when the session changes; restart the
+  // poll loop on session/interval/play change.
+  $effect(() => {
+    void sessionPath;
+    if (!sessionPath) { stop(); return; }
+    brief = ""; verdict = null; events = 0; status = ""; updated = ""; transition = "";
+    prevVerdict = null; error = "";
+    tick();
+  });
+  $effect(() => { void sessionPath; void interval; void playing; if (sessionPath) start(); });
+  onDestroy(() => { mounted = false; stop(); });
 
   function render(md: string): string { return marked.parse(md || "", { breaks: false }) as string; }
   function vColor(v: number | null) { return v === 2 ? "var(--bad)" : v === 1 ? "var(--warn)" : "var(--good)"; }

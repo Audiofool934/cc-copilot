@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from collections import OrderedDict
 from typing import Optional
 
-from .transcript import Transcript, Record, MUTATING_TOOLS, READONLY_TOOLS
+from .transcript import Transcript, Record, MUTATING_TOOLS
 
 # A session whose tail is a tool_call/tool_result was mid-turn. If the last
 # event is older than this, it didn't pause to think — it stopped mid-action
@@ -115,19 +115,19 @@ class State:
 
     @property
     def duration_seconds(self) -> Optional[float]:
-        f, l = self.tr.first_ts, self.tr.last_ts
-        if f is None or l is None:
+        first, last = self.tr.first_ts, self.tr.last_ts
+        if first is None or last is None:
             return None
-        return max(0.0, (l - f).total_seconds())
+        return max(0.0, (last - first).total_seconds())
 
     @property
     def span_seconds(self) -> Optional[float]:
         """Wall-clock span across *all* lines (incl. metadata), so even a
         no-activity session reports a real span instead of '?'."""
-        f, l = self.tr.first_seen_ts, self.tr.last_seen_ts
-        if f is None or l is None:
+        first, last = self.tr.first_seen_ts, self.tr.last_seen_ts
+        if first is None or last is None:
             return self.duration_seconds
-        return max(0.0, (l - f).total_seconds())
+        return max(0.0, (last - first).total_seconds())
 
     @property
     def changed_files(self) -> list:

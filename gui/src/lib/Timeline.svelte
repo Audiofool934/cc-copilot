@@ -14,6 +14,10 @@
   let playing = $state(true);
   let interval = $state(3);
   let timer: ReturnType<typeof setInterval> | null = null;
+  // Token guard: a transcript fetch from a previous session can't overwrite
+  // this one's records after a switch. `mounted` stops writes after unmount.
+  let loadToken = 0;
+  let mounted = true;
 
   // Cap the DOM to the most recent records; full virtualization is a later
   // perf stage. The cap is generous enough to show the whole of typical
@@ -22,9 +26,12 @@
 
   async function load() {
     if (!sessionPath) return;
+    const token = ++loadToken;
+    loading = true;
     error = "";
     try {
       const tr = await surfaces.transcript(sessionPath);
+      if (!mounted || token !== loadToken) return;
       // Skip the re-render when the transcript hasn't grown since the last poll
       // (the common idle-monitor case) - avoids re-rendering the whole list
       // every 3s. The audit's "live polling cost" perf finding.
@@ -37,22 +44,30 @@
       title = tr.title || tr.session_id.slice(0, 8);
       if (follow) await scrollToBottom();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      if (mounted && token === loadToken) error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (mounted && token === loadToken) loading = false;
     }
   }
 
   function startPoll() {
     stopPoll();
-    if (playing) timer = setInterval(() => { loading = false; load(); }, Math.max(1, interval) * 1000);
+    if (playing) timer = setInterval(() => load(), Math.max(1, interval) * 1000);
   }
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
   function togglePoll() { playing = !playing; if (playing) startPoll(); else stopPoll(); }
 
-  // (re)load + (re)start polling when the session or interval changes
-  $effect(() => { if (sessionPath) { void interval; load(); startPoll(); } });
-  onDestroy(stopPoll);
+  // Clear stale state + reload when the session changes; restart the poll loop
+  // when the session or interval changes. Clearing only on session change
+  // avoids blanking the timeline when the interval alone changes.
+  $effect(() => {
+    void sessionPath;
+    if (!sessionPath) { records = []; title = ""; stopPoll(); return; }
+    records = []; title = ""; error = "";
+    load();
+  });
+  $effect(() => { void sessionPath; void interval; if (sessionPath) startPoll(); });
+  onDestroy(() => { mounted = false; stopPoll(); });
 
   async function scrollToBottom() {
     await new Promise((r) => requestAnimationFrame(() => r(null)));

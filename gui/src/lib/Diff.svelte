@@ -7,16 +7,28 @@
   let when = $state("30m");
   let loading = $state(false);
   let error = $state("");
+  let loadToken = 0;
 
   async function load() {
     if (!sessionPath) return;
+    const token = ++loadToken;
     loading = true; error = "";
-    try { view = await surfaces.diff({ session: sessionPath, when }); }
-    catch (e) { error = e instanceof Error ? e.message : String(e); }
-    finally { loading = false; }
+    try {
+      const d = await surfaces.diff({ session: sessionPath, when });
+      if (token === loadToken) view = d;
+    } catch (e) { if (token === loadToken) error = e instanceof Error ? e.message : String(e); }
+    finally { if (token === loadToken) loading = false; }
   }
 
-  $effect(() => { if (sessionPath || when) load(); });
+  // Reload when the session or the time window changes; clear the stale view
+  // on a session switch so the previous session's diff doesn't linger.
+  $effect(() => {
+    void sessionPath;
+    if (!sessionPath) { view = null; return; }
+    view = null; error = "";
+    load();
+  });
+  $effect(() => { void when; if (sessionPath) load(); });
 
   function cite(line: number): string { return `[L${line}]`; }
   function cmdSummary(c: Command): string { return c.cmd; }
@@ -25,7 +37,7 @@
 <div class="diff">
   <div class="bar">
     <label>since
-      <select bind:value={when} onchange={load}>
+      <select bind:value={when}>
         <option value="30m">last 30m</option>
         <option value="2h">last 2h</option>
         <option value="1d">last 1d</option>
