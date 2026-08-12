@@ -1,3 +1,5 @@
+
+
 # CC-Copilot
 
 [![PyPI](https://img.shields.io/pypi/v/cc-copilot)](https://pypi.org/project/cc-copilot/)
@@ -58,8 +60,10 @@ The **first launch** greets you with a one-time welcome screen to pick the model
 that powers recaps, chat, and `since` — **Claude** or **Codex** (uses the
 agent's own login, no API key) or an **API provider** (OpenAI / DeepSeek /
 OpenRouter, key captured inline). It only shows once; reopen it anytime with
-`/init`, or run `cc-copilot init` in a plain terminal (handy over SSH). The
-deterministic core (`brief` / `check` / `observe`) needs no model at all.
+`/init`, or run `cc-copilot init` in a plain terminal (handy over SSH). Set
+`CC_COPILOT_NO_ONBOARD=1` to suppress the welcome screen (useful for CI or
+automated setups). The deterministic core (`brief` / `check` / `observe`) needs
+no model at all.
 
 ![CC-Copilot first-run welcome screen](docs/welcome.png)
 
