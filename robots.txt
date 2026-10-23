@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://cc-copilot.audiofool.ai/sitemap.xml
