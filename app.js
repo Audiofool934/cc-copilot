@@ -62,35 +62,7 @@ citationButtons.forEach((button) => {
   });
 });
 
-const installMethods = {
-  uv: {
-    command: 'uv tool install "cc-copilot[tui]"',
-    step: "# 1. Install the cockpit",
-    launch: true,
-  },
-  pipx: {
-    command: 'pipx install "cc-copilot[tui]"',
-    step: "# 1. Install the cockpit",
-    launch: true,
-  },
-  try: {
-    command: 'uvx --from "cc-copilot[tui]" cc-copilot cockpit',
-    step: "# Run in your project without installing",
-    launch: false,
-  },
-};
-
 const copyStatus = document.getElementById("copy-status");
-setupTabs(document.querySelector(".install-tabs"), (tab) => {
-  const method = installMethods[tab.dataset.install];
-  document.getElementById("install-command").textContent = method.command;
-  document.getElementById("install-step").textContent = method.step;
-  document.getElementById("launch-step").hidden = !method.launch;
-  document
-    .getElementById("install-panel")
-    .setAttribute("aria-labelledby", tab.id);
-  copyStatus.textContent = "";
-});
 
 document.querySelectorAll("[data-copy-target]").forEach((button) => {
   button.addEventListener("click", async () => {
@@ -98,7 +70,7 @@ document.querySelectorAll("[data-copy-target]").forEach((button) => {
     const value = command.textContent;
     try {
       await navigator.clipboard.writeText(value);
-      copyStatus.textContent = `Copied: ${value}`;
+      copyStatus.textContent = "Commands copied.";
     } catch {
       // Local file previews and denied clipboard access still allow manual copying.
       const selection = window.getSelection();
@@ -113,21 +85,22 @@ document.querySelectorAll("[data-copy-target]").forEach((button) => {
 
 const recording = document.getElementById("demo");
 const recordingImage = recording.querySelector("img");
-recording.addEventListener("toggle", () => {
-  if (recording.open) recordingImage.src = recordingImage.dataset.src;
-  else recordingImage.removeAttribute("src");
-});
+function syncRecording() {
+  if (recording.open) {
+    if (!recordingImage.hasAttribute("src"))
+      recordingImage.src = recordingImage.dataset.src;
+  } else recordingImage.removeAttribute("src");
+}
+recording.addEventListener("toggle", syncRecording);
+syncRecording();
 document.getElementById("pause-recording").addEventListener("click", () => {
   recording.open = false;
   recording.querySelector("summary").focus();
 });
 
-// The recording only loads after an explicit action, including with reduced motion.
+// The recording starts expanded; visitors can stop it or reopen it later.
 function openRecordingFromHash() {
   if (window.location.hash === "#demo") recording.open = true;
 }
-document.querySelector('a[href="#demo"]').addEventListener("click", () => {
-  recording.open = true;
-});
 window.addEventListener("hashchange", openRecordingFromHash);
 openRecordingFromHash();

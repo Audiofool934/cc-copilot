@@ -3,652 +3,304 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f5f5ef" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="A copilot for AI coding agents. Follow Claude Code, Codex, and Grok Build in one terminal cockpit. Recover context, ask grounded questions, and know when you're needed."
+      content="CC-Copilot follows Claude Code, Codex, and Grok Build in your terminal. Catch up on their work and ask questions grounded in the transcript."
     />
-    <meta property="og:title" content="CC-Copilot - Stay in the loop." />
+    <meta property="og:title" content="CC-Copilot" />
     <meta
       property="og:description"
-      content="Your agents keep working. Keep the context. A terminal-native cockpit for AI coding agents, read-only by default."
+      content="Keep up with your coding agents. A terminal companion for Claude Code, Codex, and Grok Build."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://cc-copilot.audiofool.ai/" />
     <link rel="canonical" href="https://cc-copilot.audiofool.ai/" />
-    <title>CC-Copilot - Stay in the loop.</title>
+    <title>CC-Copilot</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="./app.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header wrap">
-      <a class="wordmark" href="#" aria-label="CC-Copilot home"
-        ><span class="brand-icon" aria-hidden="true">c<span>c</span></span
-        >cc-copilot<span class="wordmark-dot">.</span></a
-      >
-      <nav aria-label="Main navigation">
-        <a href="#workflow">Why CC-Copilot</a>
-        <a href="#get-started">Quick start</a>
-        <a class="nav-github" href="https://github.com/Audiofool934/cc-copilot"
-          >GitHub <span aria-hidden="true">↗</span></a
-        >
+    <header class="masthead" id="top">
+      <a class="brand" href="#top">CC-Copilot</a>
+      <nav aria-label="Page">
+        <a class="nav-demo" href="#cockpit">Try the cockpit</a>
+        <a href="#get-started">Install</a>
+        <a href="https://github.com/Audiofool934/cc-copilot">GitHub</a>
       </nav>
     </header>
-
     <main id="main">
-      <section class="hero wrap" aria-labelledby="hero-heading">
-        <div class="hero-copy">
-          <p class="eyebrow">
-            <span class="status-dot" aria-hidden="true"></span> A COPILOT FOR
-            CODING AGENTS
+      <section class="intro" aria-labelledby="intro-title">
+        <h1 id="intro-title">Keep up with your coding agents.</h1>
+        <div class="intro-text">
+          <p>
+            CC-Copilot follows Claude Code, Codex, and Grok Build in your
+            terminal. Come back to a clear account of what changed, with the
+            transcript behind every answer.
           </p>
-          <h1 id="hero-heading">
-            Agents work.<br />You stay<br /><span class="highlight"
-              >in the loop.</span
-            >
-          </h1>
-          <p class="hero-description">
-            The terminal cockpit for keeping up with your AI agents. See what
-            changed, ask what matters, and know when it’s your call.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-dark" href="#get-started"
-              >Get started <span aria-hidden="true">↗</span></a
-            >
-            <a class="text-link" href="#demo"
-              >See the cockpit <span aria-hidden="true">↓</span></a
+          <div class="actions">
+            <a class="button" href="#get-started">Install CC-Copilot</a>
+            <a href="https://github.com/Audiofool934/cc-copilot"
+              >Read the source</a
             >
           </div>
-          <p class="hero-note">
-            Open source. Terminal native. Read-only by default.
-          </p>
         </div>
-
-        <div class="hero-product">
-          <div class="product-caption">
-            <span
-              ><span class="tiny-cross" aria-hidden="true">+</span> CONTEXT,
-              KEPT.</span
-            ><span>01 / COCKPIT</span>
-          </div>
-          <div class="terminal">
-            <div class="terminal-titlebar">
-              <span class="window-dots" aria-hidden="true"
-                ><i></i><i></i><i></i></span
-              ><span
-                >cc-copilot
-                <span class="terminal-dim">/</span> example-project</span
-              ><span class="terminal-readonly">read-only</span>
-            </div>
-            <div
-              class="demo-tabs"
-              role="tablist"
-              aria-label="Explore cockpit examples"
-            >
+      </section>
+      <section class="cockpit" id="cockpit" aria-label="Try the cockpit">
+        <div class="terminal">
+          <div class="terminal-header">
+            <p>cc-copilot <span class="muted">/ example-project</span></p>
+            <div class="demo-tabs" role="tablist" aria-label="Cockpit examples">
               <button
                 id="tab-since"
                 role="tab"
                 aria-selected="true"
                 aria-controls="panel-since"
-                data-scenario="since"
                 tabindex="0"
               >
-                01 <span>Catch up</span>
+                Catch up
               </button>
               <button
                 id="tab-ask"
                 role="tab"
                 aria-selected="false"
                 aria-controls="panel-ask"
-                data-scenario="ask"
                 tabindex="-1"
               >
-                02 <span>Ask anything</span>
+                Ask
               </button>
               <button
                 id="tab-observe"
                 role="tab"
                 aria-selected="false"
                 aria-controls="panel-observe"
-                data-scenario="observe"
                 tabindex="-1"
               >
-                03 <span>Find your next move</span>
+                Observe
               </button>
             </div>
-            <div class="terminal-session">
-              <span
-                ><span class="status-dot" aria-hidden="true"></span> claude
-                <span class="terminal-dim">/</span> refactor-auth</span
-              ><span class="terminal-dim">EXAMPLE SESSION</span>
-            </div>
-            <div class="terminal-panels">
-              <section
-                id="panel-since"
-                class="terminal-panel"
-                role="tabpanel"
-                aria-labelledby="tab-since"
-                tabindex="0"
-              >
-                <p class="terminal-prompt"><span>❯</span> /since 30m</p>
-                <p class="terminal-heading">Here’s where you left off.</p>
-                <div class="evidence-row">
-                  <span class="evidence-symbol">+</span>
+          </div>
+          <div class="terminal-panels">
+            <section
+              id="panel-since"
+              class="terminal-panel"
+              role="tabpanel"
+              aria-labelledby="tab-since"
+              tabindex="0"
+            >
+              <p class="terminal-prompt">/since 30m</p>
+              <h2>What changed while you were away</h2>
+              <ul class="evidence-list">
+                <li>
                   <p>Split auth into three focused modules.</p>
                   <button
                     class="citation"
                     data-evidence="split"
-                    aria-label="Show example evidence lines 42 to 48"
+                    aria-label="Read transcript lines 42 to 48"
                     aria-expanded="false"
                     aria-controls="example-evidence"
                   >
-                    [L42–48]
+                    [L42-48]
                   </button>
-                </div>
-                <div class="evidence-row">
-                  <span class="evidence-symbol">✓</span>
-                  <p>Auth tests passed after the refactor.</p>
+                </li>
+                <li>
+                  <p>All 24 auth tests passed.</p>
                   <button
                     class="citation"
                     data-evidence="tests"
-                    aria-label="Show example evidence line 86"
+                    aria-label="Read transcript line 86"
                     aria-expanded="false"
                     aria-controls="example-evidence"
                   >
                     [L86]
                   </button>
-                </div>
-                <div class="evidence-row">
-                  <span class="evidence-symbol attention">!</span>
-                  <p>One retry path still needs a test.</p>
+                </li>
+                <li>
+                  <p>The new retry path still needs a test.</p>
                   <button
                     class="citation"
                     data-evidence="retry"
-                    aria-label="Show example evidence lines 91 to 93"
+                    aria-label="Read transcript lines 91 to 93"
                     aria-expanded="false"
                     aria-controls="example-evidence"
                   >
-                    [L91–93]
+                    [L91-93]
                   </button>
-                </div>
-                <div class="terminal-callout">
-                  <span class="terminal-label">NEXT HUMAN DECISION</span>
-                  <p>Review the missing retry case before merging.</p>
-                </div>
-              </section>
-              <section
-                id="panel-ask"
-                class="terminal-panel"
-                role="tabpanel"
-                aria-labelledby="tab-ask"
-                tabindex="0"
-                hidden
-              >
-                <p class="terminal-prompt">
-                  <span>❯</span> Is it ready to merge?
-                </p>
-                <p class="terminal-heading">The evidence says: review first.</p>
-                <div class="evidence-row">
-                  <span class="evidence-symbol">✓</span>
-                  <p>The auth test suite is passing.</p>
+                </li>
+              </ul>
+            </section>
+            <section
+              id="panel-ask"
+              class="terminal-panel"
+              role="tabpanel"
+              aria-labelledby="tab-ask"
+              tabindex="0"
+              hidden
+            >
+              <p class="terminal-prompt">Is it ready to merge?</p>
+              <h2>Review the retry path first.</h2>
+              <ul class="evidence-list">
+                <li>
+                  <p>The existing auth suite passes.</p>
                   <button
                     class="citation"
                     data-evidence="tests"
-                    aria-label="Show example evidence line 86"
+                    aria-label="Read transcript line 86"
                     aria-expanded="false"
                     aria-controls="example-evidence"
                   >
                     [L86]
                   </button>
-                </div>
-                <div class="evidence-row">
-                  <span class="evidence-symbol attention">!</span>
-                  <p>Retry coverage is still incomplete.</p>
+                </li>
+                <li>
+                  <p>The agent says it has not tested the new retry path.</p>
                   <button
                     class="citation"
                     data-evidence="retry"
-                    aria-label="Show example evidence lines 91 to 93"
+                    aria-label="Read transcript lines 91 to 93"
                     aria-expanded="false"
                     aria-controls="example-evidence"
                   >
-                    [L91–93]
+                    [L91-93]
                   </button>
+                </li>
+              </ul>
+            </section>
+            <section
+              id="panel-observe"
+              class="terminal-panel"
+              role="tabpanel"
+              aria-labelledby="tab-observe"
+              tabindex="0"
+              hidden
+            >
+              <p class="terminal-prompt">/observe</p>
+              <h2>One session needs your attention.</h2>
+              <dl class="sessions">
+                <div>
+                  <dt>Claude <span class="muted">/ refactor-auth</span></dt>
+                  <dd>Review retry coverage</dd>
                 </div>
-                <p class="terminal-explanation">
-                  Passing tests cover the existing cases. They don’t verify the
-                  new retry path.
-                </p>
-                <div class="terminal-callout">
-                  <span class="terminal-label">GROUNDED IN THE TRANSCRIPT</span>
-                  <p>Ask here. Keep the working agent focused.</p>
+                <div>
+                  <dt>Codex <span class="muted">/ update-docs</span></dt>
+                  <dd>Checks passed</dd>
                 </div>
-              </section>
-              <section
-                id="panel-observe"
-                class="terminal-panel"
-                role="tabpanel"
-                aria-labelledby="tab-observe"
-                tabindex="0"
-                hidden
-              >
-                <p class="terminal-prompt"><span>❯</span> /observe</p>
-                <p class="terminal-heading">
-                  Your attention, where it matters.
-                </p>
-                <div class="fleet-row">
-                  <span class="fleet-status review">REVIEW</span
-                  ><span
-                    >claude
-                    <span class="terminal-dim">/ refactor-auth</span></span
-                  ><span>retry coverage</span>
+                <div>
+                  <dt>Grok <span class="muted">/ cli-help</span></dt>
+                  <dd>Work complete</dd>
                 </div>
-                <div class="fleet-row">
-                  <span class="fleet-status">CLEAR</span
-                  ><span
-                    >codex <span class="terminal-dim">/ update-docs</span></span
-                  ><span>checks passed</span>
-                </div>
-                <div class="fleet-row">
-                  <span class="fleet-status">CLEAR</span
-                  ><span>grok <span class="terminal-dim">/ cli-help</span></span
-                  ><span>work complete</span>
-                </div>
-                <div class="terminal-callout">
-                  <span class="terminal-label"
-                    >ONE PROJECT. A SHARED VIEW.</span
-                  >
-                  <p>Start with the session that needs you most.</p>
-                </div>
-              </section>
-              <div class="example-evidence" id="example-evidence" hidden>
-                <span class="terminal-label"
-                  >ILLUSTRATIVE TRANSCRIPT EXCERPT</span
-                >
-                <pre id="evidence-text"></pre>
-              </div>
-            </div>
-            <div class="terminal-composer">
-              <span aria-hidden="true">❯</span
-              ><span
-                >ask the copilot<span
-                  class="cursor"
-                  aria-hidden="true"
-                ></span></span
-              ><span class="terminal-dim">/ commands</span>
-            </div>
-            <div class="terminal-statusbar">
-              <span>● observer mode</span
-              ><span>evidence first <span aria-hidden="true">↵</span></span>
+              </dl>
+            </section>
+            <div
+              class="example-evidence"
+              id="example-evidence"
+              role="region"
+              aria-label="Transcript excerpt"
+              hidden
+            >
+              <pre id="evidence-text"></pre>
             </div>
           </div>
-          <div class="demo-footnote">
-            <span
-              >Illustrative examples. Click a citation to see its source.</span
-            ><span aria-hidden="true">↖ TRY IT</span>
-          </div>
         </div>
-      </section>
-
-      <div class="compatibility wrap">
-        <p>YOUR AGENTS.<br />ONE PLACE TO FOLLOW ALONG.</p>
-        <div class="agent-names">
-          <span
-            ><span class="agent-symbol" aria-hidden="true">✳</span> Claude
-            Code</span
-          ><span
-            ><span class="agent-symbol codex-symbol" aria-hidden="true"
-              >❯_</span
-            >
-            Codex</span
-          ><span
-            ><span class="agent-symbol" aria-hidden="true">/</span> Grok
-            Build</span
-          >
-        </div>
-        <span class="compatibility-note">Runs alongside your workflow.</span>
-      </div>
-
-      <section
-        class="workflow wrap section-space"
-        id="workflow"
-        aria-labelledby="workflow-heading"
-      >
-        <div class="section-heading">
-          <p class="eyebrow">01 / LESS SCROLLING. MORE SIGNAL.</p>
-          <h2 id="workflow-heading">
-            Pick up the thread.<br /><span class="muted"
-              >Skip the transcript.</span
-            >
-          </h2>
-          <p>
-            Agents can work for hours. Understanding what happened shouldn’t
-            take just as long.
-          </p>
-        </div>
-        <div class="feature-columns">
-          <article>
-            <div class="feature-topline">
-              <span>01</span
-              ><svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                <path d="M7 10a11 11 0 1 1-2 11M7 3v8H0M16 9v8l5 3" />
-              </svg>
-            </div>
-            <h3>Come back with context.</h3>
-            <p>
-              Get a cited recap of what changed while you were away: files,
-              commands, failures, and the decisions still open.
-            </p>
-            <code>/since 30m <span aria-hidden="true">↗</span></code>
-          </article>
-          <article>
-            <div class="feature-topline">
-              <span>02</span
-              ><svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                <path d="M4 5h24v18H14l-7 5v-5H4zM10 11h12M10 17h8" />
-              </svg>
-            </div>
-            <h3>Ask without interrupting.</h3>
-            <p>
-              Keep your questions in a separate conversation, grounded in
-              transcript lines, tool results, and project evidence.
-            </p>
-            <code
-              >“What needs my attention?”
-              <span aria-hidden="true">↗</span></code
-            >
-          </article>
-          <article>
-            <div class="feature-topline">
-              <span>03</span
-              ><svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                <path d="M2 17h6l4-11 7 21 5-10h6" />
-              </svg>
-            </div>
-            <h3>Know when to step in.</h3>
-            <p>
-              Spot stalls, repeated failures, and retry loops. Follow one
-              session or bring the whole project into view.
-            </p>
-            <code>/observe <span aria-hidden="true">↗</span></code>
-          </article>
-        </div>
-        <details class="recording" id="demo">
-          <summary>
-            <span class="play-icon" aria-hidden="true">▷</span
-            ><span
-              >See the real cockpit
-              <small
-                >Re-entry recap, grounded chat, and model selection.</small
-              ></span
-            ><span class="recording-toggle" aria-hidden="true">+</span>
-          </summary>
+        <p class="demo-note">
+          Fictional sessions. Select a reference to read the transcript.
+        </p>
+        <details class="recording" id="demo" open>
+          <summary>Terminal recording</summary>
           <div class="recording-content">
             <img
+              src="./assets/cockpit-demo.gif"
               data-src="./assets/cockpit-demo.gif"
               width="1180"
               height="740"
-              alt="Recorded CC-Copilot terminal showing a re-entry recap, a cited answer about merge readiness, and the model picker."
+              alt="CC-Copilot showing a recap, an answer with transcript references, and the model picker."
             />
-            <p>
-              A recorded product walkthrough from the repository.
-              <button type="button" id="pause-recording">Hide animation</button>
-            </p>
+            <button class="text-button" type="button" id="pause-recording">
+              Stop recording
+            </button>
           </div>
         </details>
       </section>
-
-      <section class="principle" aria-labelledby="principle-heading">
-        <div class="wrap principle-inner">
-          <div>
-            <p class="eyebrow">02 / ALONGSIDE. ALWAYS.</p>
-            <h2 id="principle-heading">
-              A side channel.<br />A clearer picture.
-            </h2>
-            <p>
-              The working agent keeps its focus. You get a separate place to
-              inspect the evidence and decide what comes next.
-            </p>
-            <a
-              class="text-link"
-              href="https://github.com/Audiofool934/cc-copilot#read-only-by-default"
-              >Read about the observer model
-              <span aria-hidden="true">↗</span></a
-            >
-          </div>
-          <div
-            class="architecture"
-            role="img"
-            aria-label="The working agent produces transcripts. CC-Copilot reads that evidence. You ask questions in a separate supervision conversation."
-          >
-            <div class="architecture-top">
-              <span class="architecture-icon" aria-hidden="true">❯_</span>
-              <div>
-                <strong>Your working agent</strong
-                ><span>plan → edit → test → repeat</span>
-              </div>
-              <span class="architecture-state">WORKING</span>
-            </div>
-            <div class="evidence-connector">
-              <span>↓</span><span>transcripts + project evidence</span>
-            </div>
-            <div class="architecture-bottom">
-              <div class="copilot-node">
-                <span class="brand-icon" aria-hidden="true"
-                  >c<span>c</span></span
-                ><strong>CC-Copilot</strong
-                ><span>observe · cite · explain</span>
-              </div>
-              <div class="conversation-connector" aria-hidden="true">⇄</div>
-              <div class="human-node">
-                <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                  <circle cx="16" cy="10" r="5" />
-                  <path d="M6 29v-5a10 10 0 0 1 20 0v5" /></svg
-                ><strong>You</strong><span>the next decision</span>
-              </div>
-            </div>
-            <p class="architecture-note">
-              <span aria-hidden="true">↳</span> No prompts injected into the
-              working session.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section
-        class="get-started wrap section-space"
-        id="get-started"
-        aria-labelledby="start-heading"
-      >
-        <div class="start-copy">
-          <p class="eyebrow">03 / YOUR TERMINAL. YOUR COPILOT.</p>
-          <h2 id="start-heading">Keep the agents.<br />Add the perspective.</h2>
+      <section class="about" id="workflow" aria-label="About CC-Copilot">
+        <article class="chapter">
+          <h2>A whole project in view</h2>
           <p>
-            Install the cockpit, open it in your project, and choose the
-            sessions you want to follow.
+            Follow one session, a selection of sessions, or everything in a
+            project. The attention queue brings stalls, repeated failures, and
+            open decisions to the top.
           </p>
-          <p class="requirements">
-            Python 3.9+ <span>·</span> macOS / Linux / Windows
-            <span>·</span> MIT
+        </article>
+        <article class="chapter">
+          <h2>A separate conversation</h2>
+          <p>
+            Your questions stay in the cockpit. CC-Copilot reads the agent's
+            transcript without inserting messages into its working conversation.
           </p>
-          <a
-            class="text-link"
-            href="https://github.com/Audiofool934/cc-copilot#quick-start"
-            >Full documentation <span aria-hidden="true">↗</span></a
-          >
-        </div>
-        <div class="install-card">
-          <div
-            class="install-tabs"
-            role="tablist"
-            aria-label="Installation method"
-          >
-            <button
-              id="install-tab-uv"
-              role="tab"
-              aria-selected="true"
-              aria-controls="install-panel"
-              data-install="uv"
-              tabindex="0"
-            >
-              uv <span>recommended</span></button
-            ><button
-              id="install-tab-pipx"
-              role="tab"
-              aria-selected="false"
-              aria-controls="install-panel"
-              data-install="pipx"
-              tabindex="-1"
-            >
-              pipx</button
-            ><button
-              id="install-tab-try"
-              role="tab"
-              aria-selected="false"
-              aria-controls="install-panel"
-              data-install="try"
-              tabindex="-1"
-            >
-              Try it
-            </button>
-          </div>
-          <div
-            id="install-panel"
-            role="tabpanel"
-            aria-labelledby="install-tab-uv"
-            tabindex="0"
-          >
-            <div class="install-instructions">
-              <p id="install-step"># 1. Install the cockpit</p>
-              <div class="install-command">
-                <span aria-hidden="true">$</span
-                ><code id="install-command"
-                  >uv tool install "cc-copilot[tui]"</code
-                ><button
-                  class="copy-button"
-                  type="button"
-                  data-copy-target="install-command"
-                  aria-label="Copy install command"
-                >
-                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                    <rect x="7" y="7" width="10" height="10" rx="1" />
-                    <path d="M13 7V3H3v10h4" />
-                  </svg>
-                </button>
-              </div>
-              <div id="launch-step">
-                <p># 2. Run inside your project</p>
-                <div class="install-command">
-                  <span aria-hidden="true">$</span
-                  ><code id="launch-command">cc-copilot</code
-                  ><button
-                    class="copy-button"
-                    type="button"
-                    data-copy-target="launch-command"
-                    aria-label="Copy launch command"
-                  >
-                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                      <rect x="7" y="7" width="10" height="10" rx="1" />
-                      <path d="M13 7V3H3v10h4" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="install-note">
-            <span aria-hidden="true">↳</span>
+        </article>
+        <article class="chapter">
+          <h2>Use your own model</h2>
+          <div>
             <p>
-              Use your Claude or Codex login, or connect an API provider. The
-              deterministic core works without a model.
+              Use your Claude or Codex login, an API provider, or a local Ollama
+              model. Model-backed answers send transcript excerpts and project
+              evidence to the provider you choose.
             </p>
-          </div>
-          <p
-            class="copy-status"
-            id="copy-status"
-            role="status"
-            aria-live="polite"
-          ></p>
-        </div>
-      </section>
-
-      <section class="faq wrap" aria-labelledby="faq-heading">
-        <h2 id="faq-heading">A few useful details.</h2>
-        <div class="faq-items">
-          <details>
-            <summary>
-              Does it change what my agent is doing?<span aria-hidden="true"
-                >+</span
-              >
-            </summary>
             <p>
-              CC-Copilot reads the working session without editing its
-              transcript or injecting prompts. The local Claude and Codex
-              narrator backends are read-only by default. You can explicitly opt
-              out of that narrator confinement in configuration.
-              <a
-                href="https://github.com/Audiofool934/cc-copilot#read-only-by-default"
-                >See the full boundaries.</a
-              >
-            </p>
-          </details>
-          <details>
-            <summary>
-              Do I need another API key?<span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Not when you use your existing Claude Code or Codex login. You can
-              also use an API provider or a local Ollama model. Deterministic
-              commands such as <code>brief</code>, <code>check</code>, and
-              <code>observe</code> need no model at all.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Can I follow more than one session?<span aria-hidden="true"
-                >+</span
-              >
-            </summary>
-            <p>
-              Yes. Use <code>/sessions</code> to select sessions, or
-              <code>@project</code> for project-level evidence. Claude Code,
-              Codex, and Grok Build sessions can appear on the same project
-              board.
-            </p>
-          </details>
-          <details>
-            <summary>
-              What context is sent to a model?<span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Model-backed answers receive bounded evidence, including
-              transcript excerpts, tool results, project facts, and cockpit
-              history. Secret-shaped content is scrubbed from the model-bound
-              copy. The original local transcript stays unchanged.
+              Basic recaps and status checks work without a model.
               <a
                 href="https://github.com/Audiofool934/cc-copilot#evidence-context"
-                >Read about evidence context.</a
-              >
+                >How evidence is handled</a
+              >.
             </p>
-          </details>
+          </div>
+        </article>
+      </section>
+      <section
+        class="chapter install"
+        id="get-started"
+        aria-labelledby="install-title"
+      >
+        <h2 id="install-title">Install</h2>
+        <div>
+          <p>
+            You need Python 3.9 or later and
+            <a href="https://docs.astral.sh/uv/">uv</a>. Open a terminal in your
+            project:
+          </p>
+          <div class="commands">
+            <pre><code id="install-commands">uv tool install "cc-copilot[tui]"
+cc-copilot</code></pre>
+            <button
+              class="text-button"
+              type="button"
+              data-copy-target="install-commands"
+            >
+              Copy commands
+            </button>
+          </div>
+          <p id="copy-status" class="copy-status" role="status"></p>
+          <p>
+            <a href="https://github.com/Audiofool934/cc-copilot#install"
+              >Other installation methods</a
+            >
+            ·
+            <a href="https://github.com/Audiofool934/cc-copilot#usage"
+              >Command guide</a
+            >
+          </p>
         </div>
       </section>
     </main>
-
-    <footer class="site-footer wrap">
-      <a class="wordmark" href="#"
-        ><span class="brand-icon" aria-hidden="true">c<span>c</span></span
-        >cc-copilot<span class="wordmark-dot">.</span></a
-      >
-      <p>The working agent stays focused. You stay aligned.</p>
-      <nav aria-label="Footer">
-        <a href="https://github.com/Audiofool934/cc-copilot">GitHub ↗</a
-        ><a href="https://pypi.org/project/cc-copilot/">PyPI ↗</a
-        ><a href="https://github.com/Audiofool934/cc-copilot/blob/main/LICENSE"
-          >MIT license ↗</a
-        >
-      </nav>
+    <footer class="colophon">
+      <p>
+        CC-Copilot is open source under the
+        <a href="https://github.com/Audiofool934/cc-copilot/blob/main/LICENSE"
+          >MIT license</a
+        >.
+      </p>
+      <a href="https://pypi.org/project/cc-copilot/">PyPI</a>
     </footer>
   </body>
 </html>
